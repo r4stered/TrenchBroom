@@ -1,0 +1,37 @@
+add_executable(TbCliLibTest)
+EMBED_UTF8_MANIFEST(TbCliLibTest)
+
+target_sources(TbCliLibTest PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Config.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Run.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Sha256.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextFormat.cpp
+)
+
+add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)
+
+target_link_libraries(TbCliLibTest
+  PRIVATE
+    CompilerConfig
+    PrecompileStdHeaders
+    Catch2::Catch2WithMain
+    TbBaseTestUtilsLib
+    TbCliLib
+    TbFsTestUtilsLib
+)
+
+# Copy fixtures
+set(TEST_FIXTURE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fixture)
+set(TEST_FIXTURE_DEST_DIR $<TARGET_FILE_DIR:TbCliLibTest>/fixture)
+
+add_custom_command(TARGET TbCliLibTest POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "${TEST_FIXTURE_DEST_DIR}"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TEST_FIXTURE_SOURCE_DIR}" "${TEST_FIXTURE_DEST_DIR}/test"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games/Quake" "${TEST_FIXTURE_DEST_DIR}/games/Quake"
+)
+
+include(Catch)
+catch_discover_tests(TbCliLibTest)

@@ -1,0 +1,3 @@
+// A minimal FGD whose player start is larger than Quake's, to tell which FGD was loaded.
+@SolidClass = worldspawn : "World entity" []
+@PointClass size(-32 -32 -32, 32 32 32) = info_player_start : "Player 1 start" []
