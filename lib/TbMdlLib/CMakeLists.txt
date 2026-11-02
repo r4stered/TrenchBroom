@@ -78,6 +78,7 @@ target_sources(TbMdlLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkTargetValidator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadAseModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadAssimpModel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadBspLeafTree.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadBspModel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadDdsTexture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadDkmModel.cpp

@@ -23,6 +23,7 @@
 #include "gl/Material.h"
 #include "gl/MaterialIndexRangeMap.h"
 #include "gl/MaterialIndexRangeMapBuilder.h"
+#include "mdl/BspDirectory.h"
 #include "mdl/LoadMipTexture.h"
 #include "mdl/MaterialUtils.h"
 #include "mdl/Palette.h"
@@ -35,14 +36,6 @@ namespace
 {
 namespace BspLayout
 {
-constexpr size_t DirMaterialsAddress = 0x14;
-constexpr size_t DirVerticesAddress = 0x1C;
-constexpr size_t DirTexInfosAddress = 0x34;
-constexpr size_t DirFacesAddress = 0x3C;
-constexpr size_t DirEdgesAddress = 0x64;
-constexpr size_t DirFaceEdgesAddress = 0x6C;
-constexpr size_t DirModelAddress = 0x74;
-
 constexpr size_t FaceSize = 0x14;
 constexpr size_t FaceEdgeIndex = 0x4;
 constexpr size_t FaceRest = 0x8;
@@ -51,15 +44,8 @@ constexpr size_t MaterialInfoSize = 0x28;
 constexpr size_t MaterialInfoRest = 0x4;
 
 constexpr size_t FaceEdgeSize = 0x4;
-constexpr size_t ModelSize = 0x40;
 constexpr size_t ModelFaceIndex = 0x38;
 } // namespace BspLayout
-
-bool isBSPVersionSupported(const int version)
-{
-  // 29 is Quake, 30 is GoldSrc.
-  return version == 29 || version == 30;
-}
 
 struct MaterialInfo
 {
@@ -278,7 +264,7 @@ bool canLoadBspModel(const std::filesystem::path& path, fs::Reader reader)
   }
 
   const auto version = reader.readInt<int32_t>();
-  return isBSPVersionSupported(version);
+  return isBsp29Or30(version);
 }
 
 Result<EntityModelData> loadBspModel(
@@ -291,42 +277,42 @@ Result<EntityModelData> loadBspModel(
   try
   {
     const auto version = reader.readInt<int32_t>();
-    if (!isBSPVersionSupported(version))
+    if (!isBsp29Or30(version))
     {
       return Error{"Unsupported BSP model version: " + std::to_string(version)};
     }
 
-    reader.seekFromBegin(BspLayout::DirModelAddress);
+    reader.seekFromBegin(BspDirectory::ModelsAddress);
     const auto modelsOffset = reader.readSize<int32_t>();
     const auto modelsLength = reader.readSize<int32_t>();
-    const auto frameCount = modelsLength / BspLayout::ModelSize;
+    const auto frameCount = modelsLength / BspDirectory::ModelSize;
 
-    reader.seekFromBegin(BspLayout::DirTexInfosAddress);
+    reader.seekFromBegin(BspDirectory::TexInfosAddress);
     const auto materialInfoOffset = reader.readSize<int32_t>();
     const auto materialInfoLength = reader.readSize<int32_t>();
     const auto materialInfoCount = materialInfoLength / BspLayout::MaterialInfoSize;
 
-    reader.seekFromBegin(BspLayout::DirVerticesAddress);
+    reader.seekFromBegin(BspDirectory::VerticesAddress);
     const auto vertexOffset = reader.readSize<int32_t>();
     const auto vertexLength = reader.readSize<int32_t>();
     const auto vertexCount = vertexLength / (3 * sizeof(float));
 
-    reader.seekFromBegin(BspLayout::DirEdgesAddress);
+    reader.seekFromBegin(BspDirectory::EdgesAddress);
     const auto edgeInfoOffset = reader.readSize<int32_t>();
     const auto edgeInfoLength = reader.readSize<int32_t>();
     const auto edgeInfoCount = edgeInfoLength / (2 * sizeof(uint16_t));
 
-    reader.seekFromBegin(BspLayout::DirFacesAddress);
+    reader.seekFromBegin(BspDirectory::FacesAddress);
     const auto faceInfoOffset = reader.readSize<int32_t>();
     const auto faceInfoLength = reader.readSize<int32_t>();
     const auto faceInfoCount = faceInfoLength / BspLayout::FaceSize;
 
-    reader.seekFromBegin(BspLayout::DirFaceEdgesAddress);
+    reader.seekFromBegin(BspDirectory::FaceEdgesAddress);
     const auto faceEdgesOffset = reader.readSize<int32_t>();
     const auto faceEdgesLength = reader.readSize<int32_t>();
     const auto faceEdgesCount = faceEdgesLength / BspLayout::FaceEdgeSize;
 
-    reader.seekFromBegin(BspLayout::DirMaterialsAddress);
+    reader.seekFromBegin(BspDirectory::MaterialsAddress);
     const auto materialsOffset = reader.readSize<int32_t>();
 
     auto data = EntityModelData{PitchType::Normal, Orientation::Oriented};
@@ -353,7 +339,7 @@ Result<EntityModelData> loadBspModel(
     {
       parseFrame(
         reader.subReaderFromBegin(
-          modelsOffset + i * BspLayout::ModelSize, BspLayout::ModelSize),
+          modelsOffset + i * BspDirectory::ModelSize, BspDirectory::ModelSize),
         i,
         data,
         materialInfos,
