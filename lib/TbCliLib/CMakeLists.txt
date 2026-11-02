@@ -11,6 +11,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Fgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueTypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadMap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapContents.cpp
@@ -24,6 +25,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Show.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextFormat.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Verify.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include

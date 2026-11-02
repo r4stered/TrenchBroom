@@ -26,6 +26,7 @@
 #include "cli/Config.h"
 #include "cli/FileUtils.h"
 #include "cli/Sha256.h"
+#include "cli/Timing.h"
 #include "gl/Resource.h"
 #include "gl/ResourceManager.h"
 #include "gl/TestGl.h"
@@ -45,6 +46,9 @@
 #include <fmt/ranges.h>
 #include <fmt/std.h>
 
+#include <algorithm>
+#include <chrono>
+#include <ranges>
 #include <regex>
 
 namespace tb::cli
@@ -58,6 +62,57 @@ constexpr auto RevLength = size_t{12};
 const auto WorldBounds = vm::bbox3d{-32768.0, 32768.0};
 
 /**
+ * The line of the item that a parser location points at. The reader reports an item it
+ * skips at the end of the token before it, so a location followed only by whitespace on
+ * its line points at the next line that is not blank.
+ */
+size_t itemLine(const std::string_view bytes, const size_t line, const size_t column)
+{
+  const auto isBlank = [](const std::string_view text) {
+    return text.find_first_not_of(" \t\r") == std::string_view::npos;
+  };
+
+  auto number = size_t{1};
+  auto locationFound = false;
+  for (const auto range : std::views::split(bytes, '\n'))
+  {
+    const auto text = std::string_view{range.begin(), range.end()};
+    if (number == line)
+    {
+      const auto rest = text.substr(std::min(column > 0 ? column - 1 : 0, text.size()));
+      if (!isBlank(rest))
+      {
+        return line;
+      }
+      locationFound = true;
+    }
+    else if (locationFound && !isBlank(text))
+    {
+      return number;
+    }
+    ++number;
+  }
+  return line;
+}
+
+/**
+ * A problem the parser status reported about the given map file. Its location is
+ * written as a prefix ("At line N, column M: "), which is split off into the line of the
+ * item it is about.
+ */
+LoadProblem toLoadProblem(const std::string& message, const std::string_view bytes)
+{
+  static const auto pattern = std::regex{R"(^At line (\d+)(?:, column (\d+))?: )"};
+  if (auto match = std::smatch{}; std::regex_search(message, match, pattern))
+  {
+    const auto line = std::stoul(match[1].str());
+    const auto column = match[2].matched ? std::stoul(match[2].str()) : size_t{0};
+    return {match.suffix().str(), itemLine(bytes, line, column)};
+  }
+  return {message, std::nullopt};
+}
+
+/**
  * Logs what the map reader reports and records its warnings and errors, each of which
  * means that the reader skipped or changed some of the file's content.
  *
@@ -69,12 +124,15 @@ class ProblemCollectingParserStatus : public ParserStatus
 {
 private:
   Logger& m_logger;
-  std::vector<std::string>& m_problems;
+  std::string_view m_bytes;
+  std::vector<LoadProblem>& m_problems;
 
 public:
-  ProblemCollectingParserStatus(Logger& logger, std::vector<std::string>& problems)
+  ProblemCollectingParserStatus(
+    Logger& logger, const std::string_view bytes, std::vector<LoadProblem>& problems)
     : ParserStatus{logger, ""}
     , m_logger{logger}
+    , m_bytes{bytes}
     , m_problems{problems}
   {
   }
@@ -86,7 +144,7 @@ private:
   {
     if (level == LogLevel::Warn || level == LogLevel::Error)
     {
-      m_problems.push_back(str);
+      m_problems.push_back(toLoadProblem(str, m_bytes));
     }
     m_logger.log(level, str);
   }
@@ -290,9 +348,11 @@ LoadedMap loadMap(
 
   logger.info() << "Loading document from " << absPath;
 
-  auto status = ProblemCollectingParserStatus{logger, result.loadProblems};
+  const auto start = std::chrono::steady_clock::now();
+  auto status = ProblemCollectingParserStatus{logger, *bytes, result.loadProblems};
   auto worldNode = readWorld(
     *bytes, mdl::MapFormat::Valve, gameInfo.gameConfig, status, *result.taskManager);
+  result.loadMs = msSince(start);
 
   if (!worldNode)
   {

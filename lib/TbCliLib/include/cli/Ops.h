@@ -149,8 +149,9 @@ const std::vector<OpDef>& opDefs();
 const OpDef* findOpDef(std::string_view name);
 
 /**
- * The `tbcli.ops/1` result `{schema, ops: [{name, description, schema}]}`, where each
- * `schema` is a JSON Schema of the op's batch entry.
+ * The `tbcli.ops/1` result `{schema, ops: [{name, description, schema}], issue_types}`,
+ * where each `schema` is a JSON Schema of the op's batch entry and `issue_types` is the
+ * issue-type table that verify reports issues by.
  */
 Json opsJson();
 

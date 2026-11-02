@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "cli/CappedList.h"
 #include "cli/NodePath.h"
 
 #include "vm/bbox.h"
@@ -46,8 +47,7 @@ struct QueryOptions
 {
   /** The TbQl query. Without one, every node but the world matches. */
   std::optional<std::string> query;
-  size_t limit = 200;
-  size_t offset = 0;
+  Paging paging;
   /** Return only the total. */
   bool countOnly = false;
   /** Keep matches whose bounds lie inside this box. */

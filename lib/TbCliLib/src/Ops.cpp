@@ -21,6 +21,7 @@
 
 #include "cli/CliError.h"
 #include "cli/EditOps.h"
+#include "cli/IssueTypes.h"
 #include "cli/ParseUtils.h"
 
 #include "kd/contracts.h"
@@ -496,6 +497,7 @@ Json opsJson()
   auto result = Json::object();
   result.set("schema", "tbcli.ops/1");
   result.set("ops", std::move(ops));
+  result.set("issue_types", issueTypesJson());
   return result;
 }
 

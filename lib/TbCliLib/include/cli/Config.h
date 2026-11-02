@@ -19,7 +19,10 @@
 
 #pragma once
 
+#include "cli/IssueTypes.h"
+
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,6 +46,27 @@ struct ConfigOverrides
 };
 
 /**
+ * A `verify.ignore` entry: suppresses the issues of a type, or only the one with the
+ * given key, or only those on the nodes a TbQl query matches and the nodes and faces
+ * inside them.
+ */
+struct IssueSuppression
+{
+  const IssueTypeDef* type = nullptr;
+  std::optional<std::string> key;
+  std::optional<std::string> query;
+};
+
+/** The `verify` section of tbcli.json. */
+struct VerifyConfig
+{
+  /** `verify.severity`: severities that replace the default of an issue type. */
+  std::map<const IssueTypeDef*, Severity> severity;
+  /** `verify.ignore` */
+  std::vector<IssueSuppression> ignore;
+};
+
+/**
  * The effective configuration for one map: tbcli.json found by walking up from the
  * map, with command line overrides applied. Paths are absolute; relative paths in
  * tbcli.json are resolved against the directory containing it.
@@ -58,6 +82,7 @@ struct Config
   std::optional<std::filesystem::path> quakeDir;
   /** `describe.key_entities`: overrides the classes describe lists in full. */
   std::optional<std::vector<std::string>> keyEntities;
+  VerifyConfig verify;
 };
 
 /**

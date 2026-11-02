@@ -35,6 +35,8 @@ constexpr int Ok = 0;
 constexpr int Failed = 1;
 constexpr int Usage = 2;
 constexpr int StaleRev = 3;
+/** verify found an unsuppressed issue at or above `--fail-on` */
+constexpr int FailOn = 4;
 } // namespace ExitCode
 
 /** The `code` of an error envelope. */

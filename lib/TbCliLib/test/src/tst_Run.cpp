@@ -135,6 +135,23 @@ TEST_CASE("run")
       checkErrorEnvelope(
         runCli({"show", "x.map", "world", "--key-entities", "light"}), "usage", 2);
       checkErrorEnvelope(runCli({"fgd", "x.map", "light", "--count-only"}), "usage", 2);
+      checkErrorEnvelope(runCli({"describe", "x.map", "--fail-on", "error"}), "usage", 2);
+      checkErrorEnvelope(
+        runCli({"query", "x.map", "--min-severity", "error"}), "usage", 2);
+    }
+
+    SECTION("an option that several commands accept is accepted by each of them")
+    {
+      // accepted, so the command gets as far as loading the map
+      checkErrorEnvelope(runCli({"query", "x.map", "--limit", "1"}), "file_not_found", 1);
+      checkErrorEnvelope(
+        runCli({"verify", "x.map", "--limit", "1"}), "file_not_found", 1);
+    }
+
+    SECTION("an op's --target is the op's flag, not verify's option")
+    {
+      checkErrorEnvelope(
+        runCli({"delete", "x.map", "--target", "layer:0/brush:0"}), "file_not_found", 1);
     }
 
     SECTION("--help and -h print usage")
@@ -172,6 +189,20 @@ TEST_CASE("run")
       CHECK_THAT(result.err, ContainsSubstring("Loading document from"));
       CHECK_THAT(result.err, ContainsSubstring("Loaded entity definition file"));
       CHECK(parseOutput(result).isObject());
+    }
+  }
+
+  SECTION("exit codes")
+  {
+    SECTION("a command can exit with its own code and still print its result")
+    {
+      env.writeConfig({}, quakeConfig());
+      const auto map = env.copyFixture("maps/simple.map", "simple.map");
+
+      // maps/simple.map has warnings
+      const auto result = runCli({"verify", arg(map), "--fail-on", "warning"});
+      CHECK(result.exitCode == 4);
+      CHECK(parseOutput(result)["schema"] == Json{"tbcli.verify/1"});
     }
   }
 

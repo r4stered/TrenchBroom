@@ -48,7 +48,10 @@ TEST_CASE("LoadMap")
       // maps/lossy.map is maps/simple.map with a face whose plane points coincide
       const auto loadedMap = loadFixtureMap("maps/lossy.map", logger);
       REQUIRE(!loadedMap.loadProblems.empty());
-      CHECK_THAT(loadedMap.loadProblems.front(), ContainsSubstring("Skipping face"));
+      const auto& problem = loadedMap.loadProblems.front();
+      CHECK_THAT(problem.message, StartsWith("Skipping face"));
+      // the face's own line; the location is split off from the message
+      CHECK(problem.line == 19);
     }
   }
 }

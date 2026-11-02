@@ -433,6 +433,34 @@ TEST_CASE("describe")
       ], "total": 1, "truncated": false}})"));
   }
 
+  SECTION("validator issue counts per type")
+  {
+    const auto map = env.copyFixture("maps/verify.map", "verify.map");
+
+    // the same counts verify reports, with tbcli.json's severities and suppressions
+    auto config = quakeConfig();
+    config.set("verify", parseJsonLiteral(R"({
+        "severity": {"empty_group": "error"},
+        "ignore": [{"type": "link_source"}]
+      })"));
+    env.writeConfig({}, config);
+
+    const auto output = parseOutput(runCli({"describe", arg(map)}));
+    CHECK(output["issues"] == parseJsonLiteral(R"({
+      "counts": {
+        "missing_classname": 1,
+        "missing_definition": 1,
+        "empty_group": 1,
+        "link_target": 1,
+        "non_integer_vertices": 1,
+        "empty_property_value": 3,
+        "invalid_uv_scale": 1,
+        "suppressed": 1
+      },
+      "by_severity": {"error": 2, "warning": 6, "info": 1}
+    })"));
+  }
+
   SECTION("output stays bounded on a large map")
   {
     const auto map = env.writeFile("large.map", largeMap());

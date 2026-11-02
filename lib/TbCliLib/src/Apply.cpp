@@ -101,14 +101,14 @@ std::string serialize(const mdl::Map& map)
   return std::move(stream).str();
 }
 
-CliError lossyLoad(const std::vector<std::string>& problems)
+CliError lossyLoad(const std::vector<LoadProblem>& problems)
 {
   return CliError{
     ErrorCode::LossyLoad,
     fmt::format(
       "the map did not load exactly ({}{}), so writing it could lose content; pass "
       "--allow-lossy to write anyway, or --dry-run to preview the edit",
-      problems.front(),
+      problems.front().message,
       problems.size() > 1 ? fmt::format(" and {} more", problems.size() - 1) : "")};
 }
 

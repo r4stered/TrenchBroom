@@ -21,6 +21,7 @@
 #include "cli/CliError.h"
 #include "cli/Config.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -108,6 +109,31 @@ TEST_CASE("Config")
         == std::vector<std::string>{"info_null"});
     }
 
+    SECTION("verify")
+    {
+      env.writeFile("project/tbcli.json", R"({"verify": {
+        "severity": {"empty_group": "error", "missing_mod": "info"},
+        "ignore": [
+          {"type": "link_target"},
+          {"type": "empty_group", "key": "0123456789ab"},
+          {"type": "missing_definition", "query": "classname is \"x\""}
+        ]
+      }})");
+
+      const auto config = loadConfig(mapPath, {});
+      CHECK(
+        config.verify.severity
+        == std::map<const IssueTypeDef*, Severity>{
+          {findIssueType("empty_group"), Severity::Error},
+          {findIssueType("missing_mod"), Severity::Info}});
+      REQUIRE(config.verify.ignore.size() == 3);
+      CHECK(config.verify.ignore[0].type == findIssueType("link_target"));
+      CHECK(config.verify.ignore[0].key == std::nullopt);
+      CHECK(config.verify.ignore[0].query == std::nullopt);
+      CHECK(config.verify.ignore[1].key == "0123456789ab");
+      CHECK(config.verify.ignore[2].query == R"(classname is "x")");
+    }
+
     SECTION("overrides replace keys and resolve against the working directory")
     {
       auto json = Json::object();
@@ -191,6 +217,25 @@ TEST_CASE("Config")
         auto json = Json::object();
         json.set("describe", describe);
         env.writeConfig("project", json);
+        CHECK(errorCode() == ErrorCode::ConfigError);
+      }
+
+      SECTION("malformed verify section")
+      {
+        const auto verify = GENERATE(
+          R"([])",
+          R"({"severity": []})",
+          R"({"severity": {"no_such_type": "error"}})",
+          R"({"severity": {"empty_group": "fatal"}})",
+          R"({"ignore": {}})",
+          R"({"ignore": [{"key": "0123456789ab"}]})",
+          R"({"ignore": [{"type": "no_such_type"}]})",
+          R"({"ignore": [{"type": "empty_group", "key": 1}]})",
+          R"({"ignore": [{"type": "empty_group", "nodes": "x"}]})",
+          R"({"ignore": [{"type": "empty_group", "key": "a", "query": "b"}]})");
+        CAPTURE(verify);
+
+        env.writeFile("project/tbcli.json", std::string{R"({"verify": )"} + verify + "}");
         CHECK(errorCode() == ErrorCode::ConfigError);
       }
 

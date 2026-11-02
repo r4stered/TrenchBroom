@@ -27,6 +27,7 @@
 #include "cli/MapContents.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
+#include "cli/Verify.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EntityDefinitionUtils.h"
@@ -420,7 +421,8 @@ Json linkGraph(const std::vector<const mdl::EntityNode*>& entities)
 
 Json describe(
   const LoadedMap& loadedMap,
-  const std::optional<std::vector<std::string>>& keyEntityClasses)
+  const std::optional<std::vector<std::string>>& keyEntityClasses,
+  const IssueReport& issueReport)
 {
   const auto& map = *loadedMap.map;
   const auto& worldNode = map.worldNode();
@@ -441,6 +443,9 @@ Json describe(
     keyEntities(
       worldNode, contents.entities, keyEntityClasses.value_or(DefaultKeyEntityClasses)));
   result.set("link_graph", linkGraph(contents.entities));
+  auto issues = Json::object();
+  setIssueCounts(issues, issueReport.issues);
+  result.set("issues", std::move(issues));
   return result;
 }
 

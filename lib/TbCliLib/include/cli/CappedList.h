@@ -28,6 +28,13 @@
 namespace tb::cli
 {
 
+/** Which part of a long result list a command returns: `--limit` and `--offset`. */
+struct Paging
+{
+  size_t limit = 200;
+  size_t offset = 0;
+};
+
 /**
  * Sets `items`, `total` and `truncated` on `object`: the shape of every list in the
  * output that grows with the map.

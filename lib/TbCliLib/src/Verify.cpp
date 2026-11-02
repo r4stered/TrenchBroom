@@ -1,0 +1,609 @@
+/*
+ Copyright (C) 2026 Drew Williams
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "cli/Verify.h"
+
+#include "cli/CappedList.h"
+#include "cli/CliError.h"
+#include "cli/Config.h"
+#include "cli/GeometryJson.h"
+#include "cli/LoadMap.h"
+#include "cli/NodePath.h"
+#include "cli/Query.h"
+#include "cli/Sha256.h"
+#include "cli/Timing.h"
+#include "mdl/Brush.h"
+#include "mdl/BrushFace.h"
+#include "mdl/BrushNode.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
+#include "mdl/EntityProperties.h"
+#include "mdl/GroupNode.h"
+#include "mdl/Issue.h"
+#include "mdl/LayerNode.h"
+#include "mdl/Map.h"
+#include "mdl/NodeWriter.h"
+#include "mdl/PatchNode.h"
+#include "mdl/Validator.h"
+#include "mdl/WorldNode.h"
+
+#include "kd/overload.h"
+
+#include <fmt/format.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <ranges>
+#include <set>
+#include <sstream>
+#include <unordered_map>
+#include <utility>
+
+namespace tb::cli
+{
+namespace
+{
+
+constexpr auto KeyLength = size_t{12};
+
+/**
+ * Restores the file positions of a node, everything below it and their faces when it
+ * goes out of scope. The map writer sets the positions of what it writes to their lines
+ * in its output, which must not replace the lines in the loaded file.
+ */
+class FilePositionGuard
+{
+private:
+  struct NodePosition
+  {
+    const mdl::Node* node;
+    size_t lineNumber;
+    size_t lineCount;
+  };
+
+  struct FacePosition
+  {
+    const mdl::BrushFace* face;
+    size_t lineNumber;
+  };
+
+  std::vector<NodePosition> m_nodes;
+  std::vector<FacePosition> m_faces;
+
+public:
+  explicit FilePositionGuard(const mdl::Node& node) { record(node); }
+
+  ~FilePositionGuard()
+  {
+    for (const auto& [node, lineNumber, lineCount] : m_nodes)
+    {
+      node->setFilePosition(lineNumber, lineCount);
+    }
+    for (const auto& [face, lineNumber] : m_faces)
+    {
+      // a face is always written on one line
+      face->setFilePosition(lineNumber, 1);
+    }
+  }
+
+  FilePositionGuard(const FilePositionGuard&) = delete;
+  FilePositionGuard& operator=(const FilePositionGuard&) = delete;
+
+private:
+  void record(const mdl::Node& node)
+  {
+    m_nodes.push_back({&node, node.lineNumber(), node.lineCount()});
+    if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(&node))
+    {
+      for (const auto& face : brushNode->brush().faces())
+      {
+        m_faces.push_back({&face, face.lineNumber()});
+      }
+    }
+    for (const auto* child : node.children())
+    {
+      record(*child);
+    }
+  }
+};
+
+/**
+ * The text that identifies a node's content: what the map writer writes for it. A
+ * brush is written as its faces only, so that its text does not depend on worldspawn,
+ * and the world as its properties only, so that its text does not depend on its
+ * brushes. Link ids are left out: the editor makes up a random one for every group
+ * that has none in the file, so they would change on every load until the map is saved.
+ */
+std::string serializedText(
+  const mdl::WorldNode& worldNode, mdl::Node& node, kdl::task_manager& taskManager)
+{
+  auto stream = std::ostringstream{};
+  auto writer = mdl::NodeWriter{worldNode, stream};
+  const auto writeNode = [&](mdl::Node& n) {
+    const auto guard = FilePositionGuard{n};
+    writer.writeNodes({&n}, taskManager);
+  };
+
+  node.accept(
+    kdl::overload(
+      [&](mdl::WorldNode& world) {
+        for (const auto& property : world.entity().properties())
+        {
+          stream << '"' << property.key() << "\" \"" << property.value() << "\"\n";
+        }
+      },
+      [&](mdl::LayerNode& layer) { stream << layer.name(); },
+      [&](mdl::GroupNode& group) { writeNode(group); },
+      [&](mdl::EntityNode& entity) { writeNode(entity); },
+      [&](mdl::BrushNode& brush) {
+        const auto guard = FilePositionGuard{brush};
+        writer.writeBrushFaces(brush.brush().faces(), taskManager);
+      },
+      [&](mdl::PatchNode& patch) { writeNode(patch); }));
+
+  const auto linkIdLine = fmt::format("\"{}\"", mdl::EntityPropertyKeys::TbLinkId);
+  const auto text = stream.str();
+  auto result = std::string{};
+  for (const auto range : std::views::split(text, '\n'))
+  {
+    const auto line = std::string_view{range.begin(), range.end()};
+    if (!line.starts_with(linkIdLine))
+    {
+      result += line;
+      result += '\n';
+    }
+  }
+  return result;
+}
+
+/**
+ * Gives every issue its key. Issues of the same type on the same node are told apart by
+ * their face or property. Any that are still alike, such as two identical brushes with
+ * the same issue, are told apart by their order in the map, so their keys change when an
+ * identical node before them is added or removed.
+ */
+class KeyMaker
+{
+private:
+  const mdl::WorldNode& m_worldNode;
+  kdl::task_manager& m_taskManager;
+  std::unordered_map<const mdl::Node*, std::string> m_texts;
+  std::unordered_map<std::string, size_t> m_seen;
+
+public:
+  KeyMaker(const mdl::WorldNode& worldNode, kdl::task_manager& taskManager)
+    : m_worldNode{worldNode}
+    , m_taskManager{taskManager}
+  {
+  }
+
+  /** The key of an issue of the given type that is identified by the given text. */
+  std::string key(const std::string_view type, const std::string& text)
+  {
+    auto input = fmt::format("{}\n{}", type, text);
+    if (const auto ordinal = m_seen[input]++; ordinal > 0)
+    {
+      input += fmt::format("\n#{}", ordinal);
+    }
+    return sha256Hex(input).substr(0, KeyLength);
+  }
+
+  /** The key of a validator issue of the given type, on the given face if it has one. */
+  std::string key(
+    const std::string_view type,
+    const mdl::Issue& issue,
+    const std::optional<size_t> faceIndex)
+  {
+    auto& node = issue.node();
+    auto [it, inserted] = m_texts.try_emplace(&node);
+    if (inserted)
+    {
+      it->second = serializedText(m_worldNode, node, m_taskManager);
+    }
+
+    auto text = it->second;
+    if (faceIndex)
+    {
+      text += fmt::format("\nface:{}", *faceIndex);
+    }
+    else if (
+      const auto* propertyIssue = dynamic_cast<const mdl::EntityPropertyIssue*>(&issue))
+    {
+      text += fmt::format("\nproperty:{}", propertyIssue->propertyKey());
+    }
+    return key(type, text);
+  }
+};
+
+void collectLoadErrors(
+  const LoadedMap& loadedMap, KeyMaker& keys, std::vector<VerifyIssue>& issues)
+{
+  const auto& type = *findIssueType("load_error");
+  for (const auto& problem : loadedMap.loadProblems)
+  {
+    issues.push_back(
+      VerifyIssue{
+        .type = &type,
+        .severity = type.severity,
+        .key = keys.key(type.id, problem.message),
+        .message = problem.message,
+        .line = problem.line,
+      });
+  }
+}
+
+class ValidatorIssueCollector
+{
+private:
+  std::vector<const mdl::Validator*> m_validators;
+  std::unordered_map<mdl::IssueType, const IssueTypeDef*> m_types;
+  KeyMaker& m_keys;
+  std::vector<VerifyIssue>& m_issues;
+
+public:
+  ValidatorIssueCollector(
+    const mdl::WorldNode& worldNode, KeyMaker& keys, std::vector<VerifyIssue>& issues)
+    : m_validators{worldNode.registeredValidators()}
+    , m_keys{keys}
+    , m_issues{issues}
+  {
+    for (const auto* validator : m_validators)
+    {
+      const auto* type = findIssueType(*validator);
+      if (!type)
+      {
+        throw CliError{
+          ErrorCode::InternalError,
+          fmt::format(
+            "the validator '{}' has no entry in the issue-type table",
+            validator->description())};
+      }
+      m_types[validator->type()] = type;
+    }
+  }
+
+  /** Collects the issues of the given node and everything below it, depth first. */
+  void collect(mdl::Node& node)
+  {
+    for (const auto* issue : node.issues(m_validators))
+    {
+      const auto* type = m_types.at(issue->type());
+      const auto* faceIssue = dynamic_cast<const mdl::BrushFaceIssue*>(issue);
+      const auto faceIndex =
+        faceIssue ? std::optional{faceIssue->faceIndex()} : std::nullopt;
+      const auto line = issue->lineNumber();
+      m_issues.push_back(
+        VerifyIssue{
+          .type = type,
+          .severity = type->severity,
+          .key = m_keys.key(type->id, *issue, faceIndex),
+          .message = issue->description(),
+          .node = &node,
+          .faceIndex = faceIndex,
+          .line = line > 0 ? std::optional{line} : std::nullopt,
+        });
+    }
+    for (auto* child : node.children())
+    {
+      collect(*child);
+    }
+  }
+};
+
+/** The nodes and faces a path or query names. */
+struct Selection
+{
+  std::set<const mdl::Node*> nodes;
+  std::set<std::pair<const mdl::Node*, size_t>> faces;
+
+  /** Whether the issue is on a selected node or face, or inside a selected node. */
+  bool contains(const VerifyIssue& issue) const
+  {
+    if (issue.faceIndex && faces.contains({issue.node, *issue.faceIndex}))
+    {
+      return true;
+    }
+    for (const auto* node = issue.node; node; node = node->parent())
+    {
+      if (nodes.contains(node))
+      {
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+Selection selectionOf(const std::vector<NodeOrFace>& matches)
+{
+  auto result = Selection{};
+  for (const auto& match : matches)
+  {
+    if (match.faceIndex)
+    {
+      result.faces.emplace(match.node, *match.faceIndex);
+    }
+    else
+    {
+      result.nodes.insert(match.node);
+    }
+  }
+  return result;
+}
+
+/**
+ * Whether a `--target` value is a node path rather than a TbQl query: paths start with
+ * `world`, `layer:` or `group:`, which no query does.
+ */
+bool isNodePath(const std::string_view target)
+{
+  return target == WorldPath || target.starts_with("layer:")
+         || target.starts_with("group:");
+}
+
+Selection selectTarget(mdl::Map& map, const std::string& target)
+{
+  return isNodePath(target) ? selectionOf({resolveNodePath(map.worldNode(), target)})
+                            : selectionOf(queryMatches(map, target));
+}
+
+void applyConfig(
+  mdl::Map& map, const VerifyConfig& config, std::vector<VerifyIssue>& issues)
+{
+  for (auto& issue : issues)
+  {
+    if (const auto it = config.severity.find(issue.type); it != config.severity.end())
+    {
+      issue.severity = it->second;
+    }
+  }
+
+  for (const auto& suppression : config.ignore)
+  {
+    const auto selection =
+      suppression.query
+        ? std::optional{selectionOf(queryMatches(map, *suppression.query))}
+        : std::nullopt;
+    for (auto& issue : issues)
+    {
+      if (
+        issue.type == suppression.type
+        && (!suppression.key || issue.key == *suppression.key)
+        && (!selection || selection->contains(issue)))
+      {
+        issue.suppressed = true;
+      }
+    }
+  }
+}
+
+template <typename P>
+bool hasUnsuppressedIssue(const std::vector<VerifyIssue>& issues, const P& predicate)
+{
+  return std::ranges::any_of(
+    issues, [&](const auto& issue) { return !issue.suppressed && predicate(issue); });
+}
+
+Json stageToJson(const VerifyStage& stage)
+{
+  auto result = Json::object();
+  result.set("name", stage.name);
+  result.set("status", stage.hasIssues ? "issues" : "ok");
+  result.set("ms", std::round(stage.ms));
+  return result;
+}
+
+void setLocation(Json& result, const VerifyIssue& issue)
+{
+  issue.node->accept(
+    kdl::overload(
+      [](const mdl::WorldNode&) {},
+      [](const mdl::LayerNode&) {},
+      [&](const mdl::GroupNode& group) {
+        // an empty group has no bounds
+        if (group.hasChildren())
+        {
+          result.set("bounds", toJson(group.logicalBounds()));
+        }
+      },
+      [&](const mdl::EntityNode& entity) {
+        if (entity.hasChildren())
+        {
+          result.set("bounds", toJson(entity.logicalBounds()));
+        }
+        else
+        {
+          result.set("origin", toJson(entity.entity().origin()));
+        }
+      },
+      [&](const mdl::BrushNode& brush) {
+        result.set(
+          "bounds",
+          toJson(
+            issue.faceIndex ? brush.brush().face(*issue.faceIndex).bounds()
+                            : brush.logicalBounds()));
+      },
+      [&](const mdl::PatchNode& patch) {
+        result.set("bounds", toJson(patch.logicalBounds()));
+      }));
+}
+
+Json issueToJson(
+  const VerifyIssue& issue,
+  const std::unordered_map<const mdl::Node*, std::string>& paths)
+{
+  auto result = Json::object();
+  result.set("type", issue.type->id);
+  result.set("severity", toString(issue.severity));
+  result.set("key", issue.key);
+  result.set("message", issue.message);
+
+  if (issue.node)
+  {
+    const auto& path = paths.at(issue.node);
+    result.set(
+      "node", issue.faceIndex ? fmt::format("{}/face:{}", path, *issue.faceIndex) : path);
+  }
+  else
+  {
+    result.set("node", nullptr);
+  }
+  result.set("line", issue.line ? Json{*issue.line} : Json{nullptr});
+
+  if (issue.node)
+  {
+    setLocation(result, issue);
+  }
+
+  result.set("fixes", fixIdsJson(*issue.type));
+  return result;
+}
+
+/** The unsuppressed issues the list filters keep, in file order. */
+std::vector<const VerifyIssue*> filterIssues(
+  mdl::Map& map, const std::vector<VerifyIssue>& issues, const VerifyOptions& options)
+{
+  const auto target =
+    options.target ? std::optional{selectTarget(map, *options.target)} : std::nullopt;
+
+  auto result = std::vector<const VerifyIssue*>{};
+  for (const auto& issue : issues)
+  {
+    if (
+      !issue.suppressed
+      && (options.types.empty()
+          || std::ranges::find(options.types, issue.type) != options.types.end())
+      && (!options.minSeverity || issue.severity >= *options.minSeverity)
+      && (!target || target->contains(issue)))
+    {
+      result.push_back(&issue);
+    }
+  }
+  return result;
+}
+
+} // namespace
+
+IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
+{
+  auto& map = *loadedMap.map;
+  auto& worldNode = map.worldNode();
+  auto keys = KeyMaker{worldNode, *loadedMap.taskManager};
+  auto result = IssueReport{};
+
+  collectLoadErrors(loadedMap, keys, result.issues);
+
+  const auto start = std::chrono::steady_clock::now();
+  ValidatorIssueCollector{worldNode, keys, result.issues}.collect(worldNode);
+  const auto validatorMs = msSince(start);
+
+  // validator issues are collected depth first; the lines give the file order, with
+  // issues that have no line first and load errors before validator issues on a line
+  std::ranges::stable_sort(
+    result.issues, {}, [](const auto& issue) { return issue.line.value_or(0); });
+
+  applyConfig(map, config, result.issues);
+
+  const auto fromLoad = [](const VerifyIssue& issue) {
+    return issue.type->source == IssueSource::LoadDiagnostics;
+  };
+  const auto fromValidator = [](const VerifyIssue& issue) {
+    return issue.type->source == IssueSource::Validator;
+  };
+  result.stages = {
+    {"load_diagnostics", hasUnsuppressedIssue(result.issues, fromLoad), loadedMap.loadMs},
+    {"validators", hasUnsuppressedIssue(result.issues, fromValidator), validatorMs},
+  };
+  return result;
+}
+
+void setIssueCounts(Json& object, const std::vector<VerifyIssue>& issues)
+{
+  auto counts = Json::object();
+  for (const auto& type : issueTypes())
+  {
+    const auto count = std::ranges::count_if(issues, [&](const auto& issue) {
+      return !issue.suppressed && issue.type == &type;
+    });
+    if (count > 0)
+    {
+      counts.set(std::string{type.id}, size_t(count));
+    }
+  }
+  counts.set(
+    "suppressed", size_t(std::ranges::count_if(issues, &VerifyIssue::suppressed)));
+
+  auto bySeverity = Json::object();
+  for (const auto severity : {Severity::Error, Severity::Warning, Severity::Info})
+  {
+    bySeverity.set(
+      std::string{toString(severity)},
+      size_t(std::ranges::count_if(issues, [&](const auto& issue) {
+        return !issue.suppressed && issue.severity == severity;
+      })));
+  }
+
+  object.set("counts", std::move(counts));
+  object.set("by_severity", std::move(bySeverity));
+}
+
+VerifyResult verify(
+  LoadedMap& loadedMap, const VerifyConfig& config, const VerifyOptions& options)
+{
+  auto& map = *loadedMap.map;
+  const auto report = collectIssues(loadedMap, config);
+  const auto listed = filterIssues(map, report.issues, options);
+
+  const auto threshold = options.failOn.value_or(Severity::Error);
+  const auto failing = hasUnsuppressedIssue(
+    report.issues, [&](const auto& issue) { return issue.severity >= threshold; });
+
+  const auto paths = nodePaths(map.worldNode());
+  auto items = Json::array();
+  for (const auto* issue : listed | std::views::drop(options.paging.offset)
+                             | std::views::take(options.paging.limit))
+  {
+    items.push(issueToJson(*issue, paths));
+  }
+
+  auto issues = Json::object();
+  setCapped(
+    issues,
+    std::move(items),
+    listed.size(),
+    options.paging.offset + options.paging.limit < listed.size());
+
+  auto stages = Json::array();
+  for (const auto& stage : report.stages)
+  {
+    stages.push(stageToJson(stage));
+  }
+
+  auto result = Json::object();
+  result.set("schema", "tbcli.verify/1");
+  result.set("rev", loadedMap.rev);
+  result.set("ok", !failing);
+  result.set("stages", std::move(stages));
+  setIssueCounts(result, report.issues);
+  result.set("issues", std::move(issues));
+  return {std::move(result), failing && options.failOn.has_value()};
+}
+
+} // namespace tb::cli

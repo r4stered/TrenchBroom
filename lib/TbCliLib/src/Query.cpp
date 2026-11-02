@@ -234,8 +234,8 @@ Json query(LoadedMap& loadedMap, const QueryOptions& options)
   }
 
   auto items = Json::array();
-  for (const auto& match :
-       matches | std::views::drop(options.offset) | std::views::take(options.limit))
+  for (const auto& match : matches | std::views::drop(options.paging.offset)
+                             | std::views::take(options.paging.limit))
   {
     items.push(matchToJson(match));
   }
@@ -243,7 +243,8 @@ Json query(LoadedMap& loadedMap, const QueryOptions& options)
     result,
     std::move(items),
     matches.size(),
-    matches.size() > options.offset && matches.size() - options.offset > options.limit);
+    matches.size() > options.paging.offset
+      && matches.size() - options.paging.offset > options.paging.limit);
   return result;
 }
 

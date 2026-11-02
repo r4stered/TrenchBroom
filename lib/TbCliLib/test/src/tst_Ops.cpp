@@ -93,6 +93,20 @@ TEST_CASE("ops command")
     CHECK(createBox["properties"]["as"]["pattern"].isString());
   }
 
+  SECTION("lists the issue types")
+  {
+    const auto json = runJson({"ops", "--json"});
+    const auto& issueTypes = json["issue_types"];
+    REQUIRE(issueTypes.size() == 21);
+    CHECK(
+      issueTypes[0]
+      == parseJsonLiteral(R"({"type": "load_error", "severity": "error", "fixes": []})"));
+    CHECK(
+      issueTypes[4]
+      == parseJsonLiteral(
+        R"({"type": "empty_group", "severity": "warning", "fixes": []})"));
+  }
+
   SECTION("JSON is the default")
   {
     CHECK(runJson({"ops"}) == runJson({"ops", "--json"}));

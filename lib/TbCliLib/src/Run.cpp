@@ -33,6 +33,7 @@
 #include "cli/Query.h"
 #include "cli/Show.h"
 #include "cli/TextFormat.h"
+#include "cli/Verify.h"
 #include "version/Version.h"
 
 #include <fmt/format.h>
@@ -40,6 +41,7 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <string_view>
@@ -68,7 +70,9 @@ commands:
                         run one op; tbcli <op> --help lists its arguments.
                         An op's target is --target <path>, or
                         --query '<ql>' --expect <n | any>
-  ops [--json]          the JSON Schema of every op
+  verify <map>          run the in-process checks: load diagnostics and the
+                        editor's validators; exits 4 with --fail-on
+  ops [--json]          the JSON Schema of every op and the issue types
 
 node paths:
   layer:<n>/group:<n>/entity:<n>/brush:<n>/face:<n>, where each index counts
@@ -86,8 +90,10 @@ options:
   --key-entities <classes>
                         comma-separated classes describe lists in full,
                         overrides tbcli.json "describe.key_entities"
-  --limit <n>           query: return at most n matches (default: 200)
-  --offset <n>          query: skip the first n matches (default: 0)
+  --limit <n>           query, verify: return at most n matches or issues
+                        (default: 200)
+  --offset <n>          query, verify: skip the first n matches or issues
+                        (default: 0)
   --count-only          query: return only the number of matches
   --within <box>        query: keep matches whose bounds lie inside the box
   --intersects <box>    query: keep matches whose bounds overlap the box
@@ -99,6 +105,15 @@ options:
                         0.01 units, so boxes that only touch intersect; a box
                         is "x1,y1,z1,x2,y2,z2")
   --raw                 show: add the plane points of faces
+  --type <types>        verify: list only issues of these comma-separated types
+  --min-severity <s>    verify: list only issues of at least severity s
+                        (error, warning or info)
+  --target <path | ql>  verify: list only issues on the node or face at the
+                        path, or on the nodes the query matches, or inside them;
+                        a value that starts with world, layer: or group: is a
+                        path, anything else a query
+  --fail-on <s>         verify: exit 4 if an issue that tbcli.json does not
+                        suppress has at least severity s
   --json                ops: print JSON (the default)
   -h, --help            print this help
   --version             print the version
@@ -143,15 +158,21 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 14>{{
+constexpr auto CommandOptions = std::array<CommandOption, 20>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
+  {"--limit", "verify"},
   {"--offset", "query"},
+  {"--offset", "verify"},
   {"--count-only", "query"},
   {"--within", "query"},
   {"--intersects", "query"},
   {"--touching", "query"},
   {"--raw", "show"},
+  {"--type", "verify"},
+  {"--min-severity", "verify"},
+  {"--target", "verify"},
+  {"--fail-on", "verify"},
   {"--json", "ops"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
@@ -203,8 +224,11 @@ struct Arguments
   std::vector<std::string> positionals;
   OutputFormat outputFormat = OutputFormat::Json;
   ConfigOverrides configOverrides;
+  /** --limit and --offset, which query and verify share */
+  Paging paging;
   QueryOptions queryOptions;
   bool raw = false;
+  VerifyOptions verifyOptions;
   ApplyOptions applyOptions;
   /** The flags of an op's subcommand, as (name without dashes, value). */
   OpFlags opFlags;
@@ -237,6 +261,27 @@ size_t parseCount(const std::string_view name, const std::string& value)
       fmt::format("{} requires a non-negative integer, not '{}'", name, value));
   }
   return *result;
+}
+
+Severity parseSeverityOption(const std::string_view name, const std::string& value)
+{
+  const auto result = parseSeverity(value);
+  if (!result)
+  {
+    throw usageError(
+      fmt::format("{} requires error, warning or info, not '{}'", name, value));
+  }
+  return *result;
+}
+
+const IssueTypeDef* parseIssueTypeOption(const std::string& value)
+{
+  const auto* type = findIssueType(value);
+  if (!type)
+  {
+    throw usageError(fmt::format("--type: unknown issue type '{}'", value));
+  }
+  return type;
 }
 
 /** A box given as six numbers `x1,y1,z1,x2,y2,z2`, separated by commas or spaces. */
@@ -318,6 +363,9 @@ Arguments parseArguments(const std::vector<std::string>& args)
       return args[++i];
     };
 
+    const auto opCommand =
+      !result.positionals.empty() && findOpDef(result.positionals.front()) != nullptr;
+
     const auto noValue = [&]() {
       if (inlineValue)
       {
@@ -375,11 +423,11 @@ Arguments parseArguments(const std::vector<std::string>& args)
     }
     else if (name == "--limit")
     {
-      result.queryOptions.limit = parseCount(name, value());
+      result.paging.limit = parseCount(name, value());
     }
     else if (name == "--offset")
     {
-      result.queryOptions.offset = parseCount(name, value());
+      result.paging.offset = parseCount(name, value());
     }
     else if (name == "--count-only")
     {
@@ -427,10 +475,32 @@ Arguments parseArguments(const std::vector<std::string>& args)
       noValue();
       result.applyOptions.allowLossy = true;
     }
-    else if (!result.positionals.empty() && findOpDef(result.positionals.front()))
+    else if (opCommand)
     {
-      // an op's own flags, checked against its definition when the op is built
+      // an op's own flags, such as --target, are checked against its definition when
+      // the op is built. This must come before the verify options below, which share
+      // names with op flags.
       result.opFlags.emplace_back(name.substr(2), value());
+      continue;
+    }
+    else if (name == "--type")
+    {
+      std::ranges::transform(
+        splitList(value()),
+        std::back_inserter(result.verifyOptions.types),
+        parseIssueTypeOption);
+    }
+    else if (name == "--min-severity")
+    {
+      result.verifyOptions.minSeverity = parseSeverityOption(name, value());
+    }
+    else if (name == "--target")
+    {
+      result.verifyOptions.target = value();
+    }
+    else if (name == "--fail-on")
+    {
+      result.verifyOptions.failOn = parseSeverityOption(name, value());
     }
     else
     {
@@ -477,11 +547,14 @@ void checkArguments(
   }
   for (const auto& option : arguments.commandOptions)
   {
-    const auto& commandOption =
-      *std::ranges::find(CommandOptions, option, &CommandOption::name);
-    const auto accepted = commandOption.acceptedBy == AcceptedBy::MutatingCommands
-                            ? isMutatingCommand(command)
-                            : commandOption.command == command;
+    // an option that several commands accept has an entry for each of them
+    const auto accepted =
+      std::ranges::any_of(CommandOptions, [&](const auto& commandOption) {
+        return commandOption.name == option
+               && (commandOption.acceptedBy == AcceptedBy::MutatingCommands
+                     ? isMutatingCommand(command)
+                     : commandOption.command == command);
+      });
     if (!accepted)
     {
       throw usageError(fmt::format("{} does not accept {}", command, option));
@@ -526,13 +599,33 @@ Json readBatch(const std::string& source, const std::string_view in)
   return std::move(batch).value();
 }
 
+/** What a command prints, and its exit code. */
+struct CommandResult
+{
+  Json output;
+  int exitCode = ExitCode::Ok;
+
+  // NOLINTNEXTLINE(google-explicit-constructor): most commands only produce output
+  CommandResult(Json output_)
+    : output{std::move(output_)}
+  {
+  }
+
+  CommandResult(Json output_, const int exitCode_)
+    : output{std::move(output_)}
+    , exitCode{exitCode_}
+  {
+  }
+};
+
 Json runOps(const Arguments& arguments, const std::vector<Op>& ops, Logger& logger)
 {
   auto [loadedMap, config] = loadMapArgument(arguments, logger);
   return apply(loadedMap, ops, arguments.applyOptions);
 }
 
-Json runCommand(const Arguments& arguments, const std::string_view in, Logger& logger)
+CommandResult runCommand(
+  const Arguments& arguments, const std::string_view in, Logger& logger)
 {
   const auto& positionals = arguments.positionals;
   const auto& command = positionals.front();
@@ -540,14 +633,16 @@ Json runCommand(const Arguments& arguments, const std::string_view in, Logger& l
   if (command == "describe")
   {
     checkArguments(arguments, command, {"a map file"});
-    const auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return describe(loadedMap, config.keyEntities);
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    const auto issueReport = collectIssues(loadedMap, config.verify);
+    return describe(loadedMap, config.keyEntities, issueReport);
   }
   if (command == "query")
   {
     checkArguments(arguments, command, {"a map file"}, 1);
     auto [loadedMap, config] = loadMapArgument(arguments, logger);
     auto options = arguments.queryOptions;
+    options.paging = arguments.paging;
     if (positionals.size() > 2)
     {
       options.query = positionals[2];
@@ -572,6 +667,15 @@ Json runCommand(const Arguments& arguments, const std::string_view in, Logger& l
     // the batch is checked before the map is loaded
     const auto ops = parseBatch(readBatch(positionals[2], in));
     return runOps(arguments, ops, logger);
+  }
+  if (command == "verify")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    auto options = arguments.verifyOptions;
+    options.paging = arguments.paging;
+    auto [output, failed] = verify(loadedMap, config.verify, options);
+    return {std::move(output), failed ? ExitCode::FailOn : ExitCode::Ok};
   }
   if (command == "ops")
   {
@@ -631,8 +735,9 @@ RunResult run(const std::vector<std::string>& args, const std::string_view in)
       throw usageError("no command given");
     }
 
-    result.out = render(runCommand(arguments, in, logger), arguments.outputFormat);
-    result.exitCode = ExitCode::Ok;
+    auto [output, exitCode] = runCommand(arguments, in, logger);
+    result.out = render(output, arguments.outputFormat);
+    result.exitCode = exitCode;
   }
   catch (const CliError& e)
   {

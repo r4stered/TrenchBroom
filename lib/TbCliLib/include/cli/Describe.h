@@ -27,6 +27,7 @@ namespace tb::cli
 {
 
 class Json;
+struct IssueReport;
 struct LoadedMap;
 
 /**
@@ -37,9 +38,13 @@ struct LoadedMap;
  * Entities of the given key entity classes are listed in full, in addition to
  * worldspawn and every entity with a targetname or target. Without a list, the player
  * starts and trigger_changelevel are.
+ *
+ * `issues` counts the given issues of the in-process verify stages per type and
+ * severity, as verify does.
  */
 Json describe(
   const LoadedMap& loadedMap,
-  const std::optional<std::vector<std::string>>& keyEntityClasses = std::nullopt);
+  const std::optional<std::vector<std::string>>& keyEntityClasses,
+  const IssueReport& issueReport);
 
 } // namespace tb::cli

@@ -144,6 +144,133 @@ void readDescribeConfig(
   config.keyEntities = readStrings(describe, "key_entities", file);
 }
 
+/** The known issue type that tbcli.json names under the given key. */
+const IssueTypeDef& readIssueType(
+  const Json& value, const std::string_view key, const std::filesystem::path& file)
+{
+  if (!value.isString())
+  {
+    throw fileConfigError(file, fmt::format("'{}' must be an issue type", key));
+  }
+  const auto* type = findIssueType(value.asString());
+  if (!type)
+  {
+    throw fileConfigError(
+      file, fmt::format("'{}': unknown issue type '{}'", key, value.asString()));
+  }
+  return *type;
+}
+
+std::map<const IssueTypeDef*, Severity> readSeverities(
+  const Json& verify, const std::filesystem::path& file)
+{
+  const auto& severity = verify["severity"];
+  if (severity.isNull())
+  {
+    return {};
+  }
+  if (!severity.isObject())
+  {
+    throw fileConfigError(file, "'verify.severity' must be an object");
+  }
+
+  auto result = std::map<const IssueTypeDef*, Severity>{};
+  for (const auto& [type, value] : severity.asObject())
+  {
+    const auto& issueType = readIssueType(Json{type}, "verify.severity", file);
+    const auto parsed = value.isString() ? parseSeverity(value.asString()) : std::nullopt;
+    if (!parsed)
+    {
+      throw fileConfigError(
+        file,
+        fmt::format(
+          "'verify.severity.{}' must be \"error\", \"warning\" or \"info\"", type));
+    }
+    result[&issueType] = *parsed;
+  }
+  return result;
+}
+
+std::optional<std::string> readOptionalString(
+  const Json& object, const std::string_view key, const std::filesystem::path& file)
+{
+  const auto& value = object[key];
+  if (value.isNull())
+  {
+    return std::nullopt;
+  }
+  if (!value.isString())
+  {
+    throw fileConfigError(
+      file, fmt::format("'verify.ignore': '{}' must be a string", key));
+  }
+  return value.asString();
+}
+
+std::vector<IssueSuppression> readSuppressions(
+  const Json& verify, const std::filesystem::path& file)
+{
+  const auto& ignore = verify["ignore"];
+  if (ignore.isNull())
+  {
+    return {};
+  }
+
+  const auto typeError = [&]() {
+    return fileConfigError(
+      file, "'verify.ignore' must be an array of {type, key?} or {type, query?} objects");
+  };
+  if (!ignore.isArray())
+  {
+    throw typeError();
+  }
+
+  auto result = std::vector<IssueSuppression>{};
+  for (const auto& entry : ignore.asArray())
+  {
+    if (!entry.isObject())
+    {
+      throw typeError();
+    }
+    for (const auto& [key, value] : entry.asObject())
+    {
+      if (key != "type" && key != "key" && key != "query")
+      {
+        throw fileConfigError(
+          file, fmt::format("'verify.ignore': unknown key '{}'", key));
+      }
+    }
+
+    auto suppression = IssueSuppression{
+      &readIssueType(entry["type"], "verify.ignore.type", file),
+      readOptionalString(entry, "key", file),
+      readOptionalString(entry, "query", file)};
+    if (suppression.key && suppression.query)
+    {
+      throw fileConfigError(
+        file, "'verify.ignore': an entry takes a key or a query, not both");
+    }
+    result.push_back(std::move(suppression));
+  }
+  return result;
+}
+
+void readVerifyConfig(
+  Config& config, const Json& object, const std::filesystem::path& file)
+{
+  const auto& verify = object["verify"];
+  if (verify.isNull())
+  {
+    return;
+  }
+  if (!verify.isObject())
+  {
+    throw fileConfigError(file, "'verify' must be an object");
+  }
+  config.verify.severity = readSeverities(verify, file);
+  config.verify.ignore = readSuppressions(verify, file);
+}
+
 void readConfigFile(Config& config, const std::filesystem::path& file)
 {
   const auto contents = readFile(file);
@@ -178,6 +305,7 @@ void readConfigFile(Config& config, const std::filesystem::path& file)
   config.fgd = readPaths(object, "fgd", file, base);
   config.quakeDir = readPath(object, "quake_dir", file, base);
   readDescribeConfig(config, object, file);
+  readVerifyConfig(config, object, file);
 }
 
 } // namespace

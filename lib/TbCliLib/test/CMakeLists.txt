@@ -11,6 +11,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityJson.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Fgd.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FileUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueTypes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadMap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapContents.cpp
@@ -24,6 +25,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Show.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextFormat.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Verify.cpp
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)

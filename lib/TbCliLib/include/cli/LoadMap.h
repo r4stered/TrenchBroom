@@ -21,6 +21,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -49,6 +50,15 @@ namespace cli
 {
 struct Config;
 
+/** Something the map reader skipped or changed while loading. */
+struct LoadProblem
+{
+  /** The reader's message, without its location. */
+  std::string message;
+  /** The line the reader reported it at, if it reported one. */
+  std::optional<size_t> line;
+};
+
 /**
  * A map loaded headlessly together with everything the map library needs to keep it
  * alive. The logger passed to loadMap must outlive this.
@@ -61,7 +71,9 @@ struct LoadedMap
    * What the reader skipped or changed while loading, as it logged it. A load with any
    * such problems is lossy: saving would not write back what the file holds.
    */
-  std::vector<std::string> loadProblems;
+  std::vector<LoadProblem> loadProblems;
+  /** How long reading the map took, in milliseconds. */
+  double loadMs = 0.0;
 
   std::unique_ptr<kdl::task_manager> taskManager;
   std::unique_ptr<gl::ResourceManager> resourceManager;
