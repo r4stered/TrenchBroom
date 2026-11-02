@@ -49,6 +49,14 @@ enum class ErrorCode
   NotValve220,
   /** the map cannot be parsed */
   ParseError,
+  /** a node path is malformed */
+  InvalidPath,
+  /** a well-formed node path addresses no node */
+  NodeNotFound,
+  /** a command was given a node of a kind it does not accept */
+  WrongNodeKind,
+  /** a classname is not defined by the entity definitions */
+  UndefinedClass,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

@@ -1,0 +1,30 @@
+// A small FGD with base classes, to check that tbcli fgd resolves inheritance.
+@SolidClass = worldspawn : "World entity" [ message(string) : "Level name" ]
+
+@baseclass = Targetname [ targetname(target_source) : "Name" ]
+@baseclass = Appearflags [
+	spawnflags(Flags) =
+	[
+		256 : "Not in Easy" : 0
+		512 : "Not in Normal" : 0
+	]
+]
+
+@baseclass base(Targetname, Appearflags) color(255 255 40) = Light [
+	light(integer) : "Brightness" : 300
+	style(choices) : "Appearance" : 0 =
+	[
+		0 : "Normal"
+		1 : "Flicker"
+	]
+]
+
+@PointClass base(Light) size(-8 -8 -8, 8 8 8) = light : "Invisible light source" [
+	spawnflags(Flags) = [ 1 : "Start off" : 1 ]
+	wait(float) : "Fade distance multiplier" : "1"
+]
+
+@SolidClass base(Targetname) = func_door : "Basic door" [
+	target(target_destination) : "Target"
+	speed(integer) : "Speed" : 100
+]

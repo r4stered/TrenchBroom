@@ -101,6 +101,42 @@ TEST_CASE("run")
       checkErrorEnvelope(runCli({"describe", "a.map", "b.map"}), "usage", 2);
     }
 
+    SECTION("show without a node path is a usage error")
+    {
+      checkErrorEnvelope(runCli({"show", "x.map"}), "usage", 2);
+    }
+
+    SECTION("fgd without a classname is a usage error")
+    {
+      checkErrorEnvelope(runCli({"fgd", "x.map"}), "usage", 2);
+    }
+
+    SECTION("a malformed count is a usage error")
+    {
+      const auto count = GENERATE("many", "-1", "+1", "1.5", "");
+      CAPTURE(count);
+      checkErrorEnvelope(runCli({"query", "x.map", "--limit", count}), "usage", 2);
+      checkErrorEnvelope(runCli({"query", "x.map", "--offset", count}), "usage", 2);
+    }
+
+    SECTION("a malformed box is a usage error")
+    {
+      const auto box = GENERATE(
+        "1,2,3", "1,2,3,4,5,6,7", "0,0,0,1,1,x", "0,0,0,1,1,1e", "10,0,0,0,10,10");
+      CAPTURE(box);
+      checkErrorEnvelope(runCli({"query", "x.map", "--within", box}), "usage", 2);
+      checkErrorEnvelope(runCli({"query", "x.map", "--intersects", box}), "usage", 2);
+    }
+
+    SECTION("options of other commands are refused")
+    {
+      checkErrorEnvelope(runCli({"query", "x.map", "--raw"}), "usage", 2);
+      checkErrorEnvelope(runCli({"describe", "x.map", "--limit", "1"}), "usage", 2);
+      checkErrorEnvelope(
+        runCli({"show", "x.map", "world", "--key-entities", "light"}), "usage", 2);
+      checkErrorEnvelope(runCli({"fgd", "x.map", "light", "--count-only"}), "usage", 2);
+    }
+
     SECTION("--help and -h print usage")
     {
       const auto option = GENERATE("--help", "-h");

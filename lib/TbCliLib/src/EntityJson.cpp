@@ -30,14 +30,36 @@
 
 #include "kd/overload.h"
 
+#include <algorithm>
 #include <charconv>
 #include <optional>
+#include <ranges>
+#include <string>
 #include <variant>
 
 namespace tb::cli
 {
 namespace
 {
+
+// Caps that keep one entity from flooding the output.
+constexpr auto MaxPropertiesPerEntity = size_t{64};
+constexpr auto MaxPropertyValueLength = size_t{256};
+
+/**
+ * The given string cut to at most `maxLength` bytes, without splitting a UTF-8
+ * sequence.
+ */
+std::string truncateUtf8(const std::string& str, const size_t maxLength)
+{
+  auto length = std::min(str.size(), maxLength);
+  while (length > 0 && length < str.size()
+         && (static_cast<unsigned char>(str[length]) & 0xC0) == 0x80)
+  {
+    --length;
+  }
+  return str.substr(0, length);
+}
 
 std::optional<int> parseInt(const std::string& str)
 {
@@ -129,6 +151,28 @@ Json entityToJson(const mdl::EntityNodeBase& node)
     }
   }
 
+  return result;
+}
+
+Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode)
+{
+  auto result = entityToJson(entityNode);
+  const auto& properties = result["properties"].asObject();
+
+  auto truncated = properties.size() > MaxPropertiesPerEntity;
+  auto bounded = Json::object();
+  for (const auto& [key, value] : properties | std::views::take(MaxPropertiesPerEntity))
+  {
+    const auto& str = value.asString();
+    truncated = truncated || str.size() > MaxPropertyValueLength;
+    bounded.set(key, truncateUtf8(str, MaxPropertyValueLength));
+  }
+
+  if (truncated)
+  {
+    result.set("properties", std::move(bounded));
+    result.set("properties_truncated", true);
+  }
   return result;
 }
 

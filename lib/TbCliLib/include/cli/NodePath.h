@@ -19,13 +19,17 @@
 
 #pragma once
 
+#include <cstddef>
+#include <optional>
 #include <string>
 #include <string_view>
 
 namespace tb::mdl
 {
+class BrushNode;
 class Node;
-}
+class WorldNode;
+} // namespace tb::mdl
 
 namespace tb::cli
 {
@@ -41,5 +45,30 @@ inline constexpr auto WorldPath = std::string_view{"world"};
  * Paths are positional and only valid for the rev they were computed from.
  */
 std::string nodePath(const mdl::Node& node);
+
+/** The path of a brush face: the brush's path followed by `face:<index>`. */
+std::string facePath(const mdl::BrushNode& brushNode, size_t faceIndex);
+
+/** A node, or a face of a brush node: what a node path addresses or a query matches. */
+struct NodeOrFace
+{
+  mdl::Node* node = nullptr;
+  /** Set if the path addresses a face of `node`, which is then a brush node. */
+  std::optional<size_t> faceIndex;
+};
+
+/**
+ * Finds what the given node path addresses in the given world.
+ *
+ * Besides the paths that nodePath and facePath return, a layer or group segment may
+ * name the node by its persistent id instead of its index, as in `layer:id:<_tb_id>` or
+ * `group:id:<_tb_id>`. Since persistent ids are unique in a map, a path may also start
+ * with a group segment that names a group by id, wherever the group is.
+ *
+ * @throw CliError `invalid_path` if the path is malformed or names a node kind that
+ * cannot appear where it does, `node_not_found` if the path is well-formed but addresses
+ * nothing
+ */
+NodeOrFace resolveNodePath(mdl::WorldNode& worldNode, std::string_view path);
 
 } // namespace tb::cli

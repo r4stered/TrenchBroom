@@ -6,13 +6,19 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Describe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Fgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadMap.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapContents.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodePath.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ParseUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Query.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Sha256.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Show.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextFormat.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS

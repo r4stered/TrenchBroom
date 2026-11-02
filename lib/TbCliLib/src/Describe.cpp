@@ -19,10 +19,13 @@
 
 #include "cli/Describe.h"
 
+#include "cli/CappedList.h"
 #include "cli/EntityJson.h"
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
 #include "cli/LoadMap.h"
+#include "cli/MapContents.h"
+#include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -39,8 +42,6 @@
 #include "kd/overload.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
-
-#include "vm/bbox.h"
 
 #include <algorithm>
 #include <map>
@@ -60,8 +61,6 @@ constexpr auto MaxTextures = size_t{100};
 constexpr auto MaxKeyEntities = size_t{50};
 constexpr auto MaxLinks = size_t{100};
 constexpr auto MaxDanglingLinks = size_t{50};
-constexpr auto MaxPropertiesPerEntity = size_t{64};
-constexpr auto MaxPropertyValueLength = size_t{256};
 
 /** The classes listed in full unless tbcli.json overrides them. */
 const auto DefaultKeyEntityClasses = std::vector<std::string>{
@@ -70,126 +69,6 @@ const auto DefaultKeyEntityClasses = std::vector<std::string>{
   "info_player_coop",
   "trigger_changelevel",
 };
-
-/** The nodes below a node, in file order. */
-struct MapContents
-{
-  std::vector<const mdl::GroupNode*> groups;
-  std::vector<const mdl::EntityNode*> entities;
-  std::vector<const mdl::BrushNode*> brushes;
-  std::vector<const mdl::PatchNode*> patches;
-};
-
-/**
- * The given node's contents, including the node itself if it is a group, entity, brush or
- * patch.
- */
-MapContents collectContents(const mdl::Node& node)
-{
-  auto contents = MapContents{};
-  node.accept(
-    kdl::overload(
-      [](auto&& thisLambda, const mdl::WorldNode& worldNode) {
-        worldNode.visitChildren(thisLambda);
-      },
-      [](auto&& thisLambda, const mdl::LayerNode& layerNode) {
-        layerNode.visitChildren(thisLambda);
-      },
-      [&](auto&& thisLambda, const mdl::GroupNode& groupNode) {
-        contents.groups.push_back(&groupNode);
-        groupNode.visitChildren(thisLambda);
-      },
-      [&](auto&& thisLambda, const mdl::EntityNode& entityNode) {
-        contents.entities.push_back(&entityNode);
-        entityNode.visitChildren(thisLambda);
-      },
-      [&](const mdl::BrushNode& brushNode) { contents.brushes.push_back(&brushNode); },
-      [&](const mdl::PatchNode& patchNode) { contents.patches.push_back(&patchNode); }));
-  return contents;
-}
-
-struct Summary
-{
-  size_t brushes = 0;
-  size_t entities = 0;
-  size_t faces = 0;
-  std::optional<vm::bbox3d> bounds;
-
-  void addBounds(const vm::bbox3d& nodeBounds)
-  {
-    bounds = bounds ? vm::merge(*bounds, nodeBounds) : nodeBounds;
-  }
-};
-
-/** Counts and bounds of the given contents. */
-Summary summarize(const MapContents& contents)
-{
-  auto summary = Summary{};
-  summary.brushes = contents.brushes.size();
-  summary.entities = contents.entities.size();
-  for (const auto* brushNode : contents.brushes)
-  {
-    summary.faces += brushNode->brush().faceCount();
-    summary.addBounds(brushNode->logicalBounds());
-  }
-  for (const auto* entityNode : contents.entities)
-  {
-    // a brush entity's bounds are its brushes' bounds
-    if (!entityNode->hasChildren())
-    {
-      summary.addBounds(entityNode->logicalBounds());
-    }
-  }
-  for (const auto* patchNode : contents.patches)
-  {
-    summary.addBounds(patchNode->logicalBounds());
-  }
-  return summary;
-}
-
-Json countsToJson(const Summary& summary)
-{
-  auto counts = Json::object();
-  counts.set("brushes", summary.brushes);
-  counts.set("entities", summary.entities);
-  counts.set("faces", summary.faces);
-  return counts;
-}
-
-Json boundsToJson(const Summary& summary)
-{
-  return summary.bounds ? toJson(*summary.bounds) : Json{};
-}
-
-/** Sets `items`, `total` and `truncated` on `object`. */
-void setCapped(Json& object, Json items, const size_t total, const bool truncated)
-{
-  object.set("items", std::move(items));
-  object.set("total", total);
-  object.set("truncated", truncated);
-}
-
-/** Sets `items` (the first `max` elements), `total` and `truncated` on `object`. */
-template <typename T, typename F>
-void setCapped(
-  Json& object, const std::vector<T>& elements, const size_t max, const F& toJson)
-{
-  auto items = Json::array();
-  for (const auto& element : elements | std::views::take(max))
-  {
-    items.push(toJson(element));
-  }
-  setCapped(object, std::move(items), elements.size(), elements.size() > max);
-}
-
-/** `{items, total, truncated}` for the given elements. */
-template <typename T, typename F>
-Json capped(const std::vector<T>& elements, const size_t max, const F& toJson)
-{
-  auto result = Json::object();
-  setCapped(result, elements, max, toJson);
-  return result;
-}
 
 /** The groups of each link set with more than one group, in file order. */
 using LinkSets = std::unordered_map<std::string, std::vector<const mdl::GroupNode*>>;
@@ -203,11 +82,6 @@ LinkSets collectLinkSets(const std::vector<const mdl::GroupNode*>& groups)
   }
   std::erase_if(linkSets, [](const auto& entry) { return entry.second.size() < 2; });
   return linkSets;
-}
-
-Json idToJson(const std::optional<mdl::IdType>& id)
-{
-  return id ? Json{*id} : Json{};
 }
 
 /**
@@ -245,8 +119,7 @@ private:
   Json writeLayer(const mdl::LayerNode& layerNode)
   {
     ++m_total;
-    auto result = writeCommon(layerNode, layerNode.persistentId());
-    result.set("omit_from_export", layerNode.layer().omitFromExport());
+    auto result = layerToJson(layerNode);
     result.set("groups", writeChildGroups(layerNode));
     return result;
   }
@@ -263,7 +136,7 @@ private:
     }
     ++m_writtenGroups;
 
-    auto result = writeCommon(groupNode, groupNode.persistentId());
+    auto result = groupToJson(groupNode);
     if (
       const auto linkSet = m_linkSets.find(groupNode.linkId());
       linkSet != m_linkSets.end())
@@ -280,23 +153,6 @@ private:
       result.set("siblings", std::move(siblings));
     }
     result.set("groups", writeChildGroups(groupNode));
-    return result;
-  }
-
-  /** The members that layers and groups share. */
-  static Json writeCommon(const mdl::Node& node, const std::optional<mdl::IdType>& id)
-  {
-    const auto summary = summarize(collectContents(node));
-
-    auto result = Json::object();
-    result.set("path", nodePath(node));
-    result.set("id", idToJson(id));
-    result.set("name", node.name());
-    result.set("bounds", boundsToJson(summary));
-    result.set("counts", countsToJson(summary));
-    // effective states, inherited from the parent unless set on the node
-    result.set("hidden", !node.visible());
-    result.set("locked", node.locked());
     return result;
   }
 
@@ -409,48 +265,6 @@ Json textures(const std::vector<const mdl::BrushNode*>& brushes, const bool chec
     }
     return entry;
   });
-  return result;
-}
-
-/**
- * The given string cut to at most `maxLength` bytes, without splitting a UTF-8
- * sequence.
- */
-std::string truncateUtf8(const std::string& str, const size_t maxLength)
-{
-  auto length = std::min(str.size(), maxLength);
-  while (length > 0 && length < str.size()
-         && (static_cast<unsigned char>(str[length]) & 0xC0) == 0x80)
-  {
-    --length;
-  }
-  return str.substr(0, length);
-}
-
-/**
- * An entity in full, but with at most MaxPropertiesPerEntity properties and values cut
- * to MaxPropertyValueLength bytes, so that one entity cannot flood the output. If
- * anything was cut, `properties_truncated` is set.
- */
-Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode)
-{
-  auto result = entityToJson(entityNode);
-  const auto& properties = result["properties"].asObject();
-
-  auto truncated = properties.size() > MaxPropertiesPerEntity;
-  auto bounded = Json::object();
-  for (const auto& [key, value] : properties | std::views::take(MaxPropertiesPerEntity))
-  {
-    const auto& str = value.asString();
-    truncated = truncated || str.size() > MaxPropertyValueLength;
-    bounded.set(key, truncateUtf8(str, MaxPropertyValueLength));
-  }
-
-  if (truncated)
-  {
-    result.set("properties", std::move(bounded));
-    result.set("properties_truncated", true);
-  }
   return result;
 }
 

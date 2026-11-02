@@ -40,4 +40,11 @@ class Json;
  */
 Json entityToJson(const mdl::EntityNodeBase& node);
 
+/**
+ * An entity as entityToJson writes it, but with at most 64 properties and values cut to
+ * 256 bytes, so that one entity cannot flood a list of entities. If anything was cut,
+ * `properties_truncated` is set.
+ */
+Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode);
+
 } // namespace tb::cli

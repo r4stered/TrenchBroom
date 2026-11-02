@@ -32,6 +32,9 @@
 
 #include "kd/result.h"
 
+#include <string>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
@@ -138,6 +141,47 @@ TEST_CASE("EntityJson")
       const auto json = entityToJson(entityNode);
       CHECK(json["properties"]["spawnflags"] == Json{spawnflags});
       CHECK(json.find("spawnflags") == nullptr);
+    }
+  }
+
+  SECTION("boundedEntityToJson")
+  {
+    auto worldNode = mdl::WorldNode{
+      mdl::EntityPropertyConfig{},
+      mdl::Entity{{{"classname", "worldspawn"}}},
+      mdl::MapFormat::Valve};
+
+    SECTION("small entities are written in full")
+    {
+      auto& entityNode =
+        addEntity(worldNode, {{"classname", "light"}, {"origin", "0 0 0"}});
+      CHECK(boundedEntityToJson(entityNode) == entityToJson(entityNode));
+    }
+
+    SECTION("long values are cut without splitting UTF-8 sequences")
+    {
+      // 255 bytes, then a two byte sequence that would end at byte 257
+      auto& entityNode = addEntity(
+        worldNode,
+        {{"classname", "info_null"}, {"message", std::string(255, 'm') + "\xC3\xA9"}});
+
+      const auto json = boundedEntityToJson(entityNode);
+      CHECK(json["properties"]["message"] == Json{std::string(255, 'm')});
+      CHECK(json["properties_truncated"] == Json{true});
+    }
+
+    SECTION("at most 64 properties are written")
+    {
+      auto properties = std::vector<mdl::EntityProperty>{{"classname", "info_null"}};
+      for (auto i = 0; i < 70; ++i)
+      {
+        properties.emplace_back("key" + std::to_string(i), "value");
+      }
+      auto& entityNode = addEntity(worldNode, std::move(properties));
+
+      const auto json = boundedEntityToJson(entityNode);
+      CHECK(json["properties"].size() == 64);
+      CHECK(json["properties_truncated"] == Json{true});
     }
   }
 }

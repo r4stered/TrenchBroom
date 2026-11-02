@@ -23,13 +23,19 @@
 #include "cli/CliError.h"
 #include "cli/Config.h"
 #include "cli/Describe.h"
+#include "cli/Fgd.h"
 #include "cli/Json.h"
 #include "cli/LoadMap.h"
+#include "cli/ParseUtils.h"
+#include "cli/Query.h"
+#include "cli/Show.h"
 #include "cli/TextFormat.h"
 #include "version/Version.h"
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <array>
 #include <exception>
 #include <optional>
 #include <ranges>
@@ -44,6 +50,21 @@ constexpr auto UsageText = R"(usage: tbcli <command> <map> [options]
 
 commands:
   describe <map>        summarize a Valve 220 map
+  query <map> [<ql>]    list the nodes or faces a TbQl query matches, in file
+                        order (without a query, every node but the world);
+                        quote string values, as in 'classname is "light"',
+                        since a query that refers to unknown names searches
+                        for its own text instead
+  show <map> <path>     one node or face in full
+  fgd <map> <classname> the entity definition of a class, with base classes
+                        resolved
+
+node paths:
+  layer:<n>/group:<n>/entity:<n>/brush:<n>/face:<n>, where each index counts
+  the preceding siblings of the same kind in file order and layer:0 is the
+  default layer; world is worldspawn. Layers and groups can also be named by
+  their persistent id, as in layer:id:<id> or group:id:<id>, and a path can
+  start with group:id:<id>. Paths are only valid for the rev they came from.
 
 options:
   --format json|text    output format (default: json)
@@ -54,11 +75,42 @@ options:
   --key-entities <classes>
                         comma-separated classes describe lists in full,
                         overrides tbcli.json "describe.key_entities"
+  --limit <n>           query: return at most n matches (default: 200)
+  --offset <n>          query: skip the first n matches (default: 0)
+  --count-only          query: return only the number of matches
+  --within <box>        query: keep matches whose bounds lie inside the box
+  --intersects <box>    query: keep matches whose bounds overlap the box
+  --touching <path>     query: keep matches whose bounds overlap or touch the
+                        bounds of the node or face at the path (not world),
+                        leaving out that node, what contains it and what it
+                        contains
+                        (spatial filters compare bounding boxes and tolerate
+                        0.01 units, so boxes that only touch intersect; a box
+                        is "x1,y1,z1,x2,y2,z2")
+  --raw                 show: add the plane points of faces
   -h, --help            print this help
   --version             print the version
 
 tbcli.json is found by walking up from the map's directory.
 )";
+
+/** An option that only one command accepts. */
+struct CommandOption
+{
+  std::string_view name;
+  std::string_view command;
+};
+
+constexpr auto CommandOptions = std::array<CommandOption, 8>{{
+  {"--key-entities", "describe"},
+  {"--limit", "query"},
+  {"--offset", "query"},
+  {"--count-only", "query"},
+  {"--within", "query"},
+  {"--intersects", "query"},
+  {"--touching", "query"},
+  {"--raw", "show"},
+}};
 
 enum class OutputFormat
 {
@@ -103,6 +155,10 @@ struct Arguments
   std::vector<std::string> positionals;
   OutputFormat outputFormat = OutputFormat::Json;
   ConfigOverrides configOverrides;
+  QueryOptions queryOptions;
+  bool raw = false;
+  /** The options given that only some commands accept. */
+  std::vector<std::string> commandOptions;
   bool help = false;
   bool version = false;
 };
@@ -119,6 +175,58 @@ std::vector<std::string> splitList(const std::string_view str)
     }
   }
   return result;
+}
+
+size_t parseCount(const std::string_view name, const std::string& value)
+{
+  const auto result = parseUnsigned(value);
+  if (!result)
+  {
+    throw usageError(
+      fmt::format("{} requires a non-negative integer, not '{}'", name, value));
+  }
+  return *result;
+}
+
+/** A box given as six numbers `x1,y1,z1,x2,y2,z2`, separated by commas or spaces. */
+vm::bbox3d parseBox(const std::string_view name, const std::string& value)
+{
+  auto numbers = std::vector<double>{};
+  for (const auto part : value | std::views::split(','))
+  {
+    for (const auto word :
+         std::string_view{part.begin(), part.end()} | std::views::split(' '))
+    {
+      const auto str = std::string_view{word.begin(), word.end()};
+      if (str.empty())
+      {
+        continue;
+      }
+
+      const auto number = parseDecimal(str);
+      if (!number)
+      {
+        throw usageError(fmt::format("{}: '{}' is not a number", name, str));
+      }
+      numbers.push_back(*number);
+    }
+  }
+
+  if (numbers.size() != 6)
+  {
+    throw usageError(
+      fmt::format("{} requires a box x1,y1,z1,x2,y2,z2, not '{}'", name, value));
+  }
+
+  const auto min = vm::vec3d{numbers[0], numbers[1], numbers[2]};
+  const auto max = vm::vec3d{numbers[3], numbers[4], numbers[5]};
+  if (!vm::bbox3d::is_valid(min, max))
+  {
+    throw usageError(
+      fmt::format(
+        "{}: the first corner of '{}' must be the minimum on every axis", name, value));
+  }
+  return vm::bbox3d{min, max};
 }
 
 Arguments parseArguments(const std::vector<std::string>& args)
@@ -219,9 +327,46 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       result.configOverrides.keyEntities = splitList(value());
     }
+    else if (name == "--limit")
+    {
+      result.queryOptions.limit = parseCount(name, value());
+    }
+    else if (name == "--offset")
+    {
+      result.queryOptions.offset = parseCount(name, value());
+    }
+    else if (name == "--count-only")
+    {
+      noValue();
+      result.queryOptions.countOnly = true;
+    }
+    else if (name == "--within")
+    {
+      result.queryOptions.within = parseBox(name, value());
+    }
+    else if (name == "--intersects")
+    {
+      result.queryOptions.intersects = parseBox(name, value());
+    }
+    else if (name == "--touching")
+    {
+      result.queryOptions.touching = value();
+    }
+    else if (name == "--raw")
+    {
+      noValue();
+      result.raw = true;
+    }
     else
     {
       throw usageError(fmt::format("unknown option {}", name));
+    }
+
+    if (
+      std::ranges::find(CommandOptions, name, &CommandOption::name)
+      != CommandOptions.end())
+    {
+      result.commandOptions.emplace_back(name);
     }
   }
 
@@ -233,28 +378,81 @@ std::string render(const Json& json, const OutputFormat outputFormat)
   return outputFormat == OutputFormat::Text ? toText(json) : json.dump() + "\n";
 }
 
-std::filesystem::path mapArgument(const Arguments& arguments, std::string_view command)
+/**
+ * Checks the arguments of a command: the required arguments, each described for the
+ * error message, at most `optional` more, and no options that belong to another command.
+ */
+void checkArguments(
+  const Arguments& arguments,
+  const std::string_view command,
+  const std::vector<std::string_view>& required,
+  const size_t optional = 0)
 {
-  if (arguments.positionals.size() < 2)
+  const auto given = arguments.positionals.size() - 1;
+  if (given < required.size())
   {
-    throw usageError(fmt::format("{} requires a map file", command));
+    throw usageError(fmt::format("{} requires {}", command, required[given]));
   }
-  if (arguments.positionals.size() > 2)
+  if (given > required.size() + optional)
   {
-    throw usageError(fmt::format("unexpected argument '{}'", arguments.positionals[2]));
+    throw usageError(
+      fmt::format(
+        "unexpected argument '{}'",
+        arguments.positionals[required.size() + optional + 1]));
   }
-  return std::filesystem::path{arguments.positionals[1]};
+  for (const auto& option : arguments.commandOptions)
+  {
+    const auto& commandOption =
+      *std::ranges::find(CommandOptions, option, &CommandOption::name);
+    if (commandOption.command != command)
+    {
+      throw usageError(fmt::format("{} does not accept {}", command, option));
+    }
+  }
+}
+
+/** Loads the map given as the command's first argument. */
+std::pair<LoadedMap, Config> loadMapArgument(const Arguments& arguments, Logger& logger)
+{
+  const auto mapPath = std::filesystem::path{arguments.positionals[1]};
+  auto config = loadConfig(mapPath, arguments.configOverrides);
+  auto loadedMap = loadMap(mapPath, config, logger);
+  return {std::move(loadedMap), std::move(config)};
 }
 
 Json runCommand(const Arguments& arguments, Logger& logger)
 {
-  const auto& command = arguments.positionals.front();
+  const auto& positionals = arguments.positionals;
+  const auto& command = positionals.front();
+
   if (command == "describe")
   {
-    const auto mapPath = mapArgument(arguments, command);
-    const auto config = loadConfig(mapPath, arguments.configOverrides);
-    const auto loadedMap = loadMap(mapPath, config, logger);
+    checkArguments(arguments, command, {"a map file"});
+    const auto [loadedMap, config] = loadMapArgument(arguments, logger);
     return describe(loadedMap, config.keyEntities);
+  }
+  if (command == "query")
+  {
+    checkArguments(arguments, command, {"a map file"}, 1);
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    auto options = arguments.queryOptions;
+    if (positionals.size() > 2)
+    {
+      options.query = positionals[2];
+    }
+    return query(loadedMap, options);
+  }
+  if (command == "show")
+  {
+    checkArguments(arguments, command, {"a map file", "a node path"});
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    return show(loadedMap, positionals[2], arguments.raw);
+  }
+  if (command == "fgd")
+  {
+    checkArguments(arguments, command, {"a map file", "a classname"});
+    const auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    return fgd(loadedMap, positionals[2]);
   }
 
   throw usageError(fmt::format("unknown command '{}'", command));

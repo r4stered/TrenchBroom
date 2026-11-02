@@ -38,6 +38,14 @@ std::string_view toString(const ErrorCode code)
     return "not_valve_220";
   case ErrorCode::ParseError:
     return "parse_error";
+  case ErrorCode::InvalidPath:
+    return "invalid_path";
+  case ErrorCode::NodeNotFound:
+    return "node_not_found";
+  case ErrorCode::WrongNodeKind:
+    return "wrong_node_kind";
+  case ErrorCode::UndefinedClass:
+    return "undefined_class";
   case ErrorCode::InternalError:
     return "internal_error";
   }
