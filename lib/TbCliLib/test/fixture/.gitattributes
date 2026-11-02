@@ -1,0 +1,3 @@
+# Tests compare maps and compiler recordings byte for byte, so check them out exactly as
+# committed, without line ending conversion.
+* -text

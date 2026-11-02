@@ -57,11 +57,7 @@ TEST_CASE("EntityJson")
 {
   SECTION("entityToJson")
   {
-    auto worldNode = mdl::WorldNode{
-      mdl::EntityPropertyConfig{},
-      mdl::Entity{{{"classname", "worldspawn"}, {"wad", "a.wad"}}},
-      mdl::MapFormat::Valve};
-
+    // Declared before the world so that it outlives the entities that reference it.
     const auto definition = mdl::EntityDefinition{
       "monster",
       Color{},
@@ -76,6 +72,11 @@ TEST_CASE("EntityJson")
         ""}},
       mdl::PointEntityDefinition{vm::bbox3d{8.0}, {}, {}},
     };
+
+    auto worldNode = mdl::WorldNode{
+      mdl::EntityPropertyConfig{},
+      mdl::Entity{{{"classname", "worldspawn"}, {"wad", "a.wad"}}},
+      mdl::MapFormat::Valve};
 
     SECTION("worldspawn has neither origin nor aabb")
     {

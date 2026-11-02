@@ -206,7 +206,8 @@ TEST_CASE("loadBspLeafTree")
   SECTION("truncated file")
   {
     const auto file = fs::Disk::openFile(getFixtureRoot() / Prt1Bsp) | kdl::value();
-    const auto bytes = file->reader().buffer().stringView();
+    const auto buffer = file->reader().buffer();
+    const auto bytes = buffer.stringView();
     const auto truncated = std::string{bytes.substr(0, bytes.size() / 2)};
 
     CHECK(loadBspLeafTree(
