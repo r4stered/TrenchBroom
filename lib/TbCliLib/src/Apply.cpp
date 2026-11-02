@@ -190,7 +190,8 @@ Json apply(
     attributeToOp(i, [&]() {
       const auto nodes = argNodes(targets, ops[i], resolved[i]);
       auto& outcome = outcomes[i];
-      auto context = OpContext{map, ops[i].args, nodes, outcome, options.allowLocked};
+      auto context = OpContext{
+        ops[i].def->name, map, ops[i].args, nodes, outcome, options.allowLocked};
       ops[i].def->execute(context);
       if (const auto binding = ops[i].binding())
       {

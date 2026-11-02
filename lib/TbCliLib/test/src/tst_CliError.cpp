@@ -88,6 +88,14 @@ TEST_CASE("CliError")
       CHECK(e.opIndex() == 3);
     }
   }
+
+  SECTION("invalidArgument")
+  {
+    const auto error = invalidArgument("bad");
+    CHECK(error.code() == ErrorCode::InvalidArgument);
+    CHECK(error.exitCode() == ExitCode::Usage);
+    CHECK(std::string{error.what()} == "bad");
+  }
 }
 
 } // namespace tb::cli

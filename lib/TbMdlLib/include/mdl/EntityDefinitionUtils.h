@@ -83,6 +83,13 @@ bool isLinkTargetProperty(
   const EntityDefinition* entityDefinition, const std::string& key);
 
 /**
+ * The flags of the given entity definition's spawnflags property, or nullptr if there is
+ * no definition or it defines no spawnflags of the Flags type.
+ */
+const PropertyValueTypes::Flags* getSpawnflagsDefinition(
+  const EntityDefinition* entityDefinition);
+
+/**
  * Overrides the entity property values types of the given entity definitions.
  *
  * If the given vector contains no entity definition that uses the TargetSource or

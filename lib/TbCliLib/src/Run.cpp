@@ -366,8 +366,9 @@ Arguments parseArguments(const std::vector<std::string>& args)
       return args[++i];
     };
 
-    const auto opCommand =
-      !result.positionals.empty() && findOpDef(result.positionals.front()) != nullptr;
+    const auto* opDef =
+      result.positionals.empty() ? nullptr : findOpDef(result.positionals.front());
+    const auto opCommand = opDef != nullptr;
 
     const auto noValue = [&]() {
       if (inlineValue)
@@ -483,7 +484,15 @@ Arguments parseArguments(const std::vector<std::string>& args)
       // an op's own flags, such as --target, are checked against its definition when
       // the op is built. This must come before the verify options below, which share
       // names with op flags.
-      result.opFlags.emplace_back(name.substr(2), value());
+      const auto flag = std::string{name.substr(2)};
+      if (!inlineValue && isBoolFlag(*opDef, flag))
+      {
+        // a bool flag alone means true; a following true or false is its value
+        const auto hasValue = i + 1 < args.size() && parseBool(args[i + 1]).has_value();
+        result.opFlags.emplace_back(flag, hasValue ? args[++i] : "true");
+        continue;
+      }
+      result.opFlags.emplace_back(flag, value());
       continue;
     }
     else if (name == "--type")

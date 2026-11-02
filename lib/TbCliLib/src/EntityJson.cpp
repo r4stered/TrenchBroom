@@ -23,6 +23,7 @@
 #include "cli/Json.h"
 #include "cli/NodePath.h"
 #include "mdl/EntityDefinition.h"
+#include "mdl/EntityDefinitionUtils.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityProperties.h"
 #include "mdl/PropertyDefinition.h"
@@ -69,20 +70,10 @@ std::optional<int> parseInt(const std::string& str)
   return ec == std::errc{} && ptr == end ? std::optional{value} : std::nullopt;
 }
 
-const mdl::PropertyValueTypes::Flags* flagsDefinition(
-  const mdl::EntityDefinition* definition)
-{
-  const auto* propertyDefinition =
-    mdl::getPropertyDefinition(definition, mdl::EntityPropertyKeys::Spawnflags);
-  return propertyDefinition
-           ? std::get_if<mdl::PropertyValueTypes::Flags>(&propertyDefinition->valueType)
-           : nullptr;
-}
-
 /** Each set bit by its name in the definition, or as its value if it has none. */
 Json decodeSpawnflags(const int spawnflags, const mdl::EntityDefinition* definition)
 {
-  const auto* flags = flagsDefinition(definition);
+  const auto* flags = mdl::getSpawnflagsDefinition(definition);
 
   auto result = Json::array();
   for (auto bit = 0; bit < 31; ++bit)

@@ -203,6 +203,27 @@ TEST_CASE("EntityDefinitionUtils")
 
     CHECK(definitions == expectedDefinitions);
   }
+
+  SECTION("getSpawnflagsDefinition")
+  {
+    using namespace EntityPropertyKeys;
+
+    const auto flags = PropertyValueTypes::Flags{{{1, "Ambush", ""}}, 0};
+    const auto withFlags = EntityDefinition{
+      "monster", {}, "", {PropertyDefinition{Spawnflags, flags, {}, {}}}};
+    const auto withStringSpawnflags = EntityDefinition{
+      "odd",
+      {},
+      "",
+      {PropertyDefinition{Spawnflags, PropertyValueTypes::String{}, {}, {}}}};
+    const auto withoutSpawnflags = EntityDefinition{"plain", {}, "", {}};
+
+    REQUIRE(getSpawnflagsDefinition(&withFlags) != nullptr);
+    CHECK(*getSpawnflagsDefinition(&withFlags) == flags);
+    CHECK(getSpawnflagsDefinition(&withStringSpawnflags) == nullptr);
+    CHECK(getSpawnflagsDefinition(&withoutSpawnflags) == nullptr);
+    CHECK(getSpawnflagsDefinition(nullptr) == nullptr);
+  }
 }
 
 } // namespace tb::mdl

@@ -42,9 +42,9 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 3);
+    REQUIRE(json["ops"].size() == 10);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
-    CHECK(json["ops"][1] == parseJsonLiteral(R"json({
+    CHECK(json["ops"][8] == parseJsonLiteral(R"json({
       "name": "delete",
       "description": "Deletes groups, entities, brushes and patches. An entity or group left empty is deleted with them.",
       "schema": {
@@ -94,7 +94,7 @@ TEST_CASE("ops command")
       == parseJsonLiteral(R"(["layer", "group", "brush_entity"])"));
     CHECK(createBox["properties"]["as"]["pattern"].isString());
 
-    const auto& fix = json["ops"][2];
+    const auto& fix = json["ops"][9];
     CHECK(fix["name"] == Json{"fix"});
     CHECK(
       fix["schema"]["required"] == parseJsonLiteral(R"(["op", "issue_type", "fix"])"));
@@ -102,6 +102,34 @@ TEST_CASE("ops command")
       fix["schema"]["properties"]["target"]["x-node-kinds"]
       == parseJsonLiteral(
         R"(["world", "layer", "group", "point_entity", "brush_entity", "brush", "patch", "face"])"));
+
+    const auto& createPointEntity = json["ops"][1]["schema"]["properties"];
+    CHECK(json["ops"][1]["name"] == Json{"create_point_entity"});
+    CHECK(createPointEntity["properties"] == parseJsonLiteral(R"({
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": "more properties, with string values; not classname or origin"
+    })"));
+    CHECK(createPointEntity["allow_undefined"] == parseJsonLiteral(R"({
+        "type": "boolean",
+        "description": "create the entity even if the FGD does not define the classname as a point class",
+        "default": false
+      })"));
+
+    const auto& createBrushEntity = json["ops"][2]["schema"]["properties"];
+    CHECK(
+      createBrushEntity["brushes"]["x-node-kinds"] == parseJsonLiteral(R"(["brush"])"));
+    CHECK(createBrushEntity["brushes"]["x-expands-to-brushes"] == Json{true});
+
+    const auto& setSpawnflag = json["ops"][7];
+    CHECK(setSpawnflag["name"] == Json{"set_spawnflag"});
+    CHECK(setSpawnflag["schema"]["properties"]["flag"]["oneOf"] == parseJsonLiteral(R"([
+        {"type": "string", "minLength": 1},
+        {"type": "integer", "minimum": 1, "maximum": 1073741824}
+      ])"));
+    CHECK(
+      setSpawnflag["schema"]["properties"]["target"]["x-node-kinds"]
+      == parseJsonLiteral(R"(["world", "point_entity", "brush_entity"])"));
   }
 
   SECTION("lists the issue types")
@@ -250,6 +278,45 @@ TEST_CASE("Ops")
         parseOpFlags(*findOpDef("delete"), {{"query", "true"}}).args
         == parseJsonLiteral(R"({"target": {"query": "true"}})"));
     }
+
+    SECTION("bool, properties and spawnflag flags")
+    {
+      CHECK(
+        parseOpFlags(
+          *findOpDef("create_point_entity"),
+          {{"classname", "light"},
+           {"origin", "0,0,0"},
+           {"properties", R"({"light": "200"})"},
+           {"allow-undefined", "true"}})
+          .args
+        == parseJsonLiteral(R"({
+          "classname": "light", "origin": [0, 0, 0], "properties": {"light": "200"},
+          "allow_undefined": true, "parent": "layer:0"
+        })"));
+
+      const auto& setSpawnflag = *findOpDef("set_spawnflag");
+      CHECK(
+        parseOpFlags(
+          setSpawnflag, {{"target", "world"}, {"flag", "256"}, {"on", "false"}})
+          .args
+        == parseJsonLiteral(R"({"target": "world", "flag": 256, "on": false})"));
+      CHECK(
+        parseOpFlags(
+          setSpawnflag, {{"target", "world"}, {"flag", "Ambush"}, {"on", "true"}})
+          .args["flag"]
+        == Json{"Ambush"});
+      CHECK_THROWS_AS(
+        parseOpFlags(setSpawnflag, {{"target", "world"}, {"flag", "1"}, {"on", "yes"}}),
+        CliError);
+    }
+  }
+
+  SECTION("isBoolFlag")
+  {
+    CHECK(isBoolFlag(*findOpDef("create_point_entity"), "allow-undefined"));
+    CHECK(!isBoolFlag(*findOpDef("create_point_entity"), "allow_undefined"));
+    CHECK(!isBoolFlag(*findOpDef("create_point_entity"), "classname"));
+    CHECK(isBoolFlag(*findOpDef("set_spawnflag"), "on"));
   }
 
   SECTION("findOpDef")

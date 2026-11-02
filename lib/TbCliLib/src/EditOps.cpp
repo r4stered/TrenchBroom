@@ -22,9 +22,16 @@
 #include "cli/CliError.h"
 #include "cli/IssueTypes.h"
 #include "cli/Ops.h"
+#include "cli/ParseUtils.h"
 #include "cli/Targets.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityDefinition.h"
+#include "mdl/EntityDefinitionManager.h"
+#include "mdl/EntityDefinitionUtils.h"
+#include "mdl/EntityNode.h"
+#include "mdl/EntityProperties.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Issue.h"
@@ -32,22 +39,34 @@
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/ModelUtils.h"
+#include "mdl/NodeContents.h"
+#include "mdl/PropertyDefinition.h"
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/contracts.h"
+#include "kd/flat_map.h"
 #include "kd/ranges/to.h"
+#include "kd/string_compare.h"
 #include "kd/string_utils.h"
 #include "kd/vector_utils.h"
 
 #include "vm/bbox.h"
 #include "vm/vec.h"
+#include "vm/vec_io.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <functional>
+#include <initializer_list>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -83,6 +102,262 @@ std::vector<mdl::Node*> ancestorsOf(const std::vector<mdl::Node*>& nodes)
     }
   }
   return result;
+}
+
+/** Appends those of the given ancestors that are no longer in the map to `removed`. */
+void appendRemovedAncestors(
+  const std::vector<mdl::Node*>& ancestors,
+  const mdl::WorldNode& worldNode,
+  std::vector<mdl::Node*>& removed)
+{
+  for (auto* ancestor : ancestors)
+  {
+    if (!isInMap(*ancestor, worldNode))
+    {
+      appendOnce(removed, ancestor);
+    }
+  }
+}
+
+/**
+ * Records that brushes moved out of the given former ancestors: the brushes and the
+ * entities that lost some of them as modified, and the ancestors that the move left
+ * empty as removed.
+ */
+void recordMoveOutcome(
+  const std::vector<mdl::Node*>& moved,
+  const std::vector<mdl::Node*>& formerAncestors,
+  const mdl::WorldNode& worldNode,
+  OpOutcome& outcome)
+{
+  for (auto* node : moved)
+  {
+    appendOnce(outcome.modified, node);
+  }
+  for (auto* ancestor : formerAncestors)
+  {
+    if (isInMap(*ancestor, worldNode) && kindOf(*ancestor) == NodeKind::Entity)
+    {
+      appendOnce(outcome.modified, ancestor);
+    }
+  }
+  appendRemovedAncestors(formerAncestors, worldNode, outcome.removed);
+}
+
+/**
+ * Checks the classname and properties that a create op is given.
+ *
+ * @param reservedKeys the keys that the op sets from its own arguments
+ */
+void checkNewEntityArgs(
+  const std::string_view opName,
+  const Json& args,
+  const std::initializer_list<std::string_view> reservedKeys)
+{
+  const auto& classname = args["classname"].asString();
+  if (classname.empty())
+  {
+    throw invalidArgument(fmt::format("{}: \"classname\" must not be empty", opName));
+  }
+  if (classname == mdl::EntityPropertyValues::WorldspawnClassname)
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{}: cannot create a worldspawn entity; the map's only one is at path {}",
+        opName,
+        WorldPath));
+  }
+
+  if (const auto* properties = args.find("properties"))
+  {
+    for (const auto& [key, value] : properties->asObject())
+    {
+      if (key.empty())
+      {
+        throw invalidArgument(
+          fmt::format("{}: a property key must not be empty", opName));
+      }
+      if (std::ranges::find(reservedKeys, key) != reservedKeys.end())
+      {
+        throw invalidArgument(
+          fmt::format(
+            "{}: give \"{}\" as its own argument, not in \"properties\"", opName, key));
+      }
+    }
+  }
+}
+
+/**
+ * The definition of the classname that a create op is given. It must be of the given
+ * type unless undefined classes are allowed; then it is the definition if there is one.
+ */
+const mdl::EntityDefinition* checkedDefinition(
+  const OpContext& context, const mdl::EntityDefinitionType type)
+{
+  const auto opName = context.opName;
+  const auto& classname = context.args["classname"].asString();
+  const auto* definition = context.map.entityDefinitionManager().definition(classname);
+  if (
+    (definition && mdl::getType(*definition) == type)
+    || context.args["allow_undefined"].asBool())
+  {
+    return definition;
+  }
+
+  const auto typeName = [](const auto definitionType) {
+    return definitionType == mdl::EntityDefinitionType::Point ? "point" : "brush";
+  };
+  throw CliError{
+    ErrorCode::UndefinedClass,
+    definition ? fmt::format(
+                   "{}: \"{}\" is a {} class, not a {} class; pass allow_undefined to "
+                   "create it anyway",
+                   opName,
+                   classname,
+                   typeName(mdl::getType(*definition)),
+                   typeName(type))
+               : fmt::format(
+                   "{}: the FGD does not define \"{}\"; pass allow_undefined to create "
+                   "it anyway",
+                   opName,
+                   classname)};
+}
+
+/**
+ * A new entity with, in this order, the classname of the op's arguments, the
+ * definition's default properties if the game config asks for them, the given origin
+ * and the properties of the op's arguments.
+ */
+mdl::Entity newEntity(
+  const OpContext& context,
+  const mdl::EntityDefinition* definition,
+  const std::optional<vm::vec3d>& origin)
+{
+  auto entity = mdl::Entity{
+    {{mdl::EntityPropertyKeys::Classname, context.args["classname"].asString()}}};
+  if (definition && context.map.worldNode().entityPropertyConfig().setDefaultProperties)
+  {
+    mdl::setDefaultProperties(*definition, entity, mdl::SetDefaultPropertyMode::SetAll);
+  }
+  if (origin)
+  {
+    entity.setOrigin(*origin);
+  }
+  if (const auto* properties = context.args.find("properties"))
+  {
+    for (const auto& [key, value] : properties->asObject())
+    {
+      entity.addOrUpdateProperty(key, value.asString());
+    }
+  }
+  return entity;
+}
+
+/** The entity node of a target of a property op: the world or an entity. */
+const mdl::EntityNodeBase& entityNodeOf(const mdl::Node& node)
+{
+  const auto* entityNode = dynamic_cast<const mdl::EntityNodeBase*>(&node);
+  contract_assert(entityNode != nullptr);
+  return *entityNode;
+}
+
+/**
+ * Applies `edit` to a copy of the entity of each target and swaps in the copies that
+ * changed, which are reported as modified. As in the editor, the changes reach the
+ * other members of linked groups.
+ *
+ * The map library's property functions act on the selection, which cannot hold the
+ * world together with other entities, so the copies are swapped in directly.
+ */
+void editEntities(
+  OpContext& context,
+  const std::function<void(const mdl::EntityNodeBase&, mdl::Entity&)>& edit)
+{
+  auto nodesToSwap = std::vector<std::pair<mdl::Node*, mdl::NodeContents>>{};
+  auto changed = std::vector<mdl::Node*>{};
+  for (const auto& [node, faceIndex] : context.targets("target"))
+  {
+    const auto& entityNode = entityNodeOf(*node);
+    auto entity = entityNode.entity();
+    edit(entityNode, entity);
+    if (entity != entityNode.entity())
+    {
+      changed.push_back(node);
+      nodesToSwap.emplace_back(node, mdl::NodeContents{std::move(entity)});
+    }
+  }
+  if (changed.empty())
+  {
+    return;
+  }
+
+  if (!mdl::updateNodeContents(
+        context.map,
+        std::string{context.opName},
+        std::move(nodesToSwap),
+        mdl::collectContainingGroups(changed)))
+  {
+    throw CliError{
+      ErrorCode::OpFailed, fmt::format("{}: cannot change the entities", context.opName)};
+  }
+  std::ranges::copy(changed, std::back_inserter(context.outcome.modified));
+}
+
+/**
+ * Checks a key that a property op is given: it must not be empty, and it must not be
+ * classname, which only the create ops set, checked against the FGD.
+ */
+void checkPropertyKey(
+  const std::string_view opName, const std::string_view argName, const Json& args)
+{
+  const auto& key = args[argName].asString();
+  if (key.empty())
+  {
+    throw invalidArgument(fmt::format("{}: \"{}\" must not be empty", opName, argName));
+  }
+  if (key == mdl::EntityPropertyKeys::Classname)
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{}: cannot change classname, which the create ops check against the FGD; "
+        "create a new entity instead (create_brush_entity can take another entity's "
+        "brushes)",
+        opName));
+  }
+}
+
+/** The value of the spawnflag that `flag` gives for the given entity. */
+int spawnflagValue(const Json& flag, const mdl::EntityNodeBase& entityNode)
+{
+  if (flag.isNumber())
+  {
+    return static_cast<int>(flag.asNumber());
+  }
+
+  const auto& name = flag.asString();
+  const auto& entity = entityNode.entity();
+  if (const auto* flags = mdl::getSpawnflagsDefinition(entity.definition()))
+  {
+    for (const auto& each : flags->flags)
+    {
+      if (kdl::ci::str_is_equal(each.shortDescription, name))
+      {
+        return each.value;
+      }
+    }
+  }
+
+  const auto path = nodePath(entityNode);
+  throw CliError{
+    ErrorCode::OpFailed,
+    fmt::format(
+      "set_spawnflag: {} ({}) has no spawnflag named \"{}\"; tbcli fgd {} lists them, "
+      "or give the flag's value",
+      path,
+      entity.classname(),
+      name,
+      entity.classname()),
+    path};
 }
 
 /** The validator that the map registers for the given issue type. */
@@ -239,13 +514,7 @@ void recordFixOutcome(
       appendOnce(outcome.modified, child);
     }
   }
-  for (auto* ancestor : scope.ancestors)
-  {
-    if (!isInMap(*ancestor, worldNode))
-    {
-      appendOnce(outcome.removed, ancestor);
-    }
-  }
+  appendRemovedAncestors(scope.ancestors, worldNode, outcome.removed);
 }
 
 } // namespace
@@ -259,20 +528,18 @@ void createBox(OpContext& context)
   {
     if (!(min[i] < max[i]))
     {
-      throw CliError{
-        ErrorCode::InvalidArgument,
+      throw invalidArgument(
         fmt::format(
           "create_box: min {} must be less than max {} on every axis",
           args["min"].dump(),
-          args["max"].dump())};
+          args["max"].dump()));
     }
   }
 
   const auto& material = args["material"].asString();
   if (material.empty())
   {
-    throw CliError{
-      ErrorCode::InvalidArgument, "create_box: \"material\" must not be empty"};
+    throw invalidArgument("create_box: \"material\" must not be empty");
   }
 
   const auto& parent = context.node("parent");
@@ -302,6 +569,221 @@ void createBox(OpContext& context)
   context.outcome.created.push_back(brushNode.release());
 }
 
+void createPointEntity(OpContext& context)
+{
+  const auto* definition = checkedDefinition(context, mdl::EntityDefinitionType::Point);
+  const auto& parent = context.node("parent");
+
+  auto entityNode = std::make_unique<mdl::EntityNode>(
+    newEntity(context, definition, toVec3(context.args["origin"])));
+  if (mdl::addNodes(context.map, {{parent.node, {entityNode.get()}}}).empty())
+  {
+    throw CliError{
+      ErrorCode::OpFailed, "create_point_entity: cannot add the entity to the map"};
+  }
+  context.outcome.created.push_back(entityNode.release());
+}
+
+void checkCreatePointEntityArgs(const Json& args)
+{
+  checkNewEntityArgs(
+    "create_point_entity",
+    args,
+    {mdl::EntityPropertyKeys::Classname, mdl::EntityPropertyKeys::Origin});
+}
+
+void createBrushEntity(OpContext& context)
+{
+  auto brushes = std::vector<mdl::Node*>{};
+  for (const auto& [node, faceIndex] : context.targets("brushes"))
+  {
+    brushes.push_back(node);
+  }
+  if (brushes.empty())
+  {
+    throw CliError{
+      ErrorCode::WrongNodeKind,
+      "create_brush_entity: brushes names no brushes, but a brush entity needs one"};
+  }
+
+  const auto* definition = checkedDefinition(context, mdl::EntityDefinitionType::Brush);
+
+  auto& map = context.map;
+  const auto ancestors = ancestorsOf(brushes);
+  auto& parent = mdl::parentForNodes(map, brushes);
+
+  auto entityNode =
+    std::make_unique<mdl::EntityNode>(newEntity(context, definition, std::nullopt));
+  if (mdl::addNodes(map, {{&parent, {entityNode.get()}}}).empty())
+  {
+    throw CliError{
+      ErrorCode::OpFailed, "create_brush_entity: cannot add the entity to the map"};
+  }
+  auto* entity = entityNode.release();
+  if (!mdl::reparentNodes(map, {{entity, brushes}}))
+  {
+    throw CliError{
+      ErrorCode::OpFailed,
+      "create_brush_entity: cannot move the brushes into the entity"};
+  }
+
+  context.outcome.created.push_back(entity);
+  recordMoveOutcome(brushes, ancestors, map.worldNode(), context.outcome);
+}
+
+void checkCreateBrushEntityArgs(const Json& args)
+{
+  checkNewEntityArgs("create_brush_entity", args, {mdl::EntityPropertyKeys::Classname});
+}
+
+void moveToWorld(OpContext& context)
+{
+  auto& map = context.map;
+
+  // the brushes of an entity go to the group or layer that holds the entity
+  auto toMove = kdl::flat_map<mdl::Node*, std::vector<mdl::Node*>>{};
+  auto moved = std::vector<mdl::Node*>{};
+  auto visited = std::unordered_set<const mdl::Node*>{};
+  const auto move = [&](mdl::Node& entity, mdl::Node* brush) {
+    if (visited.insert(brush).second)
+    {
+      toMove[&mdl::parentForNodes(map, {&entity})].push_back(brush);
+      moved.push_back(brush);
+    }
+  };
+
+  for (const auto& [node, faceIndex] : context.targets("target"))
+  {
+    if (kindOf(*node) == NodeKind::Entity)
+    {
+      for (auto* child : node->children())
+      {
+        move(*node, child);
+      }
+    }
+    else if (auto* parent = node->parent(); kindOf(*parent) == NodeKind::Entity)
+    {
+      move(*parent, node);
+    }
+  }
+  if (moved.empty())
+  {
+    return;
+  }
+
+  const auto ancestors = ancestorsOf(moved);
+  if (!mdl::reparentNodes(map, toMove))
+  {
+    throw CliError{ErrorCode::OpFailed, "move_to_world: cannot move the brushes"};
+  }
+
+  recordMoveOutcome(moved, ancestors, map.worldNode(), context.outcome);
+}
+
+void setProperty(OpContext& context)
+{
+  const auto& key = context.args["key"].asString();
+  const auto& value = context.args["value"].asString();
+  editEntities(
+    context, [&](const auto&, auto& entity) { entity.addOrUpdateProperty(key, value); });
+}
+
+void checkSetPropertyArgs(const Json& args)
+{
+  checkPropertyKey("set_property", "key", args);
+
+  const auto& key = args["key"].asString();
+  const auto& value = args["value"].asString();
+  if (key == mdl::EntityPropertyKeys::Origin && !vm::parse<double, 3>(value))
+  {
+    throw invalidArgument(
+      fmt::format(
+        "set_property: origin must be three numbers such as \"0 0 64\", not \"{}\"",
+        value));
+  }
+  if (key == mdl::EntityPropertyKeys::Angle && !parseDecimal(value))
+  {
+    throw invalidArgument(
+      fmt::format(
+        "set_property: angle must be a number such as \"90\", not \"{}\"", value));
+  }
+}
+
+void removeProperty(OpContext& context)
+{
+  const auto& key = context.args["key"].asString();
+  auto missing = false;
+  editEntities(context, [&](const auto&, auto& entity) {
+    missing = missing || !entity.hasProperty(key);
+    entity.removeProperty(key);
+  });
+  if (missing)
+  {
+    context.outcome.warnings.emplace_back("property_not_found");
+  }
+}
+
+void checkRemovePropertyArgs(const Json& args)
+{
+  checkPropertyKey("remove_property", "key", args);
+}
+
+void renameProperty(OpContext& context)
+{
+  const auto& from = context.args["from"].asString();
+  const auto& to = context.args["to"].asString();
+  auto missing = false;
+  editEntities(context, [&](const auto& entityNode, auto& entity) {
+    if (!entity.hasProperty(from))
+    {
+      missing = true;
+      return;
+    }
+    if (entity.hasProperty(to))
+    {
+      const auto path = nodePath(entityNode);
+      throw CliError{
+        ErrorCode::OpFailed,
+        fmt::format(
+          "rename_property: {} has a property \"{}\" already; remove it first", path, to),
+        path};
+    }
+    entity.renameProperty(from, to);
+  });
+  if (missing)
+  {
+    context.outcome.warnings.emplace_back("property_not_found");
+  }
+}
+
+void checkRenamePropertyArgs(const Json& args)
+{
+  checkPropertyKey("rename_property", "from", args);
+  checkPropertyKey("rename_property", "to", args);
+  if (args["from"] == args["to"])
+  {
+    throw invalidArgument("rename_property: \"from\" and \"to\" must differ");
+  }
+}
+
+void setSpawnflag(OpContext& context)
+{
+  const auto& flag = context.args["flag"];
+  const auto on = context.args["on"].asBool();
+  editEntities(context, [&](const auto& entityNode, auto& entity) {
+    const auto flagValue = spawnflagValue(flag, entityNode);
+    const auto* oldValue = entity.property(mdl::EntityPropertyKeys::Spawnflags);
+    // as in the editor, a malformed value counts as no flags
+    const auto oldFlags = oldValue ? kdl::str_to_int(*oldValue).value_or(0) : 0;
+    const auto newFlags = on ? oldFlags | flagValue : oldFlags & ~flagValue;
+    if (newFlags != oldFlags)
+    {
+      entity.addOrUpdateProperty(
+        mdl::EntityPropertyKeys::Spawnflags, kdl::str_to_string(newFlags));
+    }
+  });
+}
+
 void deleteNode(OpContext& context)
 {
   // a node inside another target is removed with it
@@ -327,13 +809,7 @@ void deleteNode(OpContext& context)
   // Removing the last child of an entity or group also removes the emptied parent.
   auto& removed = context.outcome.removed;
   removed = targets;
-  for (auto* ancestor : ancestors)
-  {
-    if (!isInMap(*ancestor, worldNode))
-    {
-      removed.push_back(ancestor);
-    }
-  }
+  appendRemovedAncestors(ancestors, worldNode, removed);
 }
 
 void checkFixArgs(const Json& args)
@@ -342,11 +818,10 @@ void checkFixArgs(const Json& args)
   const auto* type = findIssueType(typeId);
   if (!type)
   {
-    throw CliError{
-      ErrorCode::InvalidArgument,
+    throw invalidArgument(
       fmt::format(
         "fix: unknown issue type \"{}\"; tbcli ops --json lists the issue types",
-        typeId)};
+        typeId));
   }
 
   const auto& fixId = args["fix"].asString();
@@ -356,14 +831,13 @@ void checkFixArgs(const Json& args)
                           return fmt::format("\"{}\"", fix.id);
                         })
                         | kdl::ranges::to<std::vector>();
-    throw CliError{
-      ErrorCode::InvalidArgument,
+    throw invalidArgument(
       fixIds.empty() ? fmt::format("fix: issue type \"{}\" has no quick-fixes", typeId)
                      : fmt::format(
                          "fix: unknown fix \"{}\" for issue type \"{}\", which has {}",
                          fixId,
                          typeId,
-                         kdl::str_join(fixIds, ", "))};
+                         kdl::str_join(fixIds, ", ")));
   }
 }
 

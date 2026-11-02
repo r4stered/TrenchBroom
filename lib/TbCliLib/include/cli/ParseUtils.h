@@ -27,6 +27,9 @@
 namespace tb::cli
 {
 
+/** The value of `true` or `false`, or nothing for any other string. */
+std::optional<bool> parseBool(std::string_view str);
+
 /**
  * The value of a string that consists of decimal digits only, or nothing if the string
  * is empty, has any other character (including a sign or whitespace) or overflows.

@@ -152,6 +152,11 @@ CliError usageError(const std::string& message)
   return CliError{ErrorCode::Usage, message};
 }
 
+CliError invalidArgument(const std::string& message)
+{
+  return CliError{ErrorCode::InvalidArgument, message};
+}
+
 CliError configError(const std::string& message, const std::optional<size_t> line)
 {
   return CliError{ErrorCode::ConfigError, message, std::nullopt, line};

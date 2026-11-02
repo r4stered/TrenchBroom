@@ -79,6 +79,15 @@ bool isDecimal(std::string_view str)
 
 } // namespace
 
+std::optional<bool> parseBool(const std::string_view str)
+{
+  if (str == "true" || str == "false")
+  {
+    return str == "true";
+  }
+  return std::nullopt;
+}
+
 std::optional<size_t> parseUnsigned(const std::string_view str)
 {
   return !str.empty() && std::ranges::all_of(str, isDigit) ? kdl::str_to_size(str)

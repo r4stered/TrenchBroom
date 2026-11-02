@@ -30,6 +30,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <set>
 
@@ -37,11 +38,6 @@ namespace tb::cli
 {
 namespace
 {
-
-CliError invalidArgument(const std::string& message)
-{
-  return CliError{ErrorCode::InvalidArgument, message};
-}
 
 bool isString(const Json& value)
 {
@@ -59,6 +55,39 @@ bool isBinding(const Json& value)
   return value.isString() && isBindingName(value.asString());
 }
 
+bool isBool(const Json& value)
+{
+  return value.isBool();
+}
+
+bool isProperties(const Json& value)
+{
+  return value.isObject()
+         && std::ranges::all_of(
+           value.asObject(), [](const auto& member) { return member.value.isString(); });
+}
+
+/** The value of the highest spawnflag bit that the map writer and decoder handle. */
+constexpr auto MaxSpawnFlagValue = 1 << 30;
+
+bool isSpawnFlag(const Json& value)
+{
+  if (value.isString())
+  {
+    return !value.asString().empty();
+  }
+  if (!value.isNumber())
+  {
+    return false;
+  }
+  const auto number = value.asNumber();
+  if (number < 1 || number > MaxSpawnFlagValue || std::trunc(number) != number)
+  {
+    return false;
+  }
+  const auto flag = static_cast<int>(number);
+  return (flag & (flag - 1)) == 0;
+}
 
 Json stringSchema()
 {
@@ -77,6 +106,40 @@ Json vec3Schema()
   result.set("items", std::move(items));
   result.set("minItems", 3);
   result.set("maxItems", 3);
+  return result;
+}
+
+Json boolSchema()
+{
+  auto result = Json::object();
+  result.set("type", "boolean");
+  return result;
+}
+
+Json propertiesSchema()
+{
+  auto result = Json::object();
+  result.set("type", "object");
+  result.set("additionalProperties", stringSchema());
+  return result;
+}
+
+Json spawnFlagSchema()
+{
+  auto name = stringSchema();
+  name.set("minLength", 1);
+
+  auto value = Json::object();
+  value.set("type", "integer");
+  value.set("minimum", 1);
+  value.set("maximum", MaxSpawnFlagValue);
+
+  auto options = Json::array();
+  options.push(std::move(name));
+  options.push(std::move(value));
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
   return result;
 }
 
@@ -156,6 +219,28 @@ std::optional<Json> stringFromFlag(const std::string& value)
   return Json{value};
 }
 
+std::optional<Json> boolFromFlag(const std::string& value)
+{
+  const auto result = parseBool(value);
+  return result ? std::optional{Json{*result}} : std::nullopt;
+}
+
+std::optional<Json> propertiesFromFlag(const std::string& value)
+{
+  auto json = parseJson(value);
+  return json ? std::optional{std::move(json).value()} : std::nullopt;
+}
+
+/** A spawnflag's value if the flag is a number, otherwise its name. */
+std::optional<Json> spawnFlagFromFlag(const std::string& value)
+{
+  if (const auto number = parseUnsigned(value))
+  {
+    return Json{*number};
+  }
+  return Json{value};
+}
+
 /** How the arguments of one type are written, checked and described. */
 struct ArgTypeTraits
 {
@@ -170,7 +255,7 @@ struct ArgTypeTraits
   std::optional<Json> (*fromFlag)(const std::string& value);
 };
 
-const auto ArgTypes = std::array<ArgTypeTraits, 5>{{
+const auto ArgTypes = std::array<ArgTypeTraits, 8>{{
   {ArgType::Vec3,
    "<x,y,z>",
    "three numbers [x, y, z] (x,y,z as a flag)",
@@ -197,6 +282,19 @@ const auto ArgTypes = std::array<ArgTypeTraits, 5>{{
    isBinding,
    bindingSchema,
    stringFromFlag},
+  {ArgType::Bool, "[true|false]", "true or false", isBool, boolSchema, boolFromFlag},
+  {ArgType::Properties,
+   "<json>",
+   "an object of string values such as {\"key\": \"value\"}",
+   isProperties,
+   propertiesSchema,
+   propertiesFromFlag},
+  {ArgType::SpawnFlag,
+   "<name | value>",
+   "a spawnflag's name, or its value as a power of two from 1 to 1073741824",
+   isSpawnFlag,
+   spawnFlagSchema,
+   spawnFlagFromFlag},
 }};
 
 const ArgTypeTraits& traits(const ArgType type)
@@ -366,6 +464,10 @@ Op parseOp(const Json& entry, const size_t index)
   return Op{def, checkArgs(*def, given)};
 }
 
+/** What property ops accept: the world and entities, but not brushes. */
+const auto PropertyTargetRules =
+  TargetRules{{TargetKind::World, TargetKind::PointEntity, TargetKind::BrushEntity}};
+
 std::vector<OpDef> makeOpDefs()
 {
   return {
@@ -387,6 +489,160 @@ std::vector<OpDef> makeOpDefs()
         ArgDef{"as", ArgType::Binding, "binds the created brush to this name"},
       },
       createBox,
+    },
+    OpDef{
+      "create_point_entity",
+      "Creates a point entity at an origin. The classname must be a point class of the "
+      "FGD unless allow_undefined is set.",
+      {
+        ArgDef{"classname", ArgType::String, "the entity's classname", true},
+        ArgDef{"origin", ArgType::Vec3, "the entity's origin, in absolute units", true},
+        ArgDef{
+          "properties",
+          ArgType::Properties,
+          "more properties, with string values; not classname or origin"},
+        ArgDef{
+          "allow_undefined",
+          ArgType::Bool,
+          "create the entity even if the FGD does not define the classname as a point "
+          "class",
+          false,
+          Json{false}},
+        ArgDef{
+          "parent",
+          ArgType::NodePath,
+          "the layer or group to create the entity in",
+          false,
+          Json{"layer:0"},
+          {{TargetKind::Layer, TargetKind::Group}}},
+        ArgDef{"as", ArgType::Binding, "binds the created entity to this name"},
+      },
+      createPointEntity,
+      checkCreatePointEntityArgs,
+    },
+    OpDef{
+      "create_brush_entity",
+      "Creates a brush entity and moves the brushes into it. The entity is created in "
+      "the group or layer of the first brush. The classname must be a brush class of "
+      "the FGD unless allow_undefined is set. The properties of the entities the "
+      "brushes leave are not carried over; an entity left without brushes is deleted.",
+      {
+        ArgDef{"classname", ArgType::String, "the entity's classname", true},
+        ArgDef{
+          "brushes",
+          ArgType::Target,
+          "the brushes to move into the entity",
+          true,
+          std::nullopt,
+          {{TargetKind::Brush}, true}},
+        ArgDef{
+          "properties",
+          ArgType::Properties,
+          "more properties, with string values; not classname"},
+        ArgDef{
+          "allow_undefined",
+          ArgType::Bool,
+          "create the entity even if the FGD does not define the classname as a brush "
+          "class",
+          false,
+          Json{false}},
+        ArgDef{"as", ArgType::Binding, "binds the created entity to this name"},
+      },
+      createBrushEntity,
+      checkCreateBrushEntityArgs,
+    },
+    OpDef{
+      "move_to_world",
+      "Moves the brushes of brush entities to the world, into the group or layer that "
+      "holds the entity. An entity left without brushes is deleted.",
+      {
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the brush entities whose brushes to move, or brushes of brush entities; "
+          "brushes already in the world stay where they are",
+          true,
+          std::nullopt,
+          {{TargetKind::BrushEntity, TargetKind::Brush}}},
+      },
+      moveToWorld,
+    },
+    OpDef{
+      "set_property",
+      "Sets a property of entities or the world, adding it if it is missing. Values "
+      "are strings; origin must be three numbers and angle a number. The classname "
+      "cannot be changed.",
+      {
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the entities to set the property on",
+          true,
+          std::nullopt,
+          PropertyTargetRules},
+        ArgDef{"key", ArgType::String, "the property's key", true},
+        ArgDef{"value", ArgType::String, "the property's value", true},
+      },
+      setProperty,
+      checkSetPropertyArgs,
+    },
+    OpDef{
+      "remove_property",
+      "Removes a property from entities or the world. Warns property_not_found if a "
+      "target does not have it.",
+      {
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the entities to remove the property from",
+          true,
+          std::nullopt,
+          PropertyTargetRules},
+        ArgDef{"key", ArgType::String, "the property's key", true},
+      },
+      removeProperty,
+      checkRemovePropertyArgs,
+    },
+    OpDef{
+      "rename_property",
+      "Renames a property of entities or the world, keeping its value. Warns "
+      "property_not_found if a target does not have it, and fails if a target has a "
+      "property with the new key already.",
+      {
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the entities to rename the property of",
+          true,
+          std::nullopt,
+          PropertyTargetRules},
+        ArgDef{"from", ArgType::String, "the property's key", true},
+        ArgDef{"to", ArgType::String, "the property's new key", true},
+      },
+      renameProperty,
+      checkRenamePropertyArgs,
+    },
+    OpDef{
+      "set_spawnflag",
+      "Sets or clears one spawnflag of entities. tbcli fgd <classname> lists the "
+      "spawnflags of a class.",
+      {
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the entities to set the spawnflag of",
+          true,
+          std::nullopt,
+          PropertyTargetRules},
+        ArgDef{
+          "flag",
+          ArgType::SpawnFlag,
+          "the spawnflag: its name in the target's FGD class, case-insensitive, or its "
+          "value, such as 256",
+          true},
+        ArgDef{"on", ArgType::Bool, "whether to set the spawnflag or clear it", true},
+      },
+      setSpawnflag,
     },
     OpDef{
       "delete",
@@ -482,6 +738,13 @@ std::optional<std::string> Op::binding() const
     }
   }
   return std::nullopt;
+}
+
+bool isBoolFlag(const OpDef& def, const std::string_view flag)
+{
+  return std::ranges::any_of(def.args, [&](const auto& arg) {
+    return arg.type == ArgType::Bool && flagName(arg.name) == flag;
+  });
 }
 
 bool addressesNodes(const ArgDef& arg)

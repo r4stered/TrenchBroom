@@ -37,6 +37,101 @@ struct OpContext;
 void createBox(OpContext& context);
 
 /**
+ * `create_point_entity {classname, origin, properties, allow_undefined, parent}`: a point
+ * entity in a layer or group.
+ *
+ * @throw CliError `undefined_class` if the FGD does not define the classname as a point
+ * class and undefined classes are not allowed
+ */
+void createPointEntity(OpContext& context);
+
+/**
+ * Checks the arguments of `create_point_entity`.
+ *
+ * @throw CliError `invalid_argument` if the classname is empty or worldspawn, or a
+ * property key is empty, classname or origin
+ */
+void checkCreatePointEntityArgs(const Json& args);
+
+/**
+ * `create_brush_entity {classname, brushes, properties, allow_undefined}`: a brush
+ * entity in the group or layer of the first brush, with the brushes moved into it. The
+ * properties of the entities the brushes leave are not carried over. Those entities are
+ * reported as modified, or as removed if they are left without brushes.
+ *
+ * @throw CliError `undefined_class` if the FGD does not define the classname as a brush
+ * class and undefined classes are not allowed
+ */
+void createBrushEntity(OpContext& context);
+
+/**
+ * Checks the arguments of `create_brush_entity`.
+ *
+ * @throw CliError `invalid_argument` if the classname is empty or worldspawn, or a
+ * property key is empty or classname
+ */
+void checkCreateBrushEntityArgs(const Json& args);
+
+/**
+ * `move_to_world {target}`: moves the brushes of brush entities, or the given brushes of
+ * brush entities, into the group or layer that holds their entity. The entities are
+ * reported as modified, or as removed if they are left without brushes.
+ */
+void moveToWorld(OpContext& context);
+
+/**
+ * `set_property {target, key, value}`: sets a property of entities and the world.
+ * Entities that have the value already are not modified.
+ */
+void setProperty(OpContext& context);
+
+/**
+ * Checks the arguments of `set_property`.
+ *
+ * @throw CliError `invalid_argument` if the key is empty or classname, the key is origin
+ * and the value is not three numbers, or the key is angle and the value is not a number
+ */
+void checkSetPropertyArgs(const Json& args);
+
+/**
+ * `remove_property {target, key}`: removes a property from entities and the world. If a
+ * target does not have the property, the op warns `property_not_found`.
+ */
+void removeProperty(OpContext& context);
+
+/**
+ * Checks the arguments of `remove_property`.
+ *
+ * @throw CliError `invalid_argument` if the key is empty or classname
+ */
+void checkRemovePropertyArgs(const Json& args);
+
+/**
+ * `rename_property {target, from, to}`: renames a property of entities and the world.
+ * If a target does not have the property, the op warns `property_not_found`.
+ *
+ * @throw CliError `op_failed` if a target has a property with the new key already
+ */
+void renameProperty(OpContext& context);
+
+/**
+ * Checks the arguments of `rename_property`.
+ *
+ * @throw CliError `invalid_argument` if a key is empty or classname, or both keys are
+ * the same
+ */
+void checkRenamePropertyArgs(const Json& args);
+
+/**
+ * `set_spawnflag {target, flag, on}`: sets or clears a spawnflag of entities, given by
+ * its value or by its name in each entity's definition.
+ *
+ * @throw CliError `op_failed` if a target's definition has no spawnflag with the given
+ * name
+ */
+void setSpawnflag(OpContext& context);
+
+/**
  * `delete {target}`: removes groups, entities, brushes and patches. An entity or group
  * left empty is removed with them and is reported as removed after the targets.
  */

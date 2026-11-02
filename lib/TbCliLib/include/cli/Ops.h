@@ -60,6 +60,14 @@ enum class ArgType
   Target,
   /** a binding name `$name` that the nodes the op creates are bound to */
   Binding,
+  /** `true` or `false`; as a flag, `--name` alone means true */
+  Bool,
+  /** entity properties `{"key": "value", ...}` with string values */
+  Properties,
+  /**
+   * a spawnflag: its name as the FGD gives it, or its value (a power of two such as 256)
+   */
+  SpawnFlag,
 };
 
 /** One argument of an op. */
@@ -91,6 +99,8 @@ struct OpOutcome
 /** What an op runs with. */
 struct OpContext
 {
+  /** The name of the op, for messages. */
+  std::string_view opName;
   mdl::Map& map;
   /** The op's validated arguments, with defaults filled in. */
   const Json& args;
@@ -148,6 +158,12 @@ struct Op
   /** The bindings this op's NodePath and Target arguments refer to. */
   std::vector<std::string> bindingReferences() const;
 };
+
+/**
+ * Whether the given flag of the op's subcommand is a Bool argument, whose value may be
+ * left out.
+ */
+bool isBoolFlag(const OpDef& def, std::string_view flag);
 
 /** Every op, in the order `ops --json` and the help list them. */
 const std::vector<OpDef>& opDefs();

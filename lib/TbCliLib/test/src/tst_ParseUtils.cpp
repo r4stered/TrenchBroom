@@ -30,6 +30,21 @@ namespace tb::cli
 
 TEST_CASE("ParseUtils")
 {
+  SECTION("parseBool")
+  {
+    CHECK(parseBool("true") == true);
+    CHECK(parseBool("false") == false);
+
+    const auto invalid = GENERATE(
+      std::string_view{""},
+      std::string_view{"True"},
+      std::string_view{"1"},
+      std::string_view{"yes"},
+      std::string_view{"true "});
+    CAPTURE(invalid);
+    CHECK(parseBool(invalid) == std::nullopt);
+  }
+
   SECTION("parseUnsigned")
   {
     CHECK(parseUnsigned("0") == 0);

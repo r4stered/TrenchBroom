@@ -136,6 +136,10 @@ decltype(auto) attributeToOp(const size_t opIndex, F&& f)
 /** A malformed command line (exit 2). */
 CliError usageError(const std::string& message);
 
+/** An op that is unknown, or whose arguments are missing, unknown or malformed (exit 2).
+ */
+CliError invalidArgument(const std::string& message);
+
 /** A missing or malformed configuration (exit 1). */
 CliError configError(
   const std::string& message, std::optional<size_t> line = std::nullopt);

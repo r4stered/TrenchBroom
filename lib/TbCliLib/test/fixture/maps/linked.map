@@ -1,0 +1,37 @@
+// Game: Quake
+// Format: Valve
+// entity 0
+{
+"mapversion" "220"
+"classname" "worldspawn"
+"wad" ""
+}
+// entity 1
+{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "Lamp"
+"_tb_id" "1"
+"_tb_linked_group_id" "lamp-link"
+}
+// entity 2
+{
+"classname" "light"
+"origin" "0 0 64"
+"_tb_group" "1"
+}
+// entity 3
+{
+"classname" "func_group"
+"_tb_type" "_tb_group"
+"_tb_name" "Lamp"
+"_tb_id" "2"
+"_tb_linked_group_id" "lamp-link"
+"_tb_transformation" "1 0 0 128 0 1 0 0 0 0 1 0 0 0 0 1"
+}
+// entity 4
+{
+"classname" "light"
+"origin" "128 0 64"
+"_tb_group" "2"
+}

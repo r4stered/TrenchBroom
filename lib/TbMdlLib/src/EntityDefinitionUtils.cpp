@@ -162,6 +162,16 @@ bool isLinkTargetProperty(
            &PropertyDefinition::key);
 }
 
+const PropertyValueTypes::Flags* getSpawnflagsDefinition(
+  const EntityDefinition* entityDefinition)
+{
+  const auto* propertyDefinition =
+    getPropertyDefinition(entityDefinition, EntityPropertyKeys::Spawnflags);
+  return propertyDefinition
+           ? std::get_if<PropertyValueTypes::Flags>(&propertyDefinition->valueType)
+           : nullptr;
+}
+
 void addOrSetDefaultEntityLinkProperties(std::vector<EntityDefinition>& entityDefinitions)
 {
   if (!hasAnyEntityLinkPropertyDefinition(entityDefinitions))

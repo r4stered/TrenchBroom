@@ -19,6 +19,9 @@
 
 #include "CliTestUtils.h"
 
+#include <string>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
@@ -152,6 +155,32 @@ TEST_CASE("run")
     {
       checkErrorEnvelope(
         runCli({"delete", "x.map", "--target", "layer:0/brush:0"}), "file_not_found", 1);
+    }
+
+    SECTION("an op's bool flag may leave out its value")
+    {
+      using Args = std::vector<std::string>;
+      const auto flags = GENERATE(
+        Args{"--flag", "1", "--on"},
+        Args{"--on", "--flag", "1"},
+        Args{"--flag", "1", "--on", "true"},
+        Args{"--flag", "1", "--on", "false"},
+        Args{"--flag", "1", "--on=false"});
+      CAPTURE(flags);
+
+      auto args = Args{"set_spawnflag", "x.map", "--target", "world"};
+      args.insert(args.end(), flags.begin(), flags.end());
+      // accepted, so the command gets as far as loading the map
+      checkErrorEnvelope(runCli(args), "file_not_found", 1);
+    }
+
+    SECTION("an op's bool flag refuses other values")
+    {
+      checkErrorEnvelope(
+        runCli(
+          {"set_spawnflag", "x.map", "--target", "world", "--flag", "1", "--on=yes"}),
+        "invalid_argument",
+        2);
     }
 
     SECTION("--help and -h print usage")
