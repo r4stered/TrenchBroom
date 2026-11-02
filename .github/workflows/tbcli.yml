@@ -1,0 +1,229 @@
+name: tbcli
+on:
+  push:
+    branches:
+      - agent-friendly
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # The ericw-tools release bundled with tbcli. Its archives ship the compilers
+  # together with the shared libraries they need (embree, tbb).
+  ERICW_TOOLS_VERSION: 2.0.0-alpha11
+
+jobs:
+  tbcli:
+    name: tbcli (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-2022
+            ericw-asset: win64
+            exe-suffix: .exe
+            parallel: 4
+          - name: linux-x64
+            os: ubuntu-24.04
+            ericw-asset: Linux
+            exe-suffix: ''
+            # Some third-party translation units need several GB to compile.
+            parallel: 2
+          - name: macos-arm64
+            os: macos-15
+            ericw-asset: Darwin
+            exe-suffix: ''
+            parallel: 3
+
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      PACKAGE_NAME: tbcli-${{ matrix.name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # tbcli itself does not use Qt, but configuring the project requires it.
+      - name: Setup common prerequisites
+        uses: ./.github/actions/setup-common
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config zlib1g-dev libgl1-mesa-dev libglu1-mesa-dev libegl-dev \
+            libxi-dev libxrandr-dev libxkbcommon-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Restore CPM source cache
+        uses: actions/cache@v4
+        with:
+          path: .cpm-cache
+          key: cpm-${{ matrix.os }}-${{ hashFiles('cmake/dependencies/**', 'cmake/Dependencies.cmake') }}
+          restore-keys: cpm-${{ matrix.os }}-
+
+      # PANDOC_PATH is only needed for the TrenchBroom manual, which is not built here.
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cmake -S . -B cmakebuild -G "Visual Studio 17 2022" -T v143 -A x64 \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DPANDOC_PATH=unused \
+            -DTB_ENABLE_PCH=0
+
+      - name: Configure (Linux, macOS)
+        if: runner.os != 'Windows'
+        run: |
+          extra_flags=()
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            # Avoid depending on the runner's libstdc++ version.
+            extra_flags+=(-DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc")
+          fi
+          cmake -S . -B cmakebuild -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DPANDOC_PATH=unused \
+            -DTB_ENABLE_PCH=0 \
+            "${extra_flags[@]}"
+
+      - name: Build
+        shell: bash
+        run: cmake --build cmakebuild --config Release --target TbCli TbCliLibTest --parallel ${{ matrix.parallel }}
+
+      - name: Test
+        shell: bash
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        run: ctest --test-dir cmakebuild/lib/TbCliLib/test --build-config Release --output-on-failure -j 4
+
+      - name: Download ericw-tools
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ericw-download
+          gh release download "$ERICW_TOOLS_VERSION" -R ericwa/ericw-tools \
+            -p "ericw-tools-${ERICW_TOOLS_VERSION}-${{ matrix.ericw-asset }}.zip" -D ericw-download
+
+      - name: Assemble package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/$PACKAGE_NAME"
+          mkdir -p "$pkg/games" "$pkg/maps" "$pkg/ericw-tools"
+
+          exe="tbcli${{ matrix.exe-suffix }}"
+          bin=$(find cmakebuild/app/TbCli -name "$exe" -type f | head -n 1)
+          cp "$bin" "$pkg/"
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Ship the MSVC runtime next to tbcli.exe so no redistributable install is needed.
+            vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+            crt=$(find "$(cygpath "$vs")/VC/Redist/MSVC" -path '*x64/Microsoft.VC14*.CRT' -type d | grep -v onecore | sort | tail -n 1)
+            cp "$crt"/msvcp140.dll "$crt"/vcruntime140.dll "$crt"/vcruntime140_1.dll "$pkg/"
+          fi
+
+          cp -r app/TrenchBroom/resources/games/Quake "$pkg/games/Quake"
+
+          # unzip keeps the executable bits stored in the archive.
+          unzip -q ericw-download/*.zip -d "$pkg/ericw-tools"
+
+          find_tool() {
+            local found
+            found=$(find "$pkg/ericw-tools" -type f -name "$1${{ matrix.exe-suffix }}" | head -n 1)
+            if [[ -z "$found" ]]; then
+              echo "Could not find $1 in the ericw-tools archive" >&2
+              exit 1
+            fi
+            echo "${found#"$pkg/"}"
+          }
+          qbsp=$(find_tool qbsp)
+          vis=$(find_tool vis)
+          light=$(find_tool light)
+
+          # Relative paths in tbcli.json resolve against the directory that holds it, and
+          # tbcli finds it by walking up from the map, so maps anywhere below the package
+          # root pick it up.
+          cat > "$pkg/tbcli.json" <<EOF
+          {
+            "game_config": "games/Quake/GameConfig.cfg",
+            "fgd": "games/Quake/Quake.fgd",
+            "compilers": {
+              "qbsp": "$qbsp",
+              "vis": "$vis",
+              "light": "$light"
+            }
+          }
+          EOF
+
+          cat > "$pkg/README.txt" <<EOF
+          tbcli ${{ matrix.name }}, built from ${GITHUB_SHA}.
+
+          Contents:
+            ${exe}            the tbcli command line tool
+            tbcli.json        configuration used for any map below this directory
+            games/Quake/      Quake game config and entity definitions (FGD)
+            ericw-tools/      ericw-tools ${ERICW_TOOLS_VERSION} (qbsp, vis, light) with its libraries
+            maps/             put your Valve 220 maps here
+
+          Start with:  ./${exe} guide
+          To use tbcli.json for maps elsewhere, copy it next to them and adjust the paths.
+          Set "quake_dir" in tbcli.json to your Quake directory to check textures.
+          EOF
+
+          cat "$pkg/tbcli.json"
+
+      # Compile a sealed fixture map with the bundled tools, so a package whose compilers
+      # cannot load their libraries never gets uploaded.
+      - name: Smoke test package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/$PACKAGE_NAME"
+          work="smoke/$PACKAGE_NAME"
+          rm -rf smoke && mkdir -p smoke && cp -r "$pkg" "$work"
+          cp lib/TbCliLib/test/fixture/compiled/connected_rooms.map "$work/maps/"
+          cd "$work"
+          ./tbcli${{ matrix.exe-suffix }} describe maps/connected_rooms.map > /dev/null
+          ./tbcli${{ matrix.exe-suffix }} verify maps/connected_rooms.map --compile=light > ../verify.json
+          python3 - ../verify.json <<'EOF'
+          import json, sys
+          result = json.load(open(sys.argv[1], encoding="utf-8"))
+          stages = {stage["name"]: stage for stage in result["stages"]}
+          for name in ("qbsp", "vis", "light"):
+              stage = stages.get(name)
+              print(name, stage)
+              if stage is None or stage["status"] not in ("ok", "issues"):
+                  sys.exit(f"{name} did not run cleanly")
+          EOF
+
+      - name: Archive package
+        shell: bash
+        run: |
+          cd dist
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            7z a -tzip "$PACKAGE_NAME.zip" "$PACKAGE_NAME" > /dev/null
+          else
+            # tar keeps the executable bits that a zip made by upload-artifact would drop.
+            tar -czf "$PACKAGE_NAME.tar.gz" "$PACKAGE_NAME"
+          fi
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE_NAME }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
