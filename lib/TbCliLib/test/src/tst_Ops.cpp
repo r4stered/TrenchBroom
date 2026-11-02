@@ -42,7 +42,7 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 38);
+    REQUIRE(json["ops"].size() == 39);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
     const auto opNamed = [&](const std::string_view name) -> const Json& {
       const auto& ops = json["ops"].asArray();
@@ -138,6 +138,17 @@ TEST_CASE("ops command")
     CHECK(
       createBrushEntity["brushes"]["x-node-kinds"] == parseJsonLiteral(R"(["brush"])"));
     CHECK(createBrushEntity["brushes"]["x-expands-to-brushes"] == Json{true});
+
+    const auto& addRoom = opNamed("add_room")["schema"];
+    CHECK(addRoom["required"] == parseJsonLiteral(R"(["op", "name", "size"])"));
+    CHECK(addRoom["properties"]["wall"]["default"] == Json{16});
+    CHECK(addRoom["properties"]["place"]["oneOf"][0] == parseJsonLiteral(R"({
+        "type": "object",
+        "properties": {"east_of": {"type": "string"}, "gap": {"type": "number"}},
+        "required": ["east_of", "gap"],
+        "additionalProperties": false
+      })"));
+    CHECK(addRoom["properties"]["place"]["oneOf"].size() == 4);
 
     const auto& setSpawnflag = opNamed("set_spawnflag");
     CHECK(setSpawnflag["schema"]["properties"]["flag"]["oneOf"] == parseJsonLiteral(R"([
@@ -362,6 +373,23 @@ TEST_CASE("Ops")
       };
       CHECK(parseOpFlags(createShape, shapeFlags("cone")).args["kind"] == Json{"cone"});
       CHECK_THROWS_AS(parseOpFlags(createShape, shapeFlags("sphere")), CliError);
+    }
+
+    SECTION("placement flags")
+    {
+      const auto& addRoom = *findOpDef("add_room");
+      const auto roomFlags = [](const std::string& place) {
+        return OpFlags{{"name", "B"}, {"size", "64,64,64"}, {"place", place}};
+      };
+      CHECK(
+        parseOpFlags(addRoom, roomFlags(R"({"west_of": "A", "gap": 64})")).args
+        == parseJsonLiteral(R"({
+          "name": "B", "size": [64, 64, 64], "place": {"west_of": "A", "gap": 64},
+          "wall": 16
+        })"));
+      CHECK_THROWS_AS(parseOpFlags(addRoom, roomFlags("west_of A 64")), CliError);
+      CHECK_THROWS_AS(
+        parseOpFlags(addRoom, roomFlags(R"({"west_of": "A", "gap": "far"})")), CliError);
     }
   }
 

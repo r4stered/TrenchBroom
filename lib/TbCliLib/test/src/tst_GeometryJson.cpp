@@ -39,6 +39,11 @@ TEST_CASE("GeometryJson")
       == R"({"min":[0,1,2],"max":[3,4,5]})");
   }
 
+  SECTION("formatVec3")
+  {
+    CHECK(formatVec3(vm::vec3d{1, -2.5, 1.0 / 3.0}) == "1 -2.5 0.333");
+  }
+
   SECTION("vec3FromJson")
   {
     CHECK(vec3FromJson(Json{Json::Array{1, -2.5, 3}}) == vm::vec3d{1, -2.5, 3});

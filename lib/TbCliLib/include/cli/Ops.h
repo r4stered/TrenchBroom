@@ -96,6 +96,11 @@ enum class ArgType
   Points,
   /** a kind of shape: `"cylinder"`, `"cone"` or `"arch"` */
   ShapeKind,
+  /**
+   * a built room's placement next to another `{"east_of" | "west_of" | "north_of" |
+   * "south_of": <room name>, "gap": <n>}`, written as JSON as a flag
+   */
+  Placement,
 };
 
 /** One argument of an op. */

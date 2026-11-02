@@ -19,15 +19,25 @@
 
 #pragma once
 
+#include "mdl/BrushBuilder.h"
+
 #include <optional>
 #include <span>
 #include <string_view>
+
+namespace tb::mdl
+{
+class Map;
+}
 
 namespace tb::cli
 {
 
 class Json;
 struct OpContext;
+
+/** The builder that the editor's brush tools use, with the game's default UV. */
+mdl::BrushBuilder brushBuilderOf(const mdl::Map& map);
 
 /**
  * The implementations of the ops that Ops.cpp defines. Each takes the arguments its

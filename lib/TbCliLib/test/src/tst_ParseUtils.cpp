@@ -104,6 +104,17 @@ TEST_CASE("ParseUtils")
     CHECK(parseNumberList("1;2") == std::nullopt);
   }
 
+  SECTION("isWordChar")
+  {
+    CHECK(isWordChar('a'));
+    CHECK(isWordChar('Z'));
+    CHECK(isWordChar('0'));
+    CHECK(isWordChar('_'));
+    CHECK_FALSE(isWordChar('-'));
+    CHECK_FALSE(isWordChar(' '));
+    CHECK_FALSE(isWordChar('$'));
+  }
+
   SECTION("axisNames")
   {
     CHECK(

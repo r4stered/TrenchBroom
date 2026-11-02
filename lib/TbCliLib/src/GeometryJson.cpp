@@ -19,6 +19,8 @@
 
 #include "cli/GeometryJson.h"
 
+#include <fmt/format.h>
+
 namespace tb::cli
 {
 
@@ -33,6 +35,12 @@ Json toJson(const vm::bbox3d& bounds)
   result.set("min", toJson(bounds.min));
   result.set("max", toJson(bounds.max));
   return result;
+}
+
+std::string formatVec3(const vm::vec3d& v)
+{
+  return fmt::format(
+    "{} {} {}", formatNumber(v.x()), formatNumber(v.y()), formatNumber(v.z()));
 }
 
 vm::vec3d vec3FromJson(const Json& json)

@@ -19,6 +19,7 @@
 
 #include "cli/Show.h"
 
+#include "cli/BuiltRooms.h"
 #include "cli/CappedList.h"
 #include "cli/EntityJson.h"
 #include "cli/Json.h"
@@ -75,9 +76,25 @@ Json groupInFullToJson(const mdl::GroupNode& groupNode, const mdl::WorldNode& wo
   return result;
 }
 
+/**
+ * Adds what a carrier or the group that wraps it says about its built room:
+ * `instance_of` (the room's name), `instances` (their number, one until linked built
+ * rooms are recognised), `params` (or null if malformed) and `status`.
+ */
+void addBuiltRoom(Json& json, const mdl::Node& node)
+{
+  if (const auto room = builtRoomOf(node))
+  {
+    json.set("instance_of", room->name);
+    json.set("instances", 1);
+    json.set("params", room->params ? paramsToJson(*room->params) : Json{});
+    json.set("status", toString(room->status));
+  }
+}
+
 Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bool raw)
 {
-  return node.accept(
+  auto result = node.accept(
     kdl::overload(
       [](const mdl::WorldNode& world) {
         auto result = entityToJson(world);
@@ -102,6 +119,8 @@ Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bo
       },
       [&](const mdl::BrushNode& brushNode) { return brushToJson(brushNode, raw); },
       [](const mdl::PatchNode& patchNode) { return patchSummaryToJson(patchNode); }));
+  addBuiltRoom(result, node);
+  return result;
 }
 
 } // namespace

@@ -57,6 +57,8 @@ bool isKeyEntity(const mdl::Entity& entity, const std::vector<std::string>& clas
  * worldspawn and every entity with a targetname or target. Without a list, the player
  * starts and trigger_changelevel are.
  *
+ * `built_rooms` lists the built rooms in file order, as builtRoomToJson writes them.
+ *
  * `issues` counts the given issues of the in-process verify stages per type and
  * severity, as verify does.
  */

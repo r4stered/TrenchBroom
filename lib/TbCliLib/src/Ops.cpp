@@ -19,6 +19,7 @@
 
 #include "cli/Ops.h"
 
+#include "cli/BuiltRooms.h"
 #include "cli/CliError.h"
 #include "cli/CsgOps.h"
 #include "cli/EditOps.h"
@@ -244,6 +245,33 @@ Json pointsSchema()
 Json shapeKindSchema()
 {
   return enumSchema(shapeKindNames());
+}
+
+/** `{<relation>: <room name>, "gap": <n>}` with exactly one relation. */
+Json placementSchema()
+{
+  auto options = Json::array();
+  for (const auto relation : relationNames())
+  {
+    auto properties = Json::object();
+    properties.set(std::string{relation}, stringSchema());
+    properties.set("gap", numberSchema());
+
+    auto required = Json::array();
+    required.push(relation);
+    required.push("gap");
+
+    auto option = Json::object();
+    option.set("type", "object");
+    option.set("properties", std::move(properties));
+    option.set("required", std::move(required));
+    option.set("additionalProperties", false);
+    options.push(std::move(option));
+  }
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
+  return result;
 }
 
 Json boxSchema()
@@ -576,7 +604,7 @@ struct ArgTypeTraits
   std::optional<Json> (*fromFlag)(const std::string& value);
 };
 
-const auto ArgTypes = std::array<ArgTypeTraits, 16>{{
+const auto ArgTypes = std::array<ArgTypeTraits, 17>{{
   {ArgType::Vec3,
    "<x,y,z>",
    "three numbers [x, y, z] (x,y,z as a flag)",
@@ -656,6 +684,13 @@ const auto ArgTypes = std::array<ArgTypeTraits, 16>{{
    isShapeKind,
    shapeKindSchema,
    stringFromFlag},
+  {ArgType::Placement,
+   "<{\"east_of\": <room>, \"gap\": n}>",
+   "an object {\"east_of\" | \"west_of\" | \"north_of\" | \"south_of\": <room name>, "
+   "\"gap\": <n>}, written as JSON",
+   isPlacement,
+   placementSchema,
+   propertiesFromFlag},
 }};
 
 const ArgTypeTraits& traits(const ArgType type)
@@ -1539,6 +1574,47 @@ std::vector<OpDef> makeOpDefs()
       },
       snapVertices,
       checkSnapVerticesArgs,
+    },
+    OpDef{
+      "add_room",
+      "Lays out a built room: a sealed rectangular room with walls, floor and ceiling "
+      "around an interior of the given size, made of ordinary brushes in a func_group "
+      "carrier that keeps its parameters, wrapped in a group built_room:<name>. Place "
+      "it at min, or next to another built room with place: it then stands gap units "
+      "from the other room's interior on the given side, centred on the other "
+      "horizontal axis, with the same floor height. Fails with layout_overlap if its "
+      "walls would overlap another built room's. The faces have no material.",
+      {
+        ArgDef{
+          "name",
+          ArgType::String,
+          "the room's name, unique among the built rooms; letters, digits and "
+          "underscores",
+          true},
+        ArgDef{
+          "size",
+          ArgType::Vec3,
+          "the size of the interior, in units; greater than 0 on every axis",
+          true},
+        ArgDef{
+          "min",
+          ArgType::Vec3,
+          "the minimum corner of the interior, in absolute units; give min or place"},
+        ArgDef{
+          "place",
+          ArgType::Placement,
+          "the built room to place it next to, the side and the gap between the "
+          "interiors; give min or place"},
+        ArgDef{
+          "wall",
+          ArgType::Number,
+          "the thickness of the walls, floor and ceiling, in units; greater than 0",
+          false,
+          Json{16}},
+        ArgDef{"as", ArgType::Binding, "binds the room's group to this name"},
+      },
+      addRoom,
+      checkAddRoomArgs,
     },
   };
 }

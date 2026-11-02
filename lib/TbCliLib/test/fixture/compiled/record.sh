@@ -33,6 +33,10 @@
 #   rooms_prt2_water_keepprt
 #                         rooms_prt2_water.map recorded as verify runs qbsp, which
 #                         writes a PRT2 file of clusters
+#   built_rooms.map       two rooms laid out by tbcli add_room (A at the origin, B east
+#                         of it) with a player start in A and a light in B, without the
+#                         Generator line; tst_BuiltRooms regenerates it and compares;
+#                         recorded with -keepprt, as verify runs qbsp
 #
 # Usage: ERICW_TOOLS_DIR=<dir> lib/TbCliLib/test/fixture/compiled/record.sh
 
@@ -53,6 +57,7 @@ mdl="$(git -C "$here" rev-parse --show-toplevel)/lib/TbMdlLib/test/fixture/mdl/C
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_slot.map" "$here/rooms_slot"
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_sky.map" "$here/rooms_sky"
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_openings.map" "$here/rooms_openings"
+"$record" --qbsp-args "-keepprt" "$here/built_rooms.map" "$here/built_rooms"
 # recorded under the name that the test build copies the map to
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

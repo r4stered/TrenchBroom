@@ -46,6 +46,7 @@ TEST_CASE("CliError")
       T{ErrorCode::CompileFailed, 1},
       T{ErrorCode::StaleArtifact, 1},
       T{ErrorCode::MapLeaks, 1},
+      T{ErrorCode::LayoutOverlap, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

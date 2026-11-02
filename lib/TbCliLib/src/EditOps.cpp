@@ -458,17 +458,6 @@ void recordFixOutcome(
   appendRemovedNodes(scope.ancestors, worldNode, outcome.removed);
 }
 
-/** The builder that the editor's brush tools use, with the game's default UV. */
-mdl::BrushBuilder brushBuilderOf(const mdl::Map& map)
-{
-  const auto& faceAttribsConfig = map.gameInfo().gameConfig.faceAttribsConfig;
-  return mdl::BrushBuilder{
-    map.worldNode().mapFormat(),
-    map.worldBounds(),
-    faceAttribsConfig.defaultUvAttributes,
-    faceAttribsConfig.defaultSurfaceAttributes};
-}
-
 /** A built brush as a list of one, as addBrushes takes it. */
 Result<std::vector<mdl::Brush>> asList(Result<mdl::Brush> brush)
 {
@@ -574,6 +563,16 @@ Result<std::vector<mdl::Brush>> buildShape(const mdl::Map& map, const Json& args
 }
 
 } // namespace
+
+mdl::BrushBuilder brushBuilderOf(const mdl::Map& map)
+{
+  const auto& faceAttribsConfig = map.gameInfo().gameConfig.faceAttribsConfig;
+  return mdl::BrushBuilder{
+    map.worldNode().mapFormat(),
+    map.worldBounds(),
+    faceAttribsConfig.defaultUvAttributes,
+    faceAttribsConfig.defaultSurfaceAttributes};
+}
 
 void createBox(OpContext& context)
 {

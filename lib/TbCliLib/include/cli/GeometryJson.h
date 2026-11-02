@@ -24,6 +24,8 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <string>
+
 namespace tb::cli
 {
 
@@ -32,6 +34,9 @@ Json toJson(const vm::vec3d& v);
 
 /** `{"min": [x, y, z], "max": [x, y, z]}` */
 Json toJson(const vm::bbox3d& bounds);
+
+/** `x y z`, with the numbers written as formatNumber writes them. */
+std::string formatVec3(const vm::vec3d& v);
 
 /** The point of a well-formed `[x, y, z]`. */
 vm::vec3d vec3FromJson(const Json& json);

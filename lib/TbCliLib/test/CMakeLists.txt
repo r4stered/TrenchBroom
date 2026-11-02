@@ -15,6 +15,7 @@ target_compile_definitions(TbCliLibTest PRIVATE
 target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Apply.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BuiltRooms.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliValidators.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Compile.cpp

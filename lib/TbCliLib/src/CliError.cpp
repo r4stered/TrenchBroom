@@ -76,6 +76,8 @@ std::string_view toString(const ErrorCode code)
     return "stale_artifact";
   case ErrorCode::MapLeaks:
     return "map_leaks";
+  case ErrorCode::LayoutOverlap:
+    return "layout_overlap";
   case ErrorCode::InternalError:
     return "internal_error";
   }

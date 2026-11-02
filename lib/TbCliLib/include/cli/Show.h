@@ -37,6 +37,8 @@ struct LoadedMap;
  * - the world is written as worldspawn and adds the paths of its `layers`
  * - layers and groups add the paths of their `children`; linked groups add `link_id`
  *   and the paths of their `siblings`
+ * - a built room's carrier and the group that wraps it add `instance_of` (the room's
+ *   name), `instances` (their number), its `params` and its `status`
  *
  * The lists of child paths (`brushes`, `layers`, `children`) are written as
  * `{items, total, truncated}`; `siblings` is a plain array, as in describe, since a

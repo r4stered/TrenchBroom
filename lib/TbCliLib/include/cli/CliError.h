@@ -87,6 +87,8 @@ enum class ErrorCode
   StaleArtifact,
   /** `rooms` on a map that leaks; the error carries the `leak` issue */
   MapLeaks,
+  /** `add_room` would build a room whose walls overlap another built room's */
+  LayoutOverlap,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

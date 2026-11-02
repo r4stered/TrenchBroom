@@ -171,13 +171,9 @@ TargetKind targetKindOf(const NodeOrFace& nodeOrFace)
 
 bool isBindingName(const std::string_view name)
 {
-  const auto isAlpha = [](const char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-  };
-  const auto isAlnum = [&](const char c) { return isAlpha(c) || (c >= '0' && c <= '9'); };
-
-  return name.size() >= 2 && name.front() == '$' && isAlpha(name[1])
-         && std::ranges::all_of(name.substr(2), isAlnum);
+  const auto isDigit = [](const char c) { return c >= '0' && c <= '9'; };
+  return name.size() >= 2 && name.front() == '$' && isWordChar(name[1])
+         && !isDigit(name[1]) && std::ranges::all_of(name.substr(2), isWordChar);
 }
 
 bool isPathOrBinding(const Json& value)

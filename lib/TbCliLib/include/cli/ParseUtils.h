@@ -51,6 +51,9 @@ std::optional<double> parseDecimal(std::string_view str);
  */
 std::optional<std::vector<double>> parseNumberList(std::string_view str);
 
+/** Whether the character is an ASCII letter, a digit or an underscore. */
+bool isWordChar(char c);
+
 /** The names of the axes that ops take: `x`, `y` and `z`. */
 std::span<const std::string_view> axisNames();
 

@@ -3,6 +3,7 @@ add_library(TbCliLib STATIC)
 target_sources(TbCliLib
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Apply.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/BuiltRooms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliError.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliValidators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Compile.cpp

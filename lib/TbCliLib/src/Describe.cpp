@@ -19,6 +19,7 @@
 
 #include "cli/Describe.h"
 
+#include "cli/BuiltRooms.h"
 #include "cli/CappedList.h"
 #include "cli/EntityJson.h"
 #include "cli/GeometryJson.h"
@@ -62,6 +63,7 @@ constexpr auto MaxTextures = size_t{100};
 constexpr auto MaxKeyEntities = size_t{50};
 constexpr auto MaxLinks = size_t{100};
 constexpr auto MaxDanglingLinks = size_t{50};
+constexpr auto MaxBuiltRooms = size_t{100};
 
 /** The classes listed in full unless tbcli.json overrides them. */
 const auto DefaultKeyEntityClasses = std::vector<std::string>{
@@ -457,6 +459,8 @@ Json describe(
     "key_entities",
     keyEntities(worldNode, contents.entities, cli::keyEntityClasses(keyEntityClasses)));
   result.set("link_graph", linkGraph(contents.entities));
+  result.set(
+    "built_rooms", capped(collectBuiltRooms(worldNode), MaxBuiltRooms, builtRoomToJson));
   auto issues = Json::object();
   setIssueCounts(issues, issueReport.issues);
   result.set("issues", std::move(issues));
