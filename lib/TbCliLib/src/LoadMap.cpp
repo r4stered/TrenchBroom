@@ -20,6 +20,7 @@
 #include "cli/LoadMap.h"
 
 #include "base/Logger.h"
+#include "base/ParserStatus.h"
 #include "base/SimpleParserStatus.h"
 #include "cli/CliError.h"
 #include "cli/Config.h"
@@ -55,6 +56,41 @@ constexpr auto RevLength = size_t{12};
 
 // The editor's default world bounds.
 const auto WorldBounds = vm::bbox3d{-32768.0, 32768.0};
+
+/**
+ * Logs what the map reader reports and records its warnings and errors, each of which
+ * means that the reader skipped or changed some of the file's content.
+ *
+ * This relies on the reader warning only about content it drops or changes, which holds
+ * for every warning in MapReader, StandardMapParser and WorldReader today. A purely
+ * informational warning added there would make every map that triggers it lossy.
+ */
+class ProblemCollectingParserStatus : public ParserStatus
+{
+private:
+  Logger& m_logger;
+  std::vector<std::string>& m_problems;
+
+public:
+  ProblemCollectingParserStatus(Logger& logger, std::vector<std::string>& problems)
+    : ParserStatus{logger, ""}
+    , m_logger{logger}
+    , m_problems{problems}
+  {
+  }
+
+private:
+  void doProgress(double) override {}
+
+  void doLog(const LogLevel level, const std::string& str) override
+  {
+    if (level == LogLevel::Warn || level == LogLevel::Error)
+    {
+      m_problems.push_back(str);
+    }
+    m_logger.log(level, str);
+  }
+};
 
 std::string errorMessage(const auto& result)
 {
@@ -254,7 +290,7 @@ LoadedMap loadMap(
 
   logger.info() << "Loading document from " << absPath;
 
-  auto status = SimpleParserStatus{logger};
+  auto status = ProblemCollectingParserStatus{logger, result.loadProblems};
   auto worldNode = readWorld(
     *bytes, mdl::MapFormat::Valve, gameInfo.gameConfig, status, *result.taskManager);
 

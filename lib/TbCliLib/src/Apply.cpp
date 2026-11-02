@@ -25,6 +25,7 @@
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
+#include "cli/Targets.h"
 #include "mdl/Map.h"
 #include "mdl/WorldNode.h"
 
@@ -40,42 +41,56 @@ namespace tb::cli
 namespace
 {
 
-using ResolvedNodes = std::map<std::string, NodeOrFace, std::less<>>;
+/** The NodePath and Target arguments of an op, resolved up front, by argument name. */
+using ResolvedArgs = std::map<std::string, ResolvedTarget, std::less<>>;
 
-/** Resolves the node path arguments of an op against the input rev. */
-ResolvedNodes resolveNodes(mdl::WorldNode& worldNode, const Op& op)
+/** The nodes of an op's NodePath and Target arguments, by argument name. */
+using ArgNodes = std::map<std::string, std::vector<NodeOrFace>, std::less<>>;
+
+/** Resolves the paths and queries of an op against the input rev. */
+ResolvedArgs resolveArgs(const TargetResolver& targets, const Op& op)
 {
-  auto result = ResolvedNodes{};
+  auto result = ResolvedArgs{};
   for (const auto& arg : op.def->args)
   {
-    if (arg.type != ArgType::NodePath)
+    if (const auto* value = op.args.find(arg.name); value && addressesNodes(arg))
     {
-      continue;
-    }
-    if (const auto* value = op.args.find(arg.name))
-    {
-      result.emplace(arg.name, resolveNodePath(worldNode, value->asString()));
+      result.emplace(arg.name, targets.resolve(*value));
     }
   }
   return result;
 }
 
-/** Fails if an earlier op of the batch removed a node that this op addresses. */
-void checkNotDeleted(
-  const mdl::WorldNode& worldNode, const Op& op, const ResolvedNodes& nodes)
+/** The nodes an op addresses now, checked against the rules of its arguments. */
+ArgNodes argNodes(const TargetResolver& targets, const Op& op, const ResolvedArgs& args)
 {
-  for (const auto& [name, nodeOrFace] : nodes)
+  auto result = ArgNodes{};
+  for (const auto& arg : op.def->args)
   {
-    if (!nodeOrFace.node->isDescendantOf(worldNode) && nodeOrFace.node != &worldNode)
+    const auto it = args.find(arg.name);
+    if (it == args.end())
     {
-      const auto& path = op.args[name].asString();
-      throw CliError{
-        ErrorCode::TargetDeleted,
-        fmt::format(
-          "{}: {} was removed by an earlier op of the batch", op.def->name, path),
-        path};
+      continue;
     }
+
+    auto nodes =
+      targets.nodes(it->second, arg.rules, fmt::format("{}: {}", op.def->name, arg.name));
+    if (arg.type == ArgType::NodePath && nodes.size() != 1)
+    {
+      const auto& value = op.args[arg.name].asString();
+      throw CliError{
+        ErrorCode::WrongNodeKind,
+        fmt::format(
+          "{}: {} {} names {} nodes, but must name one",
+          op.def->name,
+          arg.name,
+          value,
+          nodes.size()),
+        value};
+    }
+    result.emplace(arg.name, std::move(nodes));
   }
+  return result;
 }
 
 /** The map as the editor would save it. */
@@ -84,6 +99,17 @@ std::string serialize(const mdl::Map& map)
   auto stream = std::ostringstream{};
   map.saveTo(stream);
   return std::move(stream).str();
+}
+
+CliError lossyLoad(const std::vector<std::string>& problems)
+{
+  return CliError{
+    ErrorCode::LossyLoad,
+    fmt::format(
+      "the map did not load exactly ({}{}), so writing it could lose content; pass "
+      "--allow-lossy to write anyway, or --dry-run to preview the edit",
+      problems.front(),
+      problems.size() > 1 ? fmt::format(" and {} more", problems.size() - 1) : "")};
 }
 
 /** The paths in the new rev of those of the given nodes that are still in the map. */
@@ -116,39 +142,51 @@ Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions&
         *options.expectRev)};
   }
 
-  auto& map = *loadedMap.map;
-  auto& worldNode = map.worldNode();
-  const auto inputPaths = nodePaths(worldNode);
+  const auto lossy = !loadedMap.loadProblems.empty();
+  if (lossy && !options.allowLossy && !options.dryRun)
+  {
+    throw lossyLoad(loadedMap.loadProblems);
+  }
 
-  // resolve every node path before anything changes
-  auto resolved = std::vector<ResolvedNodes>{};
+  auto& map = *loadedMap.map;
+  auto targets = TargetResolver{map, options.allowLocked};
+
+  // resolve every node path and query before anything changes
+  auto resolved = std::vector<ResolvedArgs>{};
   for (size_t i = 0; i < ops.size(); ++i)
   {
-    resolved.push_back(
-      attributeToOp(i, [&]() { return resolveNodes(worldNode, ops[i]); }));
+    resolved.push_back(attributeToOp(i, [&]() { return resolveArgs(targets, ops[i]); }));
   }
 
   auto outcomes = std::vector<OpOutcome>(ops.size());
   for (size_t i = 0; i < ops.size(); ++i)
   {
     attributeToOp(i, [&]() {
-      checkNotDeleted(worldNode, ops[i], resolved[i]);
-      auto context = OpContext{map, ops[i].args, resolved[i], outcomes[i]};
+      const auto nodes = argNodes(targets, ops[i], resolved[i]);
+      auto context = OpContext{map, ops[i].args, nodes, outcomes[i]};
       ops[i].def->execute(context);
+      if (const auto binding = ops[i].binding())
+      {
+        targets.bind(*binding, outcomes[i].created);
+      }
     });
   }
 
-  const auto paths = nodePaths(worldNode);
+  const auto paths = nodePaths(map.worldNode());
   auto opResults = Json::array();
   auto bindings = Json::object();
   for (size_t i = 0; i < ops.size(); ++i)
   {
     const auto& outcome = outcomes[i];
 
+    // nodes that a batch creates and removes again have no path in either rev
     auto removed = Json::array();
     for (const auto* node : outcome.removed)
     {
-      removed.push(inputPaths.at(node));
+      if (const auto path = targets.inputPath(*node))
+      {
+        removed.push(*path);
+      }
     }
 
     auto warnings = Json::array();
@@ -191,6 +229,12 @@ Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions&
   result.set("rev", computeRev(bytes));
   result.set("ops", std::move(opResults));
   result.set("bindings", std::move(bindings));
+  if (lossy)
+  {
+    auto warnings = Json::array();
+    warnings.push("lossy_load");
+    result.set("warnings", std::move(warnings));
+  }
   return result;
 }
 

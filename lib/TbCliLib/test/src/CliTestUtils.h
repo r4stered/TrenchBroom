@@ -20,6 +20,7 @@
 #pragma once
 
 #include "cli/Json.h"
+#include "cli/LoadMap.h"
 #include "cli/Run.h"
 #include "fs/TestEnvironment.h"
 
@@ -89,6 +90,12 @@ public:
 /** A tbcli.json that points at the Quake game config and FGD shipped with TrenchBroom. */
 Json quakeConfig();
 
+/**
+ * Loads a fixture map in-process with the Quake game config and FGD. The logger must
+ * outlive the result.
+ */
+LoadedMap loadFixtureMap(const std::filesystem::path& fixture, Logger& logger);
+
 /** Calls tbcli in-process. Paths are passed as UTF-8 strings. */
 RunResult runCli(const std::vector<std::string>& args, std::string_view in = {});
 
@@ -125,16 +132,17 @@ inline constexpr auto CreateBoxOp = std::string_view{
   R"({"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "floor"})"};
 
 /**
- * For edit tests: the fixture map maps/simple.map copied into a temp dir with a
- * tbcli.json, and its original contents.
+ * For edit tests: a fixture map (maps/simple.map unless another is given) copied into a
+ * temp dir with a tbcli.json, and its original contents.
  */
 struct EditFixture
 {
   CliTestEnvironment env;
+  std::filesystem::path fileName;
   std::string map;
   std::string original;
 
-  EditFixture();
+  explicit EditFixture(const std::filesystem::path& fixture = "maps/simple.map");
 
   /** Whether the map file still has its original contents. */
   bool unchanged() const;

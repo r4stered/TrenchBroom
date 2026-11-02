@@ -68,6 +68,12 @@ enum class ErrorCode
   WriteFailed,
   /** an op targets a node that an earlier op in the batch removed */
   TargetDeleted,
+  /** an op targets a locked node without --allow-locked */
+  Locked,
+  /** a query target matched a number of nodes other than its `expect` */
+  ExpectMismatch,
+  /** a mutating command after a load that skipped content, without --allow-lossy */
+  LossyLoad,
   /** an op cannot be carried out with the given arguments */
   OpFailed,
   /** an unexpected failure inside tbcli */

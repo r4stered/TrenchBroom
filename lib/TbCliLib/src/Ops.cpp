@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <set>
 
 namespace tb::cli
@@ -39,17 +40,6 @@ namespace
 CliError invalidArgument(const std::string& message)
 {
   return CliError{ErrorCode::InvalidArgument, message};
-}
-
-bool isBindingName(const std::string_view name)
-{
-  const auto isAlpha = [](const char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-  };
-  const auto isAlnum = [&](const char c) { return isAlpha(c) || (c >= '0' && c <= '9'); };
-
-  return name.size() >= 2 && name.front() == '$' && isAlpha(name[1])
-         && std::ranges::all_of(name.substr(2), isAlnum);
 }
 
 bool isString(const Json& value)
@@ -67,6 +57,7 @@ bool isBinding(const Json& value)
 {
   return value.isString() && isBindingName(value.asString());
 }
+
 
 Json stringSchema()
 {
@@ -92,6 +83,54 @@ Json bindingSchema()
 {
   auto result = stringSchema();
   result.set("pattern", "^\\$[A-Za-z_][A-Za-z0-9_]*$");
+  return result;
+}
+
+/** A node path or a binding. */
+Json nodePathSchema()
+{
+  auto result = stringSchema();
+  result.set("pattern", "^([^$]|\\$[A-Za-z_][A-Za-z0-9_]*$)");
+  return result;
+}
+
+Json targetSchema()
+{
+  auto list = Json::object();
+  list.set("type", "array");
+  list.set("items", nodePathSchema());
+  list.set("minItems", 1);
+
+  auto count = Json::object();
+  count.set("type", "integer");
+  count.set("minimum", 0);
+  auto any = Json::object();
+  any.set("const", "any");
+  auto expectOptions = Json::array();
+  expectOptions.push(std::move(count));
+  expectOptions.push(std::move(any));
+  auto expect = Json::object();
+  expect.set("oneOf", std::move(expectOptions));
+  expect.set("default", "any");
+
+  auto queryProperties = Json::object();
+  queryProperties.set("query", stringSchema());
+  queryProperties.set("expect", std::move(expect));
+  auto queryRequired = Json::array();
+  queryRequired.push("query");
+  auto query = Json::object();
+  query.set("type", "object");
+  query.set("properties", std::move(queryProperties));
+  query.set("required", std::move(queryRequired));
+  query.set("additionalProperties", false);
+
+  auto options = Json::array();
+  options.push(nodePathSchema());
+  options.push(std::move(list));
+  options.push(std::move(query));
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
   return result;
 }
 
@@ -130,7 +169,7 @@ struct ArgTypeTraits
   std::optional<Json> (*fromFlag)(const std::string& value);
 };
 
-const auto ArgTypes = std::array<ArgTypeTraits, 4>{{
+const auto ArgTypes = std::array<ArgTypeTraits, 5>{{
   {ArgType::Vec3,
    "<x,y,z>",
    "three numbers [x, y, z] (x,y,z as a flag)",
@@ -140,9 +179,16 @@ const auto ArgTypes = std::array<ArgTypeTraits, 4>{{
   {ArgType::String, "<string>", "a string", isString, stringSchema, stringFromFlag},
   {ArgType::NodePath,
    "<path>",
-   "a node path string",
-   isString,
-   stringSchema,
+   "a node path or a binding such as \"$room\"",
+   isPathOrBinding,
+   nodePathSchema,
+   stringFromFlag},
+  {ArgType::Target,
+   "<path>",
+   "a node path, a binding, a non-empty list of them, or "
+   "{\"query\": <ql>, \"expect\": <n> | \"any\"}",
+   isTarget,
+   targetSchema,
    stringFromFlag},
   {ArgType::Binding,
    "<$name>",
@@ -221,7 +267,35 @@ Json argSchema(const ArgDef& arg)
   {
     result.set("default", *arg.defaultValue);
   }
+  if (addressesNodes(arg))
+  {
+    auto kinds = Json::array();
+    for (const auto kind : arg.rules.kinds)
+    {
+      kinds.push(toString(kind));
+    }
+    result.set("x-node-kinds", std::move(kinds));
+    result.set("x-expands-to-brushes", arg.rules.expandsToBrushes);
+  }
   return result;
+}
+
+/** The kinds an argument accepts, for help text. */
+std::string kindsHelp(const ArgDef& arg)
+{
+  const auto kinds = toString(arg.rules.kinds);
+  return arg.rules.expandsToBrushes
+           ? kinds + "; layers, groups and brush entities stand for their brushes"
+           : kinds;
+}
+
+/** The name of the Target argument that --query and --expect give. */
+constexpr auto QueryTargetArg = std::string_view{"target"};
+
+/** Whether a subcommand gives this argument as --query and --expect, too. */
+bool acceptsQueryFlags(const ArgDef& arg)
+{
+  return arg.type == ArgType::Target && arg.name == QueryTargetArg;
 }
 
 Json opSchema(const OpDef& def)
@@ -303,26 +377,61 @@ std::vector<OpDef> makeOpDefs()
           ArgType::NodePath,
           "the layer, group or brush entity to create the box in",
           false,
-          Json{"layer:0"}},
+          Json{"layer:0"},
+          {{TargetKind::Layer, TargetKind::Group, TargetKind::BrushEntity}}},
         ArgDef{"as", ArgType::Binding, "binds the created brush to this name"},
       },
       createBox,
     },
     OpDef{
       "delete",
-      "Deletes a group, entity, brush or patch. An entity or group left empty is "
-      "deleted with it.",
+      "Deletes groups, entities, brushes and patches. An entity or group left empty "
+      "is deleted with them.",
       {
-        ArgDef{"target", ArgType::NodePath, "the node to delete", true},
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the nodes to delete",
+          true,
+          std::nullopt,
+          {{TargetKind::Group,
+            TargetKind::PointEntity,
+            TargetKind::BrushEntity,
+            TargetKind::Brush,
+            TargetKind::Patch}}},
       },
       deleteNode,
     },
   };
 }
 
+/**
+ * Fails if the op refers to a binding that is not among the given ones, which earlier
+ * ops bind.
+ */
+void checkBindingReferences(const Op& op, const std::set<std::string>& bindings)
+{
+  for (const auto& binding : op.bindingReferences())
+  {
+    if (!bindings.contains(binding))
+    {
+      throw invalidArgument(
+        fmt::format(
+          "{}: {} is not bound by an earlier op of the batch", op.def->name, binding));
+    }
+  }
+}
+
 } // namespace
 
 const NodeOrFace& OpContext::node(const std::string_view name) const
+{
+  const auto& result = targets(name);
+  contract_assert(result.size() == 1);
+  return result.front();
+}
+
+const std::vector<NodeOrFace>& OpContext::targets(const std::string_view name) const
 {
   const auto it = nodes.find(name);
   contract_assert(it != nodes.end());
@@ -339,6 +448,24 @@ std::optional<std::string> Op::binding() const
     }
   }
   return std::nullopt;
+}
+
+bool addressesNodes(const ArgDef& arg)
+{
+  return arg.type == ArgType::NodePath || arg.type == ArgType::Target;
+}
+
+std::vector<std::string> Op::bindingReferences() const
+{
+  auto result = std::vector<std::string>{};
+  for (const auto& arg : def->args)
+  {
+    if (const auto* value = args.find(arg.name); value && addressesNodes(arg))
+    {
+      std::ranges::move(cli::bindingReferences(*value), std::back_inserter(result));
+    }
+  }
+  return result;
 }
 
 const std::vector<OpDef>& opDefs()
@@ -379,6 +506,10 @@ std::string_view mutatingOptionsHelp()
   --dry-run             return the full result and the would-be rev without
                         writing
   -o <out.map>          write the result to out.map instead of the map
+  --allow-locked        let ops edit locked nodes, and keep locked nodes in
+                        query targets (locked)
+  --allow-lossy         write even though the map did not load exactly
+                        (lossy_load)
 )";
 }
 
@@ -390,7 +521,11 @@ std::string opHelp(const OpDef& def)
   {
     const auto flag =
       fmt::format("--{} {}", flagName(arg.name), traits(arg.type).placeholder);
-    auto description = arg.required ? "required: " + arg.description : arg.description;
+    const auto isQueryTarget = acceptsQueryFlags(arg);
+    auto description =
+      arg.required ? (isQueryTarget ? "required unless --query is given: " : "required: ")
+                       + arg.description
+                   : arg.description;
     if (arg.defaultValue)
     {
       description += fmt::format(
@@ -398,8 +533,23 @@ std::string opHelp(const OpDef& def)
         arg.defaultValue->isString() ? arg.defaultValue->asString()
                                      : arg.defaultValue->dump());
     }
+    if (addressesNodes(arg))
+    {
+      description += fmt::format(" (accepts: {})", kindsHelp(arg));
+    }
     result += flag.size() < 22 ? fmt::format("  {:<22}{}\n", flag, description)
                                : fmt::format("  {}\n  {:<22}{}\n", flag, "", description);
+    if (isQueryTarget)
+    {
+      result += fmt::format(
+        "  {:<22}instead of --{}: the nodes a TbQl query matches\n"
+        "  {:<22}with --query: fail unless the query matches n nodes\n"
+        "  {:<22}(default: any); locked nodes are left out\n",
+        "--query <ql>",
+        QueryTargetArg,
+        "--expect <n | any>",
+        "");
+    }
   }
   result += "\noptions:\n";
   result += mutatingOptionsHelp();
@@ -423,6 +573,7 @@ std::vector<Op> parseBatch(const Json& batch)
   {
     attributeToOp(i, [&]() {
       auto op = parseOp(batch[i], i);
+      checkBindingReferences(op, bindings);
       if (const auto binding = op.binding(); binding && !bindings.insert(*binding).second)
       {
         throw invalidArgument(
@@ -436,9 +587,24 @@ std::vector<Op> parseBatch(const Json& batch)
 
 Op parseOpFlags(const OpDef& def, const OpFlags& flags)
 {
+  const auto acceptsQuery = std::ranges::any_of(def.args, acceptsQueryFlags);
+
   auto given = Json::object();
+  auto query = std::optional<std::string>{};
+  auto expect = std::optional<std::string>{};
   for (const auto& [flag, value] : flags)
   {
+    if (acceptsQuery && (flag == "query" || flag == "expect"))
+    {
+      auto& queryFlag = flag == "query" ? query : expect;
+      if (queryFlag)
+      {
+        throw invalidArgument(fmt::format("{}: --{} is given twice", def.name, flag));
+      }
+      queryFlag = value;
+      continue;
+    }
+
     const auto it = std::ranges::find_if(
       def.args, [&](const auto& arg) { return flagName(arg.name) == flag; });
     if (it == def.args.end())
@@ -461,7 +627,19 @@ Op parseOpFlags(const OpDef& def, const OpFlags& flags)
     given.set(it->name, std::move(*json));
   }
 
-  return Op{&def, checkArgs(def, given)};
+  if (query || expect)
+  {
+    if (given.find(QueryTargetArg))
+    {
+      throw invalidArgument(
+        fmt::format("{}: give either --{} or --query", def.name, QueryTargetArg));
+    }
+    given.set(std::string{QueryTargetArg}, queryTargetFromFlags(def.name, query, expect));
+  }
+
+  auto op = Op{&def, checkArgs(def, given)};
+  checkBindingReferences(op, {});
+  return op;
 }
 
 } // namespace tb::cli

@@ -65,7 +65,9 @@ commands:
                         run a JSON array of ops, read from a file or stdin,
                         all or nothing, and write the map once
   <op> <map> --<arg> <value>...
-                        run one op; tbcli <op> --help lists its arguments
+                        run one op; tbcli <op> --help lists its arguments.
+                        An op's target is --target <path>, or
+                        --query '<ql>' --expect <n | any>
   ops [--json]          the JSON Schema of every op
 
 node paths:
@@ -141,7 +143,7 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 12>{{
+constexpr auto CommandOptions = std::array<CommandOption, 14>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--offset", "query"},
@@ -154,6 +156,8 @@ constexpr auto CommandOptions = std::array<CommandOption, 12>{{
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
+  {"--allow-locked", {}, AcceptedBy::MutatingCommands},
+  {"--allow-lossy", {}, AcceptedBy::MutatingCommands},
 }};
 
 enum class OutputFormat
@@ -412,6 +416,16 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       noValue();
       result.applyOptions.dryRun = true;
+    }
+    else if (name == "--allow-locked")
+    {
+      noValue();
+      result.applyOptions.allowLocked = true;
+    }
+    else if (name == "--allow-lossy")
+    {
+      noValue();
+      result.applyOptions.allowLossy = true;
     }
     else if (!result.positionals.empty() && findOpDef(result.positionals.front()))
     {

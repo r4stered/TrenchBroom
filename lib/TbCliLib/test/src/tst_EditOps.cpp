@@ -151,6 +151,7 @@ TEST_CASE("create_box")
     CHECK_THAT(result.out, StartsWith("usage: tbcli create_box <map>"));
     CHECK_THAT(result.out, ContainsSubstring("--min <x,y,z>"));
     CHECK_THAT(result.out, ContainsSubstring("--parent <path>"));
+    CHECK_THAT(result.out, ContainsSubstring("(accepts: layer, group, brush_entity)"));
     CHECK_THAT(result.out, ContainsSubstring("(default: layer:0)"));
     CHECK_THAT(result.out, ContainsSubstring("--as <$name>"));
     CHECK_THAT(result.out, ContainsSubstring("--dry-run"));
@@ -186,6 +187,15 @@ TEST_CASE("delete")
       json["ops"][0]["removed"]
       == parseJsonLiteral(R"(["layer:0/entity:1/brush:0", "layer:0/entity:1"])"));
     CHECK(runJson({"describe", map})["counts"]["entities"] == Json{2});
+  }
+
+  SECTION("--help describes the target forms")
+  {
+    const auto result = runCli({"delete", "--help"});
+    CHECK_THAT(result.out, ContainsSubstring("--target <path>"));
+    CHECK_THAT(result.out, ContainsSubstring("--query <ql>"));
+    CHECK_THAT(result.out, ContainsSubstring("--expect <n | any>"));
+    CHECK_THAT(result.out, ContainsSubstring("--allow-locked"));
   }
 
   SECTION("refuses nodes that cannot be deleted")

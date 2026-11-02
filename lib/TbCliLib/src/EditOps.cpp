@@ -34,6 +34,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -45,26 +46,6 @@ namespace
 vm::vec3d toVec3(const Json& json)
 {
   return {json[0].asNumber(), json[1].asNumber(), json[2].asNumber()};
-}
-
-CliError wrongNodeKind(const std::string& message, const std::string& path)
-{
-  return CliError{ErrorCode::WrongNodeKind, message, path};
-}
-
-/** Whether the node at the given path can hold brushes: a layer, group or brush entity.
- */
-bool canHoldBrushes(const NodeOrFace& nodeOrFace)
-{
-  if (nodeOrFace.faceIndex)
-  {
-    return false;
-  }
-
-  const auto kind = kindOf(*nodeOrFace.node);
-  // an entity without brushes is a point entity
-  return canContain(kind, NodeKind::Brush)
-         && (kind != NodeKind::Entity || nodeOrFace.node->hasChildren());
 }
 
 } // namespace
@@ -94,16 +75,7 @@ void createBox(OpContext& context)
       ErrorCode::InvalidArgument, "create_box: \"material\" must not be empty"};
   }
 
-  const auto& parentPath = args["parent"].asString();
   const auto& parent = context.node("parent");
-  if (!canHoldBrushes(parent))
-  {
-    throw wrongNodeKind(
-      fmt::format(
-        "create_box: the parent {} must be a layer, a group or a brush entity",
-        parentPath),
-      parentPath);
-  }
 
   auto& map = context.map;
   const auto& faceAttribsConfig = map.gameInfo().gameConfig.faceAttribsConfig;
@@ -132,36 +104,45 @@ void createBox(OpContext& context)
 
 void deleteNode(OpContext& context)
 {
-  const auto& targetPath = context.args["target"].asString();
-  const auto& [target, faceIndex] = context.node("target");
-
-  // what a layer can contain can be deleted: groups, entities, brushes and patches
-  if (faceIndex || !canContain(NodeKind::Layer, kindOf(*target)))
+  // a node inside another target is removed with it
+  auto targets = std::vector<mdl::Node*>{};
+  for (const auto& [node, faceIndex] : context.targets("target"))
   {
-    throw wrongNodeKind(
-      fmt::format(
-        "delete: {} must be a group, an entity, a brush or a patch", targetPath),
-      targetPath);
+    targets.push_back(node);
+  }
+  if (targets.empty())
+  {
+    return;
   }
 
+  auto toRemove = targets;
+  std::erase_if(
+    toRemove, [&](const auto* node) { return node->isDescendantOf(targets); });
+
   auto ancestors = std::vector<mdl::Node*>{};
-  for (auto* parent = target->parent(); parent; parent = parent->parent())
+  for (auto* target : toRemove)
   {
-    ancestors.push_back(parent);
+    for (auto* parent = target->parent(); parent; parent = parent->parent())
+    {
+      if (std::ranges::find(ancestors, parent) == ancestors.end())
+      {
+        ancestors.push_back(parent);
+      }
+    }
   }
 
   auto& worldNode = context.map.worldNode();
-  mdl::removeNodes(context.map, {target});
+  mdl::removeNodes(context.map, toRemove);
 
   // Removing the last child of an entity or group also removes the emptied parent.
-  context.outcome.removed.push_back(target);
+  auto& removed = context.outcome.removed;
+  removed = targets;
   for (auto* ancestor : ancestors)
   {
-    if (ancestor == &worldNode || ancestor->isDescendantOf(worldNode))
+    if (!isInMap(*ancestor, worldNode))
     {
-      break;
+      removed.push_back(ancestor);
     }
-    context.outcome.removed.push_back(ancestor);
   }
 }
 

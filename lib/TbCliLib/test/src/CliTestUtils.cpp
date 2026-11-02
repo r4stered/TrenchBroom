@@ -20,6 +20,7 @@
 #include "CliTestUtils.h"
 
 #include "TestEnvironment.h"
+#include "cli/Config.h"
 
 #include <fstream>
 
@@ -104,6 +105,14 @@ Json quakeConfig()
   return config;
 }
 
+LoadedMap loadFixtureMap(const std::filesystem::path& fixture, Logger& logger)
+{
+  auto config = Config{};
+  config.gameConfig = quakeGameConfigPath();
+  config.fgd = {quakeFgdPath()};
+  return loadMap(fixturePath(fixture), config, logger);
+}
+
 RunResult runCli(const std::vector<std::string>& args, const std::string_view in)
 {
   auto result = run(args, in);
@@ -169,16 +178,17 @@ void checkError(
   }
 }
 
-EditFixture::EditFixture()
+EditFixture::EditFixture(const std::filesystem::path& fixture)
+  : fileName{fixture.filename()}
 {
   env.writeConfig({}, quakeConfig());
-  map = arg(env.copyFixture("maps/simple.map", "simple.map"));
-  original = env.readFile("simple.map");
+  map = arg(env.copyFixture(fixture, fileName));
+  original = env.readFile(fileName);
 }
 
 bool EditFixture::unchanged() const
 {
-  return env.readFile("simple.map") == original;
+  return env.readFile(fileName) == original;
 }
 
 RunResult EditFixture::apply(

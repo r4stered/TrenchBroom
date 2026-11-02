@@ -36,8 +36,8 @@ struct OpContext;
 void createBox(OpContext& context);
 
 /**
- * `delete {target}`: removes a group, entity, brush or patch. An entity or group left
- * empty is removed with it and is reported as removed, too.
+ * `delete {target}`: removes groups, entities, brushes and patches. An entity or group
+ * left empty is removed with them and is reported as removed after the targets.
  */
 void deleteNode(OpContext& context);
 

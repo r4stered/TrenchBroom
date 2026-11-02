@@ -18,6 +18,9 @@
  */
 
 #include "CliTestUtils.h"
+#include "base/Logger.h"
+#include "cli/NodePath.h"
+#include "cli/Query.h"
 
 #include <string>
 #include <vector>
@@ -244,6 +247,29 @@ TEST_CASE("query")
     REQUIRE(result.exitCode == 0);
     CHECK_THAT(result.out, ContainsSubstring("schema: tbcli.query/1"));
     CHECK_THAT(result.out, ContainsSubstring("path: layer:0/brush:0"));
+  }
+
+  SECTION("queryMatches")
+  {
+    auto logger = NullLogger{};
+    auto loadedMap = loadFixtureMap("maps/query.map", logger);
+    auto& loaded = *loadedMap.map;
+
+    const auto pathsOf = [](const std::vector<NodeOrFace>& matches) {
+      auto result = std::vector<std::string>{};
+      for (const auto& match : matches)
+      {
+        CHECK(!match.faceIndex);
+        result.push_back(nodePath(*match.node));
+      }
+      return result;
+    };
+
+    CHECK(pathsOf(queryMatches(loaded, R"(type is "brush")")) == allBrushes);
+
+    const auto all = queryMatches(loaded, std::nullopt);
+    CHECK(all.size() == 12);
+    CHECK(pathsOf(all).front() == "layer:0");
   }
 
   SECTION("errors")

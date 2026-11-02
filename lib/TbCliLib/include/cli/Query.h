@@ -19,11 +19,19 @@
 
 #pragma once
 
+#include "cli/NodePath.h"
+
 #include "vm/bbox.h"
 
 #include <cstddef>
 #include <optional>
 #include <string>
+#include <vector>
+
+namespace tb::mdl
+{
+class Map;
+}
 
 namespace tb::cli
 {
@@ -49,6 +57,13 @@ struct QueryOptions
   /** Keep matches whose bounds overlap the bounds of the node or face at this path. */
   std::optional<std::string> touching;
 };
+
+/**
+ * The nodes or faces that a TbQl query matches, or every node but the world if there is
+ * no query, in file order: a node precedes its descendants, and a brush its faces.
+ */
+std::vector<NodeOrFace> queryMatches(
+  mdl::Map& map, const std::optional<std::string>& query);
 
 /**
  * The `tbcli.query/1` result: `{schema, rev, items, total, truncated}`, or

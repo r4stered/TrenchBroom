@@ -57,6 +57,7 @@ TEST_CASE("apply")
       "warnings": []
     }])"));
     CHECK(json["bindings"] == Json::object());
+    CHECK(json.find("warnings") == nullptr);
     CHECK(brushCount(map) == 4);
   }
 
@@ -278,6 +279,409 @@ TEST_CASE("apply")
     checkError(runCli({"describe", map, "--dry-run"}), "usage", 2);
     checkError(runCli({"show", map, "world", "--expect-rev", "x"}), "usage", 2);
     checkError(runCli({"query", map, "-o", "out.map"}), "usage", 2);
+  }
+
+  SECTION("targets")
+  {
+    // maps/targets.map: layer:0 holds brush:0, the brush entity entity:0 (func_door) and
+    // group:0 (id 5) with two brushes; layer:1 is locked and holds brush:0 and the point
+    // entity entity:0 (light); layer:2 is hidden and holds brush:0
+    auto targetsFixture = EditFixture{"maps/targets.map"};
+    const auto& targetsMap = targetsFixture.map;
+
+    SECTION("bindings")
+    {
+      SECTION("later ops can target the nodes an earlier op bound")
+      {
+        const auto json = parseOutput(targetsFixture.apply(R"([
+          {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
+          {"op": "delete", "target": "$box"}
+        ])"));
+        CHECK(json["ops"][0]["created"] == Json::array());
+        // the box was never in the input rev, so it has no path to report
+        CHECK(json["ops"][1]["removed"] == Json::array());
+        CHECK(json["bindings"] == Json::object());
+        CHECK(brushCount(targetsMap) == 6);
+      }
+
+      SECTION("a list can mix paths and bindings")
+      {
+        const auto json = parseOutput(targetsFixture.apply(R"([
+          {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
+          {"op": "delete", "target": ["$box", "layer:0/brush:0"]}
+        ])"));
+        CHECK(json["ops"][1]["removed"] == parseJsonLiteral(R"(["layer:0/brush:0"])"));
+        CHECK(brushCount(targetsMap) == 5);
+      }
+
+      SECTION("a binding can name the parent of a later op")
+      {
+        // a binding to a brush is accepted as a path argument, and its kind is checked
+        const auto result = targetsFixture.apply(R"([
+          {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
+          {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "parent": "$box"}
+        ])");
+        checkError(result, "wrong_node_kind", 1, 1);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"$box"});
+      }
+
+      SECTION("a binding must be bound by an earlier op")
+      {
+        checkError(
+          targetsFixture.apply(R"([{"op": "delete", "target": "$box"}])"),
+          "invalid_argument",
+          2,
+          0);
+        checkError(
+          targetsFixture.apply(R"([
+            {"op": "delete", "target": ["layer:0/brush:0", "$box"]},
+            {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"}
+          ])"),
+          "invalid_argument",
+          2,
+          0);
+        checkError(
+          runCli({"delete", targetsMap, "--target", "$box"}), "invalid_argument", 2);
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("created nodes are reachable only through bindings")
+      {
+        // layer:0/brush:1 is where the box ends up, but paths address the input rev
+        const auto result = targetsFixture.apply(
+          fmt::format(
+            R"([{}, {{"op": "delete", "target": "layer:0/brush:1"}}])", CreateBoxOp));
+        checkError(result, "node_not_found", 1, 1);
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("targeting a binding whose node was deleted fails")
+      {
+        const auto result = targetsFixture.apply(R"([
+          {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
+          {"op": "delete", "target": "$box"},
+          {"op": "delete", "target": "$box"}
+        ])");
+        checkError(result, "target_deleted", 1, 2);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"$box"});
+        CHECK(targetsFixture.unchanged());
+      }
+    }
+
+    SECTION("lists of paths")
+    {
+      SECTION("an op acts on every node of a list")
+      {
+        const auto json = parseOutput(targetsFixture.apply(R"([
+          {"op": "delete", "target": ["layer:0/entity:0", "layer:0/brush:0"]}
+        ])"));
+        CHECK(
+          json["ops"][0]["removed"]
+          == parseJsonLiteral(R"(["layer:0/entity:0", "layer:0/brush:0"])"));
+        CHECK(brushCount(targetsMap) == 4);
+      }
+
+      SECTION("a node named twice, or inside another named node, is acted on once")
+      {
+        const auto json =
+          parseOutput(targetsFixture.apply(R"([{"op": "delete", "target": [
+          "layer:0/group:0", "layer:0/group:0/brush:1", "layer:0/group:0"
+        ]}])"));
+        CHECK(
+          json["ops"][0]["removed"]
+          == parseJsonLiteral(R"(["layer:0/group:0", "layer:0/group:0/brush:1"])"));
+        CHECK(brushCount(targetsMap) == 4);
+      }
+
+      SECTION("a node deleted earlier in the batch fails")
+      {
+        const auto result = targetsFixture.apply(R"([
+          {"op": "delete", "target": "layer:0/group:0"},
+          {"op": "delete", "target": ["layer:0/brush:0", "layer:0/group:0/brush:0"]}
+        ])");
+        checkError(result, "target_deleted", 1, 1);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:0/brush:0"});
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("every path is resolved up front")
+      {
+        const auto result = targetsFixture.apply(R"([
+          {"op": "delete", "target": ["layer:0/brush:0", "layer:0/brush:9"]}
+        ])");
+        checkError(result, "node_not_found", 1, 0);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/brush:9"});
+      }
+    }
+
+    SECTION("query targets")
+    {
+      SECTION("act on every match")
+      {
+        const auto json = parseOutput(targetsFixture.apply(R"([
+          {"op": "delete", "target": {"query": "classname is \"func_door\"", "expect": 1}}
+        ])"));
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:0/entity:0"])"));
+        CHECK(brushCount(targetsMap) == 5);
+      }
+
+      SECTION("expect defaults to any")
+      {
+        const auto json = parseOutput(targetsFixture.apply(R"([
+          {"op": "delete", "target": {"query": "classname is \"nothing\""}},
+          {"op": "delete", "target": {"query": "classname is \"func_door\"", "expect": "any"}}
+        ])"));
+        CHECK(json["ops"][0]["removed"] == Json::array());
+        CHECK(json["ops"][1]["removed"] == parseJsonLiteral(R"(["layer:0/entity:0"])"));
+      }
+
+      SECTION("a match count other than expect fails with expect_mismatch")
+      {
+        const auto result = targetsFixture.apply(
+          fmt::format(
+            R"([{}, {{"op": "delete", "target": {{"query": "type is \"brush\"", "expect": 4}}}}])",
+            CreateBoxOp));
+        checkError(result, "expect_mismatch", 1, 1);
+        CHECK_THAT(
+          parseOutput(result)["error"]["message"].asString(), ContainsSubstring("5"));
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("resolve against the input rev")
+      {
+        // the box the first op creates is not matched, and the door brush that the second
+        // op deletes is still matched, so the third op fails
+        const auto result = targetsFixture.apply(
+          fmt::format(
+            R"([{}, {{"op": "delete", "target": "layer:0/entity:0"}},
+              {{"op": "delete", "target": {{"query": "type is \"brush\"", "expect": 5}}}}])",
+            CreateBoxOp));
+        checkError(result, "target_deleted", 1, 2);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/entity:0/brush:0"});
+      }
+
+      SECTION("a match of a kind the op does not accept fails")
+      {
+        const auto result = targetsFixture.apply(R"([
+          {"op": "delete", "target": {"query": "material is \"floor\""}}
+        ])");
+        checkError(result, "wrong_node_kind", 1, 0);
+        CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/brush:0/face:0"});
+      }
+
+      SECTION("malformed targets are refused")
+      {
+        const auto target = GENERATE(
+          R"({"query": 3})",
+          R"({"expect": 1})",
+          R"({"query": "true", "expect": -1})",
+          R"({"query": "true", "expect": 1.5})",
+          R"({"query": "true", "expect": "some"})",
+          R"({"query": "true", "limit": 2})",
+          R"([])",
+          R"([3])",
+          R"("$1box")");
+        CAPTURE(target);
+        checkError(
+          targetsFixture.apply(
+            fmt::format(R"([{{"op": "delete", "target": {}}}])", target)),
+          "invalid_argument",
+          2,
+          0);
+      }
+    }
+
+    SECTION("locks")
+    {
+      SECTION("an op on a locked node fails")
+      {
+        const auto target = GENERATE("layer:1/brush:0", "layer:1/entity:0");
+        CAPTURE(target);
+        const auto result = runCli({"delete", targetsMap, "--target", target});
+        checkError(result, "locked", 1, 0);
+        CHECK(parseOutput(result)["error"]["node"] == Json{target});
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("an op in a locked container fails")
+      {
+        checkError(
+          targetsFixture.apply(
+            R"([{"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8],
+                             "material": "a", "parent": "layer:1"}])"),
+          "locked",
+          1,
+          0);
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("--allow-locked lets ops edit locked nodes")
+      {
+        const auto json = runJson(
+          {"delete", targetsMap, "--target", "layer:1/brush:0", "--allow-locked"});
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:1/brush:0"])"));
+        CHECK(brushCount(targetsMap) == 5);
+      }
+
+      SECTION("locked nodes are dropped from query results before the expect check")
+      {
+        checkError(
+          targetsFixture.apply(R"([{"op": "delete", "target":
+            {"query": "classname is \"light\"", "expect": 1}}])"),
+          "expect_mismatch",
+          1,
+          0);
+
+        const auto json = parseOutput(targetsFixture.apply(R"([{"op": "delete", "target":
+          {"query": "type is \"brush\"", "expect": 5}}])"));
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"([
+          "layer:0/brush:0",
+          "layer:0/entity:0/brush:0",
+          "layer:0/group:0/brush:0",
+          "layer:0/group:0/brush:1",
+          "layer:2/brush:0",
+          "layer:0/entity:0",
+          "layer:0/group:0"
+        ])"));
+      }
+
+      SECTION("--allow-locked keeps locked nodes in query results")
+      {
+        const auto json = parseOutput(targetsFixture.apply(
+          R"([{"op": "delete", "target": {"query": "classname is \"light\"", "expect": 1}}])",
+          {"--allow-locked"}));
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:1/entity:0"])"));
+      }
+
+      SECTION("hidden nodes are targeted like any other")
+      {
+        const auto json = runJson({"delete", targetsMap, "--target", "layer:2/brush:0"});
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:2/brush:0"])"));
+      }
+
+      SECTION("--allow-locked is refused by other commands")
+      {
+        checkError(runCli({"describe", targetsMap, "--allow-locked"}), "usage", 2);
+      }
+    }
+
+    SECTION("subcommand targets")
+    {
+      SECTION("--query and --expect give a query target")
+      {
+        const auto json = runJson(
+          {"delete",
+           targetsMap,
+           "--query",
+           R"(classname is "func_door")",
+           "--expect",
+           "1"});
+        CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:0/entity:0"])"));
+      }
+
+      SECTION("--expect accepts any and defaults to it")
+      {
+        CHECK(
+          runJson({"delete", targetsMap, "--query", R"(type is "brush")", "--dry-run"})
+          == runJson(
+            {"delete",
+             targetsMap,
+             "--query",
+             R"(type is "brush")",
+             "--expect",
+             "any",
+             "--dry-run"}));
+      }
+
+      SECTION("a match count other than --expect fails")
+      {
+        checkError(
+          runCli(
+            {"delete", targetsMap, "--query", R"(type is "brush")", "--expect", "2"}),
+          "expect_mismatch",
+          1,
+          0);
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("malformed target flags are refused")
+      {
+        const auto flags = GENERATE(
+          std::vector<std::string>{"--expect", "1"},
+          std::vector<std::string>{"--target", "layer:0/brush:0", "--query", "true"},
+          std::vector<std::string>{"--query", "true", "--expect", "-1"},
+          std::vector<std::string>{"--query", "true", "--expect", "x"},
+          std::vector<std::string>{"--query", "true", "--query", "true"});
+        auto args = std::vector<std::string>{"delete", targetsMap};
+        args.insert(args.end(), flags.begin(), flags.end());
+        CAPTURE(args);
+        checkError(runCli(args), "invalid_argument", 2);
+        CHECK(targetsFixture.unchanged());
+      }
+
+      SECTION("ops without a target refuse --query")
+      {
+        checkError(
+          runCli(
+            {"create_box",
+             targetsMap,
+             "--min=0,0,0",
+             "--max=8,8,8",
+             "--material=a",
+             "--query=true"}),
+          "invalid_argument",
+          2);
+      }
+    }
+  }
+
+  SECTION("after a lossy load")
+  {
+    // maps/lossy.map is maps/simple.map with a face whose plane points coincide
+    auto lossyFixture = EditFixture{"maps/lossy.map"};
+    const auto& lossyMap = lossyFixture.map;
+
+    SECTION("mutating commands refuse to write")
+    {
+      const auto result = lossyFixture.apply(fmt::format("[{}]", CreateBoxOp));
+      checkError(result, "lossy_load", 1);
+      CHECK_THAT(
+        parseOutput(result)["error"]["message"].asString(),
+        ContainsSubstring("--allow-lossy"));
+      CHECK(lossyFixture.unchanged());
+
+      checkError(
+        runCli({"delete", lossyMap, "--target", "layer:0/brush:0"}), "lossy_load", 1);
+      CHECK(lossyFixture.unchanged());
+    }
+
+    SECTION("a dry run previews the edit with a lossy_load warning")
+    {
+      const auto json =
+        parseOutput(lossyFixture.apply(fmt::format("[{}]", CreateBoxOp), {"--dry-run"}));
+      CHECK(json["ops"][0]["created"] == parseJsonLiteral(R"(["layer:0/brush:1"])"));
+      CHECK(json["warnings"] == parseJsonLiteral(R"(["lossy_load"])"));
+      CHECK(lossyFixture.unchanged());
+    }
+
+    SECTION("--allow-lossy writes anyway")
+    {
+      const auto result =
+        lossyFixture.apply(fmt::format("[{}]", CreateBoxOp), {"--allow-lossy"});
+      REQUIRE(result.exitCode == 0);
+      CHECK(parseOutput(result)["warnings"] == parseJsonLiteral(R"(["lossy_load"])"));
+      CHECK(!lossyFixture.unchanged());
+    }
+
+    SECTION("read commands still work")
+    {
+      CHECK(runCli({"describe", lossyMap}).exitCode == 0);
+    }
+
+    SECTION("--allow-lossy is refused by other commands")
+    {
+      checkError(runCli({"describe", lossyMap, "--allow-lossy"}), "usage", 2);
+    }
   }
 }
 

@@ -56,6 +56,12 @@ std::string_view toString(const ErrorCode code)
     return "write_failed";
   case ErrorCode::TargetDeleted:
     return "target_deleted";
+  case ErrorCode::Locked:
+    return "locked";
+  case ErrorCode::ExpectMismatch:
+    return "expect_mismatch";
+  case ErrorCode::LossyLoad:
+    return "lossy_load";
   case ErrorCode::OpFailed:
     return "op_failed";
   case ErrorCode::InternalError:

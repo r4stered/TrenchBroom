@@ -82,37 +82,6 @@ void sortInFileOrder(std::vector<NodeOrFace>& matches, mdl::WorldNode& worldNode
   });
 }
 
-std::vector<NodeOrFace> evaluate(
-  mdl::Map& map, const std::optional<std::string>& queryText)
-{
-  auto matches = std::vector<NodeOrFace>{};
-  if (!queryText)
-  {
-    collectDescendants(map.worldNode(), matches);
-    return matches;
-  }
-
-  std::visit(
-    kdl::overload(
-      [&](const std::vector<mdl::Node*>& nodes) {
-        for (auto* node : nodes)
-        {
-          matches.push_back({node, std::nullopt});
-        }
-      },
-      [&](const std::vector<mdl::BrushFaceHandle>& handles) {
-        for (const auto& handle : handles)
-        {
-          matches.push_back({&handle.node(), handle.faceIndex()});
-        }
-      }),
-    ql::evaluateQuery(map, ql::parseQuery(*queryText)));
-
-  // the query returns nodes in no particular order
-  sortInFileOrder(matches, map.worldNode());
-  return matches;
-}
-
 std::optional<vm::bbox3d> contentsBounds(const mdl::Node& node)
 {
   return summarize(collectContents(node)).bounds;
@@ -189,6 +158,37 @@ NodeOrFace resolveTouchingReference(mdl::WorldNode& worldNode, const std::string
 
 } // namespace
 
+std::vector<NodeOrFace> queryMatches(
+  mdl::Map& map, const std::optional<std::string>& queryText)
+{
+  auto matches = std::vector<NodeOrFace>{};
+  if (!queryText)
+  {
+    collectDescendants(map.worldNode(), matches);
+    return matches;
+  }
+
+  std::visit(
+    kdl::overload(
+      [&](const std::vector<mdl::Node*>& nodes) {
+        for (auto* node : nodes)
+        {
+          matches.push_back({node, std::nullopt});
+        }
+      },
+      [&](const std::vector<mdl::BrushFaceHandle>& handles) {
+        for (const auto& handle : handles)
+        {
+          matches.push_back({&handle.node(), handle.faceIndex()});
+        }
+      }),
+    ql::evaluateQuery(map, ql::parseQuery(*queryText)));
+
+  // the query returns nodes in no particular order
+  sortInFileOrder(matches, map.worldNode());
+  return matches;
+}
+
 Json query(LoadedMap& loadedMap, const QueryOptions& options)
 {
   auto& map = *loadedMap.map;
@@ -199,7 +199,7 @@ Json query(LoadedMap& loadedMap, const QueryOptions& options)
                         });
   const auto touchingBounds = touching | kdl::optional_and_then(matchBounds);
 
-  auto matches = evaluate(map, options.query);
+  auto matches = queryMatches(map, options.query);
   std::erase_if(matches, [&](const auto& match) {
     const auto bounds = matchBounds(match);
     if (!bounds)

@@ -22,6 +22,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Sha256.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Show.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextFormat.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS

@@ -40,20 +40,28 @@ struct ApplyOptions
   bool dryRun = false;
   /** Write the result here instead of over the map. */
   std::optional<std::filesystem::path> output;
+  /** Let ops edit locked nodes, and keep locked nodes in query targets. */
+  bool allowLocked = false;
+  /** Write even though the load was lossy. A dry run never writes, so it needs none. */
+  bool allowLossy = false;
 };
 
 /**
  * Runs the given ops against the loaded map, all or nothing, and writes the map once,
  * atomically. Returns the `tbcli.apply/1` result
- * `{schema, rev, ops: [{ok, created, modified, removed, warnings}], bindings}`, where
+ * `{schema, rev, ops: [{ok, created, modified, removed, warnings}], bindings,
+ * warnings?}`, where
  * `rev` is the rev of the written (or, with `dryRun`, would-be) file, `created`,
  * `modified` and the bindings are paths in that rev, and `removed` are paths in the
- * input rev.
+ * input rev. The top-level `warnings` is `["lossy_load"]` if the load was lossy.
  *
- * Node path arguments are resolved against the input rev before the first op runs, so
- * that earlier ops cannot shift what later ops address.
+ * Node paths and query targets are resolved against the input rev before the first op
+ * runs, so that earlier ops cannot shift what later ops address; bindings name the nodes
+ * that earlier ops created. Before each op runs, its targets are checked against the
+ * kinds the op accepts and against locks.
  *
- * @throw CliError `stale_rev` if the map's rev is not `expectRev`; the error of the
+ * @throw CliError `stale_rev` if the map's rev is not `expectRev`; `lossy_load` if the
+ * load was lossy and neither `allowLossy` nor `dryRun` is set; the error of the
  * first failing op, with its `op_index`; `write_failed` if the write cannot be
  * confirmed. Nothing is written in any of these cases.
  */

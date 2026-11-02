@@ -23,6 +23,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace kdl
 {
@@ -56,6 +57,11 @@ struct LoadedMap
 {
   /** The short SHA-256 prefix of the file's bytes as they were loaded. */
   std::string rev;
+  /**
+   * What the reader skipped or changed while loading, as it logged it. A load with any
+   * such problems is lossy: saving would not write back what the file holds.
+   */
+  std::vector<std::string> loadProblems;
 
   std::unique_ptr<kdl::task_manager> taskManager;
   std::unique_ptr<gl::ResourceManager> resourceManager;
@@ -77,7 +83,8 @@ std::string computeRev(std::string_view bytes);
  * Loads the given Valve 220 map using the game config and FGD from the given config.
  * No GL context and no Quake directory are required.
  *
- * Content the reader skips (such as invalid faces) is logged and does not fail the load.
+ * Content the reader skips or changes (such as invalid faces) is logged and recorded in
+ * `loadProblems`, and does not fail the load.
  *
  * @throw CliError if the map cannot be read, is not a Valve 220 map, does not parse, or
  * the configuration is incomplete

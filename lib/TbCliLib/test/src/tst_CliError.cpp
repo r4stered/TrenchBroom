@@ -38,6 +38,9 @@ TEST_CASE("CliError")
       T{ErrorCode::StaleRev, 3},
       T{ErrorCode::WriteFailed, 1},
       T{ErrorCode::TargetDeleted, 1},
+      T{ErrorCode::Locked, 1},
+      T{ErrorCode::ExpectMismatch, 1},
+      T{ErrorCode::LossyLoad, 1},
       T{ErrorCode::OpFailed, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
