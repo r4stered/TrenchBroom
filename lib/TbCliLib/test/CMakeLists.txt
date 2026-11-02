@@ -7,9 +7,11 @@ target_link_libraries(TbCliFakeCompiler PRIVATE CompilerConfig)
 
 add_executable(TbCliLibTest)
 EMBED_UTF8_MANIFEST(TbCliLibTest)
-add_dependencies(TbCliLibTest TbCliFakeCompiler)
+# tst_Executable runs the built tbcli
+add_dependencies(TbCliLibTest TbCliFakeCompiler TbCli)
 target_compile_definitions(TbCliLibTest PRIVATE
   TB_CLI_FAKE_COMPILER="$<TARGET_FILE:TbCliFakeCompiler>"
+  TB_CLI_EXECUTABLE="$<TARGET_FILE:TbCli>"
 )
 
 target_sources(TbCliLibTest PRIVATE
@@ -24,6 +26,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityJson.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Executable.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FaceOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Fgd.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FileUtils.cpp
