@@ -1,0 +1,62 @@
+/*
+ Copyright (C) 2026 Drew Williams
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace tb::cli
+{
+
+class Json;
+struct LoadedMap;
+struct Op;
+
+/** The options that every mutating command accepts. */
+struct ApplyOptions
+{
+  /** Refuse to run unless the map's rev is this one. */
+  std::optional<std::string> expectRev;
+  /** Return the result without writing anything. */
+  bool dryRun = false;
+  /** Write the result here instead of over the map. */
+  std::optional<std::filesystem::path> output;
+};
+
+/**
+ * Runs the given ops against the loaded map, all or nothing, and writes the map once,
+ * atomically. Returns the `tbcli.apply/1` result
+ * `{schema, rev, ops: [{ok, created, modified, removed, warnings}], bindings}`, where
+ * `rev` is the rev of the written (or, with `dryRun`, would-be) file, `created`,
+ * `modified` and the bindings are paths in that rev, and `removed` are paths in the
+ * input rev.
+ *
+ * Node path arguments are resolved against the input rev before the first op runs, so
+ * that earlier ops cannot shift what later ops address.
+ *
+ * @throw CliError `stale_rev` if the map's rev is not `expectRev`; the error of the
+ * first failing op, with its `op_index`; `write_failed` if the write cannot be
+ * confirmed. Nothing is written in any of these cases.
+ */
+Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions& options);
+
+} // namespace tb::cli

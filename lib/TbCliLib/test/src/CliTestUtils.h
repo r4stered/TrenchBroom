@@ -23,7 +23,9 @@
 #include "cli/Run.h"
 #include "fs/TestEnvironment.h"
 
+#include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -98,6 +100,48 @@ Json parseOutput(const RunResult& result);
 
 /** Parses a JSON literal written in a test, failing the test if it is not valid JSON. */
 Json parseJsonLiteral(std::string_view str);
+
+/** Calls tbcli in-process, requires it to succeed and returns its parsed output. */
+Json runJson(const std::vector<std::string>& args, std::string_view in = {});
+
+/** The rev that describe reports for the given map. */
+std::string revOf(const std::string& map);
+
+/** The number of brushes that describe reports for the given map. */
+size_t brushCount(const std::string& map);
+
+/**
+ * Checks that the result is an error envelope with the given code and exit code, and
+ * with the given `op_index` or none.
+ */
+void checkError(
+  const RunResult& result,
+  const std::string& code,
+  int exitCode,
+  std::optional<size_t> opIndex = std::nullopt);
+
+/** A batch entry that creates a box in the default layer. */
+inline constexpr auto CreateBoxOp = std::string_view{
+  R"({"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "floor"})"};
+
+/**
+ * For edit tests: the fixture map maps/simple.map copied into a temp dir with a
+ * tbcli.json, and its original contents.
+ */
+struct EditFixture
+{
+  CliTestEnvironment env;
+  std::string map;
+  std::string original;
+
+  EditFixture();
+
+  /** Whether the map file still has its original contents. */
+  bool unchanged() const;
+
+  /** Runs `apply <map> -` with the given batch on stdin and the given options. */
+  RunResult apply(std::string_view batch, const std::vector<std::string>& options = {});
+};
 
 } // namespace tb::cli
 

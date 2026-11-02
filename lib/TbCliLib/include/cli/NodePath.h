@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 
 namespace tb::mdl
 {
@@ -37,6 +38,24 @@ namespace tb::cli
 /** The path of the world node, which is also the worldspawn entity. */
 inline constexpr auto WorldPath = std::string_view{"world"};
 
+/** What a node path segment names. */
+enum class NodeKind
+{
+  World,
+  Layer,
+  Group,
+  Entity,
+  Brush,
+  Patch,
+  Face,
+};
+
+/** The kind of the given node; never Face. */
+NodeKind kindOf(const mdl::Node& node);
+
+/** Whether a node of the kind `parent` can contain a node of the kind `kind`. */
+bool canContain(NodeKind parent, NodeKind kind);
+
 /**
  * The node path of the given node: `layer:<n>/group:<n>/entity:<n>/brush:<n>`, where
  * each index counts the preceding siblings of the same kind in file order. `layer:0`
@@ -45,6 +64,13 @@ inline constexpr auto WorldPath = std::string_view{"world"};
  * Paths are positional and only valid for the rev they were computed from.
  */
 std::string nodePath(const mdl::Node& node);
+
+/**
+ * The paths of the world and every node below it, as nodePath returns them, computed in
+ * one pass over the map.
+ */
+std::unordered_map<const mdl::Node*, std::string> nodePaths(
+  const mdl::WorldNode& worldNode);
 
 /** The path of a brush face: the brush's path followed by `face:<index>`. */
 std::string facePath(const mdl::BrushNode& brushNode, size_t faceIndex);

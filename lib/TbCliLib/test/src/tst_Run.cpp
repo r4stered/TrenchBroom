@@ -329,4 +329,16 @@ TEST_CASE("run")
   }
 }
 
+TEST_CASE("readsStdin")
+{
+  CHECK(readsStdin({"apply", "x.map", "-"}));
+  CHECK(readsStdin({"apply", "--dry-run", "x.map", "-", "-o", "out.map"}));
+  CHECK(!readsStdin({"apply", "x.map", "batch.json"}));
+  CHECK(!readsStdin({"apply", "x.map", "batch.json", "-o", "-"}));
+  CHECK(!readsStdin({"create_box", "x.map", "--material", "-"}));
+  CHECK(!readsStdin({"apply", "x.map", "-", "--help"}));
+  CHECK(!readsStdin({"apply", "x.map", "-", "--frobnicate"}));
+  CHECK(!readsStdin({}));
+}
+
 } // namespace tb::cli

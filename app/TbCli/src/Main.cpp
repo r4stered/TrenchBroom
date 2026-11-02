@@ -20,15 +20,29 @@
 #include "cli/Run.h"
 
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 int main(int argc, char** argv)
 {
   const auto args = std::vector<std::string>(argv + 1, argv + argc);
 
-  // No command reads stdin yet; it is passed through once one does.
-  const auto result = tb::cli::run(args);
+  auto in = std::string{};
+  if (tb::cli::readsStdin(args))
+  {
+#ifdef _WIN32
+    _setmode(_fileno(stdin), _O_BINARY);
+#endif
+    in.assign(std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{});
+  }
+
+  const auto result = tb::cli::run(args, in);
   std::cerr << result.err << std::flush;
   std::cout << result.out << std::flush;
   return result.exitCode;

@@ -871,21 +871,23 @@ Result<void> Map::saveTo(const std::filesystem::path& path) const
 
   m_logger.info() << "Saving document to " << path;
 
+  kdl::with_ostream(path, [&](auto& stream) { saveTo(stream); })
+    | kdl::transform_error(
+      [&](const auto& e) { m_logger.error() << "Could not save document: " << e.msg; });
+
+  return Result<void>{};
+}
+
+void Map::saveTo(std::ostream& stream) const
+{
   const auto generator =
     fmt::format("TrenchBroom {} (Build {})", VERSION_STR, BUILD_ID_STR);
 
-  kdl::with_ostream(path, [&](auto& stream) {
-    writeMapHeader(
-      stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
+  writeMapHeader(stream, gameInfo().gameConfig.name, m_worldNode->mapFormat(), generator);
 
-    auto writer = NodeWriter{*m_worldNode, stream};
-    writer.setExporting(false);
-    writer.writeMap(m_taskManager);
-  }) | kdl::transform_error([&](const auto& e) {
-    m_logger.error() << "Could not save document: " << e.msg;
-  });
-
-  return Result<void>{};
+  auto writer = NodeWriter{*m_worldNode, stream};
+  writer.setExporting(false);
+  writer.writeMap(m_taskManager);
 }
 
 Result<void> Map::exportAs(const ExportOptions& options) const

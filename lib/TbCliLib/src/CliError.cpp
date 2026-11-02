@@ -46,6 +46,18 @@ std::string_view toString(const ErrorCode code)
     return "wrong_node_kind";
   case ErrorCode::UndefinedClass:
     return "undefined_class";
+  case ErrorCode::InvalidBatch:
+    return "invalid_batch";
+  case ErrorCode::InvalidArgument:
+    return "invalid_argument";
+  case ErrorCode::StaleRev:
+    return "stale_rev";
+  case ErrorCode::WriteFailed:
+    return "write_failed";
+  case ErrorCode::TargetDeleted:
+    return "target_deleted";
+  case ErrorCode::OpFailed:
+    return "op_failed";
   case ErrorCode::InternalError:
     return "internal_error";
   }
@@ -71,7 +83,17 @@ ErrorCode CliError::code() const
 
 int CliError::exitCode() const
 {
-  return m_code == ErrorCode::Usage ? ExitCode::Usage : ExitCode::Failed;
+  switch (m_code)
+  {
+  case ErrorCode::Usage:
+  case ErrorCode::InvalidBatch:
+  case ErrorCode::InvalidArgument:
+    return ExitCode::Usage;
+  case ErrorCode::StaleRev:
+    return ExitCode::StaleRev;
+  default:
+    return ExitCode::Failed;
+  }
 }
 
 const std::optional<std::string>& CliError::node() const
@@ -82,6 +104,18 @@ const std::optional<std::string>& CliError::node() const
 const std::optional<size_t>& CliError::line() const
 {
   return m_line;
+}
+
+const std::optional<size_t>& CliError::opIndex() const
+{
+  return m_opIndex;
+}
+
+CliError CliError::withOpIndex(const size_t opIndex) const
+{
+  auto result = *this;
+  result.m_opIndex = opIndex;
+  return result;
 }
 
 Json CliError::toJson() const
@@ -96,6 +130,10 @@ Json CliError::toJson() const
   if (m_line)
   {
     error.set("line", *m_line);
+  }
+  if (m_opIndex)
+  {
+    error.set("op_index", *m_opIndex);
   }
 
   auto result = Json::object();

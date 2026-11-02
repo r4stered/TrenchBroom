@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace tb::cli
 {
@@ -37,5 +38,11 @@ std::optional<size_t> parseUnsigned(std::string_view str);
  * whole string is such a number.
  */
 std::optional<double> parseDecimal(std::string_view str);
+
+/**
+ * The numbers of a list such as `1,2.5,-3` or `1 2.5 -3`, separated by commas, spaces
+ * or both, or nothing if any element is not a decimal number (see parseDecimal).
+ */
+std::optional<std::vector<double>> parseNumberList(std::string_view str);
 
 } // namespace tb::cli

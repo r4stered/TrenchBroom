@@ -74,6 +74,17 @@ TEST_CASE("ParseUtils")
     CAPTURE(invalid);
     CHECK(parseDecimal(invalid) == std::nullopt);
   }
+
+  SECTION("parseNumberList")
+  {
+    using Numbers = std::vector<double>;
+    CHECK(parseNumberList("1,2.5,-3") == Numbers{1.0, 2.5, -3.0});
+    CHECK(parseNumberList("1 2.5  -3") == Numbers{1.0, 2.5, -3.0});
+    CHECK(parseNumberList("1, 2,,3 ") == Numbers{1.0, 2.0, 3.0});
+    CHECK(parseNumberList("") == Numbers{});
+    CHECK(parseNumberList("1,x,3") == std::nullopt);
+    CHECK(parseNumberList("1;2") == std::nullopt);
+  }
 }
 
 } // namespace tb::cli

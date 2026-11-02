@@ -40,8 +40,9 @@ class ResourceManager;
 
 namespace mdl
 {
+struct GameInfo;
 class Map;
-}
+} // namespace mdl
 
 namespace cli
 {
@@ -58,6 +59,8 @@ struct LoadedMap
 
   std::unique_ptr<kdl::task_manager> taskManager;
   std::unique_ptr<gl::ResourceManager> resourceManager;
+  /** Referenced by the map, which does not own it. */
+  std::unique_ptr<mdl::GameInfo> gameInfo;
   // declared last so that it is destroyed first
   std::unique_ptr<mdl::Map> map;
 

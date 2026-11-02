@@ -132,4 +132,61 @@ Json parseJsonLiteral(const std::string_view str)
   return std::move(json).value();
 }
 
+Json runJson(const std::vector<std::string>& args, const std::string_view in)
+{
+  const auto result = runCli(args, in);
+  REQUIRE(result.exitCode == 0);
+  return parseOutput(result);
+}
+
+std::string revOf(const std::string& map)
+{
+  return runJson({"describe", map})["rev"].asString();
+}
+
+size_t brushCount(const std::string& map)
+{
+  return size_t(runJson({"describe", map})["counts"]["brushes"].asNumber());
+}
+
+void checkError(
+  const RunResult& result,
+  const std::string& code,
+  const int exitCode,
+  const std::optional<size_t> opIndex)
+{
+  CHECK(result.exitCode == exitCode);
+  const auto json = parseOutput(result);
+  CHECK(json["error"]["code"] == Json{code});
+  CHECK(!json["error"]["message"].asString().empty());
+  if (opIndex)
+  {
+    CHECK(json["error"]["op_index"] == Json{*opIndex});
+  }
+  else
+  {
+    CHECK(json["error"].find("op_index") == nullptr);
+  }
+}
+
+EditFixture::EditFixture()
+{
+  env.writeConfig({}, quakeConfig());
+  map = arg(env.copyFixture("maps/simple.map", "simple.map"));
+  original = env.readFile("simple.map");
+}
+
+bool EditFixture::unchanged() const
+{
+  return env.readFile("simple.map") == original;
+}
+
+RunResult EditFixture::apply(
+  const std::string_view batch, const std::vector<std::string>& options)
+{
+  auto args = std::vector<std::string>{"apply", map, "-"};
+  args.insert(args.end(), options.begin(), options.end());
+  return runCli(args, batch);
+}
+
 } // namespace tb::cli

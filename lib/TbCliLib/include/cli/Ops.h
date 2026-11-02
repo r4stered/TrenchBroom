@@ -1,0 +1,156 @@
+/*
+ Copyright (C) 2026 Drew Williams
+
+ This file is part of TrenchBroom.
+
+ TrenchBroom is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+
+ TrenchBroom is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#pragma once
+
+#include "cli/Json.h"
+#include "cli/NodePath.h"
+
+#include <functional>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace tb::mdl
+{
+class Map;
+class Node;
+} // namespace tb::mdl
+
+namespace tb::cli
+{
+
+/** The type of an op argument, which decides how it is validated, parsed and resolved. */
+enum class ArgType
+{
+  /** a point `[x, y, z]`, written `x,y,z` as a flag */
+  Vec3,
+  /** any string */
+  String,
+  /** a node path, resolved against the input rev before the batch runs */
+  NodePath,
+  /** a binding name `$name` that the nodes the op creates are bound to */
+  Binding,
+};
+
+/** One argument of an op. */
+struct ArgDef
+{
+  std::string name;
+  ArgType type = ArgType::String;
+  std::string description;
+  bool required = false;
+  /** The value of an optional argument that is not given, if it has one. */
+  std::optional<Json> defaultValue = std::nullopt;
+};
+
+/** What an op did, as reported in its entry of the apply result. */
+struct OpOutcome
+{
+  std::vector<mdl::Node*> created;
+  std::vector<mdl::Node*> modified;
+  /** Removed nodes; reported by their paths in the input rev. */
+  std::vector<mdl::Node*> removed;
+  std::vector<std::string> warnings;
+};
+
+/** What an op runs with. */
+struct OpContext
+{
+  mdl::Map& map;
+  /** The op's validated arguments, with defaults filled in. */
+  const Json& args;
+  /** The node path arguments, resolved against the input rev, by argument name. */
+  const std::map<std::string, NodeOrFace, std::less<>>& nodes;
+  OpOutcome& outcome;
+
+  /**
+   * The resolved node path argument with the given name, which must be given or have
+   * a default.
+   */
+  const NodeOrFace& node(std::string_view name) const;
+};
+
+/**
+ * The definition of an op. It is the single source of the op's batch parser, its
+ * subcommand and flags, its `--help` text and its JSON Schema in `ops --json`.
+ */
+struct OpDef
+{
+  std::string name;
+  std::string description;
+  std::vector<ArgDef> args;
+  /** Carries out the op. Throws CliError if the op fails. */
+  std::function<void(OpContext&)> execute;
+};
+
+/** The flags of an op's subcommand, as `(name, value)` with the leading dashes removed.
+ */
+using OpFlags = std::vector<std::pair<std::string, std::string>>;
+
+/** An op of a batch with its validated arguments. */
+struct Op
+{
+  const OpDef* def = nullptr;
+  /** The arguments without `op`, with defaults filled in. */
+  Json args;
+
+  /** The name this op binds its created nodes to, if it has one. */
+  std::optional<std::string> binding() const;
+};
+
+/** Every op, in the order `ops --json` and the help list them. */
+const std::vector<OpDef>& opDefs();
+
+/** The op with the given name, or nullptr. */
+const OpDef* findOpDef(std::string_view name);
+
+/**
+ * The `tbcli.ops/1` result `{schema, ops: [{name, description, schema}]}`, where each
+ * `schema` is a JSON Schema of the op's batch entry.
+ */
+Json opsJson();
+
+/** The help text of the options that every mutating command accepts. */
+std::string_view mutatingOptionsHelp();
+
+/** The `--help` text of an op's subcommand. */
+std::string opHelp(const OpDef& def);
+
+/**
+ * Validates a batch: a JSON array of op objects `{"op": <name>, <args>...}`.
+ *
+ * @throw CliError `invalid_batch` if the batch is not an array of objects,
+ * `invalid_argument` if an op is unknown or its arguments are missing, unknown or
+ * malformed, or if two ops bind the same name; both carry the op's index
+ */
+std::vector<Op> parseBatch(const Json& batch);
+
+/**
+ * Builds an op from the flags of its subcommand.
+ *
+ * @throw CliError `invalid_argument` if a flag is unknown, repeated or malformed, or a
+ * required one is missing
+ */
+Op parseOpFlags(const OpDef& def, const OpFlags& flags);
+
+} // namespace tb::cli

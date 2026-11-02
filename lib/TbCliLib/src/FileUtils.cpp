@@ -19,8 +19,12 @@
 
 #include "cli/FileUtils.h"
 
+#include <fmt/format.h>
+#include <fmt/std.h>
+
 #include <fstream>
 #include <iterator>
+#include <random>
 
 namespace tb::cli
 {
@@ -40,6 +44,70 @@ std::optional<std::string> readFile(const std::filesystem::path& path)
     return std::nullopt;
   }
   return result;
+}
+
+namespace
+{
+
+std::filesystem::path temporaryPath(const std::filesystem::path& path)
+{
+  auto random = std::random_device{};
+  auto name = path.filename();
+  name += fmt::format(".tbcli-{:08x}.tmp", random());
+  return path.parent_path() / name;
+}
+
+std::optional<std::string> writeAndConfirm(
+  const std::filesystem::path& path,
+  const std::string_view bytes,
+  const FileReader readBack)
+{
+  {
+    auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
+    if (!stream)
+    {
+      return fmt::format("cannot create {}", path);
+    }
+    stream.write(bytes.data(), std::streamsize(bytes.size()));
+    stream.close();
+    if (!stream)
+    {
+      return fmt::format("cannot write {}", path);
+    }
+  }
+
+  if (readBack(path) != bytes)
+  {
+    return fmt::format("{} does not read back as written", path);
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+std::optional<std::string> writeFileAtomically(
+  const std::filesystem::path& path,
+  const std::string_view bytes,
+  const FileReader readBack)
+{
+  const auto tempPath = temporaryPath(path);
+  auto error = writeAndConfirm(tempPath, bytes, readBack);
+  if (!error)
+  {
+    auto ec = std::error_code{};
+    std::filesystem::rename(tempPath, path, ec);
+    if (ec)
+    {
+      error = fmt::format("cannot rename {} to {}: {}", tempPath, path, ec.message());
+    }
+  }
+
+  if (error)
+  {
+    auto ec = std::error_code{};
+    std::filesystem::remove(tempPath, ec);
+  }
+  return error;
 }
 
 } // namespace tb::cli

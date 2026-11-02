@@ -245,9 +245,9 @@ LoadedMap loadMap(
     throw notValve220(*format);
   }
 
-  const auto gameInfo = makeGameInfo(config, logger);
-
   auto result = LoadedMap{};
+  result.gameInfo = std::make_unique<mdl::GameInfo>(makeGameInfo(config, logger));
+  const auto& gameInfo = *result.gameInfo;
   result.rev = computeRev(*bytes);
   result.taskManager = std::make_unique<kdl::task_manager>();
   result.resourceManager = std::make_unique<gl::ResourceManager>();

@@ -58,6 +58,8 @@
 
 #include <fmt/format.h>
 
+#include <sstream>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_predicate.hpp>
@@ -165,6 +167,21 @@ TEST_CASE("Map")
     const auto expectedGenerator =
       fmt::format("// Generator: TrenchBroom {} (Build {})", VERSION_STR, BUILD_ID_STR);
     CHECK_THAT(env.loadFile("test.map"), ContainsSubstring(expectedGenerator));
+  }
+
+  SECTION("saveTo a stream writes what saveTo a file writes")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+    addNodes(map, {{&parentForNodes(map), {createBrushNode(map)}}});
+
+    auto env = fs::TestEnvironment{};
+    REQUIRE(map.saveTo(env.dir() / "test.map"));
+
+    auto stream = std::ostringstream{};
+    map.saveTo(stream);
+    CHECK(stream.str() == env.loadFile("test.map"));
+    CHECK_THAT(stream.str(), ContainsSubstring("// brush 0"));
   }
 
   SECTION("selection")

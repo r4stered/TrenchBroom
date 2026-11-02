@@ -37,6 +37,12 @@ struct RunResult
 };
 
 /**
+ * Whether run needs stdin for the given arguments: only `apply <map> -` reads its batch
+ * from it, so that other commands do not wait for input.
+ */
+bool readsStdin(const std::vector<std::string>& args);
+
+/**
  * The tbcli entry point. `args` are the command line arguments without the program
  * name, `in` is the contents of stdin. Never throws.
  */

@@ -20,12 +20,15 @@
 #include "cli/Run.h"
 
 #include "base/Logger.h"
+#include "cli/Apply.h"
 #include "cli/CliError.h"
 #include "cli/Config.h"
 #include "cli/Describe.h"
 #include "cli/Fgd.h"
+#include "cli/FileUtils.h"
 #include "cli/Json.h"
 #include "cli/LoadMap.h"
+#include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Query.h"
 #include "cli/Show.h"
@@ -46,7 +49,7 @@ namespace tb::cli
 namespace
 {
 
-constexpr auto UsageText = R"(usage: tbcli <command> <map> [options]
+constexpr auto UsageTemplate = R"(usage: tbcli <command> <map> [options]
 
 commands:
   describe <map>        summarize a Valve 220 map
@@ -58,6 +61,12 @@ commands:
   show <map> <path>     one node or face in full
   fgd <map> <classname> the entity definition of a class, with base classes
                         resolved
+  apply <map> <batch-file | ->
+                        run a JSON array of ops, read from a file or stdin,
+                        all or nothing, and write the map once
+  <op> <map> --<arg> <value>...
+                        run one op; tbcli <op> --help lists its arguments
+  ops [--json]          the JSON Schema of every op
 
 node paths:
   layer:<n>/group:<n>/entity:<n>/brush:<n>/face:<n>, where each index counts
@@ -88,20 +97,51 @@ options:
                         0.01 units, so boxes that only touch intersect; a box
                         is "x1,y1,z1,x2,y2,z2")
   --raw                 show: add the plane points of faces
+  --json                ops: print JSON (the default)
   -h, --help            print this help
   --version             print the version
 
+mutating options (apply and every op):
+{}
+ops:
+{}
 tbcli.json is found by walking up from the map's directory.
 )";
 
-/** An option that only one command accepts. */
+std::string usageText()
+{
+  auto ops = std::string{};
+  for (const auto& def : opDefs())
+  {
+    ops += fmt::format("  {}\n", def.name);
+  }
+  return fmt::format(fmt::runtime(UsageTemplate), mutatingOptionsHelp(), ops);
+}
+
+/** Which commands accept a command option. */
+enum class AcceptedBy
+{
+  /** the command named by the option */
+  Command,
+  /** apply and every op */
+  MutatingCommands,
+};
+
+/** An option that only one command, or only the mutating commands, accept. */
 struct CommandOption
 {
   std::string_view name;
+  /** The command that accepts the option, unless acceptedBy is MutatingCommands. */
   std::string_view command;
+  AcceptedBy acceptedBy = AcceptedBy::Command;
 };
 
-constexpr auto CommandOptions = std::array<CommandOption, 8>{{
+bool isMutatingCommand(const std::string_view command)
+{
+  return command == "apply" || findOpDef(command) != nullptr;
+}
+
+constexpr auto CommandOptions = std::array<CommandOption, 12>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--offset", "query"},
@@ -110,6 +150,10 @@ constexpr auto CommandOptions = std::array<CommandOption, 8>{{
   {"--intersects", "query"},
   {"--touching", "query"},
   {"--raw", "show"},
+  {"--json", "ops"},
+  {"--expect-rev", {}, AcceptedBy::MutatingCommands},
+  {"--dry-run", {}, AcceptedBy::MutatingCommands},
+  {"-o", {}, AcceptedBy::MutatingCommands},
 }};
 
 enum class OutputFormat
@@ -157,6 +201,9 @@ struct Arguments
   ConfigOverrides configOverrides;
   QueryOptions queryOptions;
   bool raw = false;
+  ApplyOptions applyOptions;
+  /** The flags of an op's subcommand, as (name without dashes, value). */
+  OpFlags opFlags;
   /** The options given that only some commands accept. */
   std::vector<std::string> commandOptions;
   bool help = false;
@@ -191,35 +238,20 @@ size_t parseCount(const std::string_view name, const std::string& value)
 /** A box given as six numbers `x1,y1,z1,x2,y2,z2`, separated by commas or spaces. */
 vm::bbox3d parseBox(const std::string_view name, const std::string& value)
 {
-  auto numbers = std::vector<double>{};
-  for (const auto part : value | std::views::split(','))
+  const auto numbers = parseNumberList(value);
+  if (!numbers)
   {
-    for (const auto word :
-         std::string_view{part.begin(), part.end()} | std::views::split(' '))
-    {
-      const auto str = std::string_view{word.begin(), word.end()};
-      if (str.empty())
-      {
-        continue;
-      }
-
-      const auto number = parseDecimal(str);
-      if (!number)
-      {
-        throw usageError(fmt::format("{}: '{}' is not a number", name, str));
-      }
-      numbers.push_back(*number);
-    }
+    throw usageError(fmt::format("{}: '{}' is not a list of numbers", name, value));
   }
 
-  if (numbers.size() != 6)
+  if (numbers->size() != 6)
   {
     throw usageError(
       fmt::format("{} requires a box x1,y1,z1,x2,y2,z2, not '{}'", name, value));
   }
 
-  const auto min = vm::vec3d{numbers[0], numbers[1], numbers[2]};
-  const auto max = vm::vec3d{numbers[3], numbers[4], numbers[5]};
+  const auto min = vm::vec3d{(*numbers)[0], (*numbers)[1], (*numbers)[2]};
+  const auto max = vm::vec3d{(*numbers)[3], (*numbers)[4], (*numbers)[5]};
   if (!vm::bbox3d::is_valid(min, max))
   {
     throw usageError(
@@ -245,6 +277,16 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       // a lone "-" is reserved for reading from stdin
       result.positionals.push_back(arg);
+      continue;
+    }
+    if (arg == "-o")
+    {
+      if (i + 1 >= args.size())
+      {
+        throw usageError("-o requires a value");
+      }
+      result.applyOptions.output = std::filesystem::path{args[++i]};
+      result.commandOptions.emplace_back(arg);
       continue;
     }
     if (!arg.starts_with("--"))
@@ -357,6 +399,25 @@ Arguments parseArguments(const std::vector<std::string>& args)
       noValue();
       result.raw = true;
     }
+    else if (name == "--json")
+    {
+      // JSON is the default output; the flag is accepted for explicitness
+      noValue();
+    }
+    else if (name == "--expect-rev")
+    {
+      result.applyOptions.expectRev = value();
+    }
+    else if (name == "--dry-run")
+    {
+      noValue();
+      result.applyOptions.dryRun = true;
+    }
+    else if (!result.positionals.empty() && findOpDef(result.positionals.front()))
+    {
+      // an op's own flags, checked against its definition when the op is built
+      result.opFlags.emplace_back(name.substr(2), value());
+    }
     else
     {
       throw usageError(fmt::format("unknown option {}", name));
@@ -404,7 +465,10 @@ void checkArguments(
   {
     const auto& commandOption =
       *std::ranges::find(CommandOptions, option, &CommandOption::name);
-    if (commandOption.command != command)
+    const auto accepted = commandOption.acceptedBy == AcceptedBy::MutatingCommands
+                            ? isMutatingCommand(command)
+                            : commandOption.command == command;
+    if (!accepted)
     {
       throw usageError(fmt::format("{} does not accept {}", command, option));
     }
@@ -420,7 +484,41 @@ std::pair<LoadedMap, Config> loadMapArgument(const Arguments& arguments, Logger&
   return {std::move(loadedMap), std::move(config)};
 }
 
-Json runCommand(const Arguments& arguments, Logger& logger)
+/** Reads the batch of an apply command from a file or, given "-", from stdin. */
+Json readBatch(const std::string& source, const std::string_view in)
+{
+  auto text = std::string{in};
+  if (source != "-")
+  {
+    auto contents = readFile(std::filesystem::path{source});
+    if (!contents)
+    {
+      throw CliError{
+        ErrorCode::FileNotFound, fmt::format("cannot read batch {}", source)};
+    }
+    text = std::move(*contents);
+  }
+
+  auto batch = parseJson(text);
+  if (!batch)
+  {
+    const auto error = std::get<JsonParseError>(batch.error());
+    throw CliError{
+      ErrorCode::InvalidBatch,
+      fmt::format("the batch is not valid JSON: {}", error.msg),
+      std::nullopt,
+      error.line};
+  }
+  return std::move(batch).value();
+}
+
+Json runOps(const Arguments& arguments, const std::vector<Op>& ops, Logger& logger)
+{
+  auto [loadedMap, config] = loadMapArgument(arguments, logger);
+  return apply(loadedMap, ops, arguments.applyOptions);
+}
+
+Json runCommand(const Arguments& arguments, const std::string_view in, Logger& logger)
 {
   const auto& positionals = arguments.positionals;
   const auto& command = positionals.front();
@@ -454,13 +552,46 @@ Json runCommand(const Arguments& arguments, Logger& logger)
     const auto [loadedMap, config] = loadMapArgument(arguments, logger);
     return fgd(loadedMap, positionals[2]);
   }
+  if (command == "apply")
+  {
+    checkArguments(arguments, command, {"a map file", "a batch file or -"});
+    // the batch is checked before the map is loaded
+    const auto ops = parseBatch(readBatch(positionals[2], in));
+    return runOps(arguments, ops, logger);
+  }
+  if (command == "ops")
+  {
+    checkArguments(arguments, command, {});
+    return opsJson();
+  }
+  if (const auto* def = findOpDef(command))
+  {
+    checkArguments(arguments, command, {"a map file"});
+    return runOps(arguments, {parseOpFlags(*def, arguments.opFlags)}, logger);
+  }
 
   throw usageError(fmt::format("unknown command '{}'", command));
 }
 
 } // namespace
 
-RunResult run(const std::vector<std::string>& args, std::string_view /* in */)
+bool readsStdin(const std::vector<std::string>& args)
+{
+  try
+  {
+    const auto arguments = parseArguments(args);
+    const auto& positionals = arguments.positionals;
+    return !arguments.help && positionals.size() == 3 && positionals[0] == "apply"
+           && positionals[2] == "-";
+  }
+  catch (const CliError&)
+  {
+    // run reports the error without reading stdin
+    return false;
+  }
+}
+
+RunResult run(const std::vector<std::string>& args, const std::string_view in)
 {
   auto result = RunResult{};
   auto logger = StringLogger{result.err};
@@ -470,7 +601,10 @@ RunResult run(const std::vector<std::string>& args, std::string_view /* in */)
     const auto arguments = parseArguments(args);
     if (arguments.help)
     {
-      result.out = UsageText;
+      const auto* def = arguments.positionals.empty()
+                          ? nullptr
+                          : findOpDef(arguments.positionals.front());
+      result.out = def ? opHelp(*def) : usageText();
       return result;
     }
     if (arguments.version)
@@ -483,7 +617,7 @@ RunResult run(const std::vector<std::string>& args, std::string_view /* in */)
       throw usageError("no command given");
     }
 
-    result.out = render(runCommand(arguments, logger), arguments.outputFormat);
+    result.out = render(runCommand(arguments, in, logger), arguments.outputFormat);
     result.exitCode = ExitCode::Ok;
   }
   catch (const CliError& e)
@@ -491,9 +625,10 @@ RunResult run(const std::vector<std::string>& args, std::string_view /* in */)
     // Errors are always reported as a JSON envelope so that callers can rely on it.
     result.out = e.toJson().dump() + "\n";
     result.exitCode = e.exitCode();
-    if (e.exitCode() == ExitCode::Usage)
+    // the usage helps with a malformed command line, not with a malformed batch
+    if (e.code() == ErrorCode::Usage)
     {
-      result.err += UsageText;
+      result.err += usageText();
     }
   }
   catch (const std::exception& e)

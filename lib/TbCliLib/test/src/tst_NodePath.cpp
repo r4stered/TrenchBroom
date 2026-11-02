@@ -79,6 +79,23 @@ TEST_CASE("NodePath")
     CHECK(nodePath(entityBrush) == "layer:1/group:1/group:0/entity:0/brush:0");
   }
 
+  SECTION("nodePaths")
+  {
+    const auto paths = nodePaths(worldNode);
+    CHECK(paths.size() == 11);
+    CHECK(paths.at(&worldNode) == "world");
+    CHECK(paths.at(&defaultLayer) == "layer:0");
+    CHECK(paths.at(&customLayer) == "layer:1");
+    CHECK(paths.at(&brush0) == "layer:0/brush:0");
+    CHECK(paths.at(&entity0) == "layer:0/entity:0");
+    CHECK(paths.at(&brush1) == "layer:0/brush:1");
+    CHECK(paths.at(&group0) == "layer:1/group:0");
+    CHECK(paths.at(&group1) == "layer:1/group:1");
+    CHECK(paths.at(&nestedGroup) == "layer:1/group:1/group:0");
+    CHECK(paths.at(&brushEntity) == "layer:1/group:1/group:0/entity:0");
+    CHECK(paths.at(&entityBrush) == "layer:1/group:1/group:0/entity:0/brush:0");
+  }
+
   SECTION("facePath")
   {
     CHECK(facePath(static_cast<mdl::BrushNode&>(brush1), 0) == "layer:0/brush:1/face:0");

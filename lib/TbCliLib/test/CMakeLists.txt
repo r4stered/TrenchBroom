@@ -3,14 +3,19 @@ EMBED_UTF8_MANIFEST(TbCliLibTest)
 
 target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Apply.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Config.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityJson.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Fgd.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FileUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapContents.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodeJson.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodePath.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Ops.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ParseUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Query.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Run.cpp

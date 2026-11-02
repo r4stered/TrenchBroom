@@ -34,6 +34,7 @@ namespace ExitCode
 constexpr int Ok = 0;
 constexpr int Failed = 1;
 constexpr int Usage = 2;
+constexpr int StaleRev = 3;
 } // namespace ExitCode
 
 /** The `code` of an error envelope. */
@@ -57,6 +58,18 @@ enum class ErrorCode
   WrongNodeKind,
   /** a classname is not defined by the entity definitions */
   UndefinedClass,
+  /** a batch is not a JSON array of op objects (exit 2) */
+  InvalidBatch,
+  /** an op is unknown, or its arguments are missing, unknown or malformed (exit 2) */
+  InvalidArgument,
+  /** `--expect-rev` does not match the map's rev (exit 3) */
+  StaleRev,
+  /** an atomic write could not be confirmed; the original file is unchanged */
+  WriteFailed,
+  /** an op targets a node that an earlier op in the batch removed */
+  TargetDeleted,
+  /** an op cannot be carried out with the given arguments */
+  OpFailed,
   /** an unexpected failure inside tbcli */
   InternalError,
 };
@@ -65,7 +78,7 @@ std::string_view toString(ErrorCode code);
 
 /**
  * A failed command, rendered as the error envelope
- * `{"error": {"code", "message", "node"?, "line"?}}` on stdout.
+ * `{"error": {"code", "message", "node"?, "line"?, "op_index"?}}` on stdout.
  *
  * Commands throw this and run() turns it into output and an exit code, so that every
  * failure, however deep, reaches the caller in the same shape.
@@ -76,6 +89,7 @@ private:
   ErrorCode m_code;
   std::optional<std::string> m_node;
   std::optional<size_t> m_line;
+  std::optional<size_t> m_opIndex;
 
 public:
   CliError(
@@ -88,9 +102,28 @@ public:
   int exitCode() const;
   const std::optional<std::string>& node() const;
   const std::optional<size_t>& line() const;
+  const std::optional<size_t>& opIndex() const;
+
+  /** This error, attributed to the op at the given index of a batch. */
+  CliError withOpIndex(size_t opIndex) const;
 
   Json toJson() const;
 };
+
+/** Calls `f`, attributing a CliError it throws to the op at the given index of a batch.
+ */
+template <typename F>
+decltype(auto) attributeToOp(const size_t opIndex, F&& f)
+{
+  try
+  {
+    return f();
+  }
+  catch (const CliError& e)
+  {
+    throw e.withOpIndex(opIndex);
+  }
+}
 
 /** A malformed command line (exit 2). */
 CliError usageError(const std::string& message);

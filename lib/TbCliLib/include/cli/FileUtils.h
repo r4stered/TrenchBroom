@@ -22,11 +22,31 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace tb::cli
 {
 
 /** Reads the raw bytes of the given file, or nullopt if it cannot be read. */
 std::optional<std::string> readFile(const std::filesystem::path& path);
+
+/** A function that reads a file as readFile does. */
+using FileReader = std::optional<std::string> (*)(const std::filesystem::path&);
+
+/**
+ * Replaces the given file with the given bytes atomically: the bytes are written to a
+ * temporary file next to it, read back and compared, and only then is the temporary
+ * file renamed over the target. If any step fails, the temporary file is removed and
+ * the target is left as it was.
+ *
+ * `readBack` reads the temporary file back; tests replace it to simulate a write that
+ * does not read back as written.
+ *
+ * @return a description of the failed step, or nullopt if the file was written
+ */
+std::optional<std::string> writeFileAtomically(
+  const std::filesystem::path& path,
+  std::string_view bytes,
+  FileReader readBack = readFile);
 
 } // namespace tb::cli

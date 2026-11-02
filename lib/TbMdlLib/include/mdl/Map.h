@@ -32,6 +32,7 @@
 #include "vm/bbox.h"
 
 #include <filesystem>
+#include <iosfwd>
 #include <memory>
 #include <optional>
 #include <string>
@@ -293,6 +294,8 @@ public: // persistence
   Result<void> save();
   Result<void> saveAs(const std::filesystem::path& path);
   Result<void> saveTo(const std::filesystem::path& path) const;
+  /** Writes the map to the given stream exactly as saveTo writes it to a file. */
+  void saveTo(std::ostream& stream) const;
   Result<void> exportAs(const ExportOptions& options) const;
 
   bool persistent() const;

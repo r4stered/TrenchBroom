@@ -22,6 +22,7 @@
 #include "kd/string_utils.h"
 
 #include <algorithm>
+#include <ranges>
 
 namespace tb::cli
 {
@@ -88,6 +89,30 @@ std::optional<double> parseDecimal(const std::string_view str)
 {
   // kdl::str_to_double accepts a valid prefix, so the whole string is checked first
   return isDecimal(str) ? kdl::str_to_double(str) : std::nullopt;
+}
+
+std::optional<std::vector<double>> parseNumberList(const std::string_view str)
+{
+  auto result = std::vector<double>{};
+  for (const auto part : str | std::views::split(','))
+  {
+    for (const auto word :
+         std::string_view{part.begin(), part.end()} | std::views::split(' '))
+    {
+      if (word.empty())
+      {
+        continue;
+      }
+
+      const auto number = parseDecimal(std::string_view{word.begin(), word.end()});
+      if (!number)
+      {
+        return std::nullopt;
+      }
+      result.push_back(*number);
+    }
+  }
+  return result;
 }
 
 } // namespace tb::cli

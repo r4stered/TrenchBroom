@@ -43,18 +43,6 @@ namespace tb::cli
 namespace
 {
 
-/** What a path segment names. */
-enum class NodeKind
-{
-  World,
-  Layer,
-  Group,
-  Entity,
-  Brush,
-  Patch,
-  Face,
-};
-
 /** The name of each kind in a path segment. */
 constexpr auto KindNames = std::array<std::pair<NodeKind, std::string_view>, 7>{{
   {NodeKind::World, WorldPath},
@@ -81,17 +69,6 @@ std::optional<NodeKind> kindFromName(const std::string_view name)
                                                                : std::nullopt;
 }
 
-NodeKind kindOf(const mdl::Node& node)
-{
-  return node.accept(
-    kdl::overload(
-      [](const mdl::WorldNode&) { return NodeKind::World; },
-      [](const mdl::LayerNode&) { return NodeKind::Layer; },
-      [](const mdl::GroupNode&) { return NodeKind::Group; },
-      [](const mdl::EntityNode&) { return NodeKind::Entity; },
-      [](const mdl::BrushNode&) { return NodeKind::Brush; },
-      [](const mdl::PatchNode&) { return NodeKind::Patch; }));
-}
 
 std::string segment(const mdl::Node& node, const mdl::Node& parent)
 {
@@ -226,7 +203,37 @@ mdl::Node* findChild(const mdl::Node& parent, const Segment& segment)
   return nullptr;
 }
 
-/** Whether a path segment of the given kind can follow a node of the given kind. */
+
+/** Adds the paths of the nodes below `parent`, whose path is `prefix` without '/'. */
+void addChildPaths(
+  const mdl::Node& parent,
+  const std::string& prefix,
+  std::unordered_map<const mdl::Node*, std::string>& paths)
+{
+  auto counts = std::array<size_t, KindNames.size()>{};
+  for (const auto* child : parent.children())
+  {
+    const auto kind = kindOf(*child);
+    auto path = fmt::format("{}{}:{}", prefix, kindName(kind), counts[size_t(kind)]++);
+    addChildPaths(*child, path + "/", paths);
+    paths.emplace(child, std::move(path));
+  }
+}
+
+} // namespace
+
+NodeKind kindOf(const mdl::Node& node)
+{
+  return node.accept(
+    kdl::overload(
+      [](const mdl::WorldNode&) { return NodeKind::World; },
+      [](const mdl::LayerNode&) { return NodeKind::Layer; },
+      [](const mdl::GroupNode&) { return NodeKind::Group; },
+      [](const mdl::EntityNode&) { return NodeKind::Entity; },
+      [](const mdl::BrushNode&) { return NodeKind::Brush; },
+      [](const mdl::PatchNode&) { return NodeKind::Patch; }));
+}
+
 bool canContain(const NodeKind parent, const NodeKind kind)
 {
   switch (parent)
@@ -248,8 +255,6 @@ bool canContain(const NodeKind parent, const NodeKind kind)
   return false;
 }
 
-} // namespace
-
 std::string nodePath(const mdl::Node& node)
 {
   const auto* parent = node.parent();
@@ -260,6 +265,15 @@ std::string nodePath(const mdl::Node& node)
 
   const auto own = segment(node, *parent);
   return parent->parent() ? nodePath(*parent) + "/" + own : own;
+}
+
+std::unordered_map<const mdl::Node*, std::string> nodePaths(
+  const mdl::WorldNode& worldNode)
+{
+  auto result = std::unordered_map<const mdl::Node*, std::string>{};
+  result.emplace(&worldNode, WorldPath);
+  addChildPaths(worldNode, "", result);
+  return result;
 }
 
 std::string facePath(const mdl::BrushNode& brushNode, const size_t faceIndex)
