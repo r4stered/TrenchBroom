@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <typeindex>
@@ -54,6 +55,20 @@ enum class IssueSource
   LoadDiagnostics,
   /** a validator that the map library registers */
   Validator,
+  /** a validator of tbcli's own checks */
+  CliCheck,
+};
+
+/** What an issue is about. */
+enum class IssueScope
+{
+  /** the node it is on */
+  Node,
+  /**
+   * the whole map, so that it has no node and its key covers only its type and
+   * message
+   */
+  Map,
 };
 
 /** One row of the issue-type table. */
@@ -65,6 +80,9 @@ struct IssueTypeDef
   IssueSource source;
   /** For a validator type, the class of the validator that reports the issues. */
   std::optional<std::type_index> validator = std::nullopt;
+  IssueScope scope = IssueScope::Node;
+  /** For a CLI check type, creates the validator that reports the issues. */
+  std::unique_ptr<mdl::Validator> (*createValidator)() = nullptr;
 };
 
 /**

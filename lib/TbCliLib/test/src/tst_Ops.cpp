@@ -19,12 +19,14 @@
 
 #include "CliTestUtils.h"
 #include "cli/CliError.h"
+#include "cli/IssueTypes.h"
 #include "cli/Ops.h"
 
 #include <fmt/format.h>
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -97,14 +99,30 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     const auto& issueTypes = json["issue_types"];
-    REQUIRE(issueTypes.size() == 21);
+    REQUIRE(issueTypes.size() == cli::issueTypes().size());
+
+    const auto entry = [&](const std::string_view type) {
+      for (const auto& issueType : issueTypes.asArray())
+      {
+        if (issueType["type"].asString() == type)
+        {
+          return issueType;
+        }
+      }
+      FAIL("no issue type " << type);
+      return Json{};
+    };
     CHECK(
-      issueTypes[0]
+      entry("load_error")
       == parseJsonLiteral(R"({"type": "load_error", "severity": "error", "fixes": []})"));
     CHECK(
-      issueTypes[4]
+      entry("empty_group")
       == parseJsonLiteral(
         R"({"type": "empty_group", "severity": "warning", "fixes": []})"));
+    CHECK(
+      entry("no_player_start")
+      == parseJsonLiteral(
+        R"({"type": "no_player_start", "severity": "error", "fixes": []})"));
   }
 
   SECTION("JSON is the default")

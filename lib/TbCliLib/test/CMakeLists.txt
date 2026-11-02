@@ -5,6 +5,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Apply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliValidators.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Config.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditOps.cpp

@@ -68,6 +68,8 @@ struct VerifyStage
   /** Whether the stage found any issue that is not suppressed. */
   bool hasIssues = false;
   double ms = 0.0;
+  /** The issue types that the stage could not check, such as missing materials. */
+  std::vector<const IssueTypeDef*> unchecked = {};
 };
 
 /** What the in-process verify stages found in a whole map. */
@@ -81,7 +83,8 @@ struct IssueReport
 /**
  * Runs the in-process verify stages on the whole map: load diagnostics, which turn
  * what the reader skipped into `load_error` issues, then every validator the map
- * registers. Applies the severities and suppressions of the given configuration.
+ * registers, then the CLI checks. Applies the severities and suppressions of the given
+ * configuration.
  *
  * @throw CliError if a validator is not in the issue-type table
  */

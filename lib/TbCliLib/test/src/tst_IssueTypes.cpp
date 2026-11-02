@@ -19,6 +19,7 @@
 
 #include "CliTestUtils.h"
 #include "base/Logger.h"
+#include "cli/CliValidators.h"
 #include "cli/IssueTypes.h"
 #include "mdl/Map.h"
 #include "mdl/Validator.h"
@@ -92,7 +93,23 @@ TEST_CASE("IssueTypes")
         {"property_value_with_double_quotation_marks", Warning},
         {"world_node_path_separator", Warning},
         {"invalid_uv_scale", Warning},
+        {"missing_material", Warning},
+        {"fgd_property_type", Warning},
+        {"entity_inside_solid", Error},
+        {"no_player_start", Error},
+        {"degenerate_brush", Warning},
       });
+
+    // only a missing player start is about the whole map
+    for (const auto& type : issueTypes())
+    {
+      CAPTURE(type.id);
+      CHECK(
+        type.scope
+        == (type.id == "no_player_start" ? IssueScope::Map : IssueScope::Node));
+      // and only CLI check types create their validators
+      CHECK((type.createValidator != nullptr) == (type.source == IssueSource::CliCheck));
+    }
   }
 
   SECTION("findIssueType by id")
@@ -125,6 +142,26 @@ TEST_CASE("IssueTypes")
     CHECK(
       size_t(
         std::ranges::count(issueTypes(), IssueSource::Validator, &IssueTypeDef::source))
+      == validators.size());
+  }
+
+  SECTION("findIssueType by CLI validator")
+  {
+    // every CLI validator has exactly one entry, and the table has no other
+    const auto validators = makeCliValidators(MaterialCheck::On);
+    auto ids = std::set<std::string_view>{};
+    for (const auto& validator : validators)
+    {
+      CAPTURE(validator->description());
+      const auto* type = findIssueType(*validator);
+      REQUIRE(type != nullptr);
+      CHECK(type->source == IssueSource::CliCheck);
+      ids.insert(type->id);
+    }
+    CHECK(ids.size() == validators.size());
+    CHECK(
+      size_t(
+        std::ranges::count(issueTypes(), IssueSource::CliCheck, &IssueTypeDef::source))
       == validators.size());
   }
 

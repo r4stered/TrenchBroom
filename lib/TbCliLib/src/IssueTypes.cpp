@@ -19,6 +19,7 @@
 
 #include "cli/IssueTypes.h"
 
+#include "cli/CliValidators.h"
 #include "cli/Json.h"
 #include "mdl/EmptyBrushEntityValidator.h"
 #include "mdl/EmptyGroupValidator.h"
@@ -43,6 +44,7 @@
 #include "mdl/WorldNodePathSeparatorValidator.h"
 
 #include <algorithm>
+#include <memory>
 #include <typeinfo>
 
 namespace tb::cli
@@ -50,10 +52,34 @@ namespace tb::cli
 namespace
 {
 
+/** A type whose issues the validator of class T reports. */
+template <typename T>
+IssueTypeDef typeOfValidator(
+  const IssueSource source,
+  const std::string_view id,
+  const Severity severity,
+  const IssueScope scope)
+{
+  return {id, severity, source, std::type_index{typeid(T)}, scope};
+}
+
 template <typename T>
 IssueTypeDef validatorType(const std::string_view id, const Severity severity)
 {
-  return {id, severity, IssueSource::Validator, std::type_index{typeid(T)}};
+  return typeOfValidator<T>(IssueSource::Validator, id, severity, IssueScope::Node);
+}
+
+template <typename T>
+IssueTypeDef cliCheckType(
+  const std::string_view id,
+  const Severity severity,
+  const IssueScope scope = IssueScope::Node)
+{
+  auto result = typeOfValidator<T>(IssueSource::CliCheck, id, severity, scope);
+  result.createValidator = []() -> std::unique_ptr<mdl::Validator> {
+    return std::make_unique<T>();
+  };
+  return result;
 }
 
 } // namespace
@@ -113,6 +139,11 @@ const std::vector<IssueTypeDef>& issueTypes()
     validatorType<mdl::WorldNodePathSeparatorValidator>(
       "world_node_path_separator", Warning),
     validatorType<mdl::InvalidUvScaleValidator>("invalid_uv_scale", Warning),
+    cliCheckType<MissingMaterialValidator>("missing_material", Warning),
+    cliCheckType<FgdPropertyTypeValidator>("fgd_property_type", Warning),
+    cliCheckType<EntityInsideSolidValidator>("entity_inside_solid", Error),
+    cliCheckType<NoPlayerStartValidator>("no_player_start", Error, IssueScope::Map),
+    cliCheckType<DegenerateBrushValidator>("degenerate_brush", Warning),
   };
   return types;
 }

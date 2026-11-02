@@ -2477,6 +2477,52 @@ TEST_CASE("Brush")
     }
   }
 
+  SECTION("containsPointStrictly")
+  {
+    const auto worldBounds = vm::bbox3d{4096.0};
+    const auto builder = BrushBuilder{MapFormat::Standard, worldBounds};
+    const auto brush =
+      builder.createCuboid(vm::bbox3d{{0, 0, 0}, {16, 16, 16}}, "material")
+      | kdl::value();
+
+    CHECK(brush.containsPointStrictly(vm::vec3d{8, 8, 8}));
+    // unlike containsPoint, a point on the boundary is not contained
+    CHECK(brush.containsPoint(vm::vec3d{8, 8, 16}));
+    CHECK_FALSE(brush.containsPointStrictly(vm::vec3d{8, 8, 16}));
+    CHECK_FALSE(brush.containsPointStrictly(vm::vec3d{0, 0, 0}));
+    CHECK_FALSE(brush.containsPointStrictly(vm::vec3d{8, 8, 32}));
+  }
+
+  SECTION("volume")
+  {
+    const auto worldBounds = vm::bbox3d{4096.0};
+    const auto builder = BrushBuilder{MapFormat::Standard, worldBounds};
+
+    CHECK(
+      (builder.createCuboid(vm::bbox3d{{0, 0, 0}, {16, 8, 4}}, "material") | kdl::value())
+        .volume()
+      == vm::approx{512.0});
+    // the volume does not depend on where the brush is
+    CHECK(
+      (builder.createCuboid(vm::bbox3d{{-100, 50, 7}, {-84, 58, 11}}, "material")
+       | kdl::value())
+        .volume()
+      == vm::approx{512.0});
+
+    // a tetrahedron with legs of length 1 has a volume of 1/6
+    const auto tetrahedron =
+      Brush::create(
+        worldBounds,
+        {
+          createParaxial(vm::vec3d{0, 0, 0}, vm::vec3d{0, 1, 0}, vm::vec3d{0, 0, 1}),
+          createParaxial(vm::vec3d{0, 0, 0}, vm::vec3d{0, 0, 1}, vm::vec3d{1, 0, 0}),
+          createParaxial(vm::vec3d{0, 0, 0}, vm::vec3d{1, 0, 0}, vm::vec3d{0, 1, 0}),
+          createParaxial(vm::vec3d{1, 0, 0}, vm::vec3d{0, 0, 1}, vm::vec3d{0, 1, 0}),
+        })
+      | kdl::value();
+    CHECK(tetrahedron.volume() == vm::approx{1.0 / 6.0});
+  }
+
   /*
    Regex to turn a face definition into a c++ statement to add a face to a vector of
    faces: Find:

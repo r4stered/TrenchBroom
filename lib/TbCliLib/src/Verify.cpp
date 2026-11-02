@@ -21,6 +21,7 @@
 
 #include "cli/CappedList.h"
 #include "cli/CliError.h"
+#include "cli/CliValidators.h"
 #include "cli/Config.h"
 #include "cli/GeometryJson.h"
 #include "cli/LoadMap.h"
@@ -44,12 +45,14 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
 
 #include <fmt/format.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <memory>
 #include <ranges>
 #include <set>
 #include <sstream>
@@ -249,6 +252,7 @@ void collectLoadErrors(
   }
 }
 
+/** Runs validators on nodes and collects their issues. */
 class ValidatorIssueCollector
 {
 private:
@@ -259,8 +263,10 @@ private:
 
 public:
   ValidatorIssueCollector(
-    const mdl::WorldNode& worldNode, KeyMaker& keys, std::vector<VerifyIssue>& issues)
-    : m_validators{worldNode.registeredValidators()}
+    std::vector<const mdl::Validator*> validators,
+    KeyMaker& keys,
+    std::vector<VerifyIssue>& issues)
+    : m_validators{std::move(validators)}
     , m_keys{keys}
     , m_issues{issues}
   {
@@ -279,33 +285,66 @@ public:
     }
   }
 
-  /** Collects the issues of the given node and everything below it, depth first. */
+  /**
+   * Collects the issues of the given node and everything below it, depth first. The
+   * validators run on each node directly rather than through the node's issue cache,
+   * which holds the issues of whichever validators ran first.
+   */
   void collect(mdl::Node& node)
   {
-    for (const auto* issue : node.issues(m_validators))
+    auto issues = std::vector<std::unique_ptr<mdl::Issue>>{};
+    for (const auto* validator : m_validators)
     {
-      const auto* type = m_types.at(issue->type());
-      const auto* faceIssue = dynamic_cast<const mdl::BrushFaceIssue*>(issue);
-      const auto faceIndex =
-        faceIssue ? std::optional{faceIssue->faceIndex()} : std::nullopt;
-      const auto line = issue->lineNumber();
-      m_issues.push_back(
-        VerifyIssue{
-          .type = type,
-          .severity = type->severity,
-          .key = m_keys.key(type->id, *issue, faceIndex),
-          .message = issue->description(),
-          .node = &node,
-          .faceIndex = faceIndex,
-          .line = line > 0 ? std::optional{line} : std::nullopt,
-        });
+      validator->validate(node, issues);
+    }
+    for (const auto& issue : issues)
+    {
+      add(node, *issue);
     }
     for (auto* child : node.children())
     {
       collect(*child);
     }
   }
+
+private:
+  void add(mdl::Node& node, const mdl::Issue& issue)
+  {
+    const auto* type = m_types.at(issue.type());
+    const auto onNode = type->scope == IssueScope::Node;
+    const auto* faceIssue = dynamic_cast<const mdl::BrushFaceIssue*>(&issue);
+    const auto faceIndex =
+      faceIssue ? std::optional{faceIssue->faceIndex()} : std::nullopt;
+    const auto line = issue.lineNumber();
+    m_issues.push_back(
+      VerifyIssue{
+        .type = type,
+        .severity = type->severity,
+        .key = onNode ? m_keys.key(type->id, issue, faceIndex)
+                      : m_keys.key(type->id, issue.description()),
+        .message = issue.description(),
+        .node = onNode ? &node : nullptr,
+        .faceIndex = onNode ? faceIndex : std::nullopt,
+        .line = onNode && line > 0 ? std::optional{line} : std::nullopt,
+      });
+  }
 };
+
+std::vector<const mdl::Validator*> pointers(
+  const std::vector<std::unique_ptr<mdl::Validator>>& validators)
+{
+  return validators | std::views::transform(&std::unique_ptr<mdl::Validator>::get)
+         | kdl::ranges::to<std::vector<const mdl::Validator*>>();
+}
+
+/** How long the function takes to run, in milliseconds. */
+template <typename F>
+double timed(const F& function)
+{
+  const auto start = std::chrono::steady_clock::now();
+  function();
+  return msSince(start);
+}
 
 /** The nodes and faces a path or query names. */
 struct Selection
@@ -406,6 +445,15 @@ Json stageToJson(const VerifyStage& stage)
   auto result = Json::object();
   result.set("name", stage.name);
   result.set("status", stage.hasIssues ? "issues" : "ok");
+  if (!stage.unchecked.empty())
+  {
+    auto unchecked = Json::array();
+    for (const auto* type : stage.unchecked)
+    {
+      unchecked.push(type->id);
+    }
+    result.set("unchecked", std::move(unchecked));
+  }
   result.set("ms", std::round(stage.ms));
   return result;
 }
@@ -510,27 +558,42 @@ IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
 
   collectLoadErrors(loadedMap, keys, result.issues);
 
-  const auto start = std::chrono::steady_clock::now();
-  ValidatorIssueCollector{worldNode, keys, result.issues}.collect(worldNode);
-  const auto validatorMs = msSince(start);
+  const auto validatorMs = timed([&] {
+    ValidatorIssueCollector{worldNode.registeredValidators(), keys, result.issues}
+      .collect(worldNode);
+  });
+
+  // materials can only be found if they could be loaded, which needs a game path
+  const auto materialCheck =
+    map.gamePath().empty() ? MaterialCheck::Off : MaterialCheck::On;
+  const auto cliMs = timed([&] {
+    const auto cliValidators = makeCliValidators(materialCheck);
+    ValidatorIssueCollector{pointers(cliValidators), keys, result.issues}.collect(
+      worldNode);
+  });
 
   // validator issues are collected depth first; the lines give the file order, with
-  // issues that have no line first and load errors before validator issues on a line
+  // issues that have no line first, and on a line, load errors before validator issues
+  // before CLI check issues
   std::ranges::stable_sort(
     result.issues, {}, [](const auto& issue) { return issue.line.value_or(0); });
 
   applyConfig(map, config, result.issues);
 
-  const auto fromLoad = [](const VerifyIssue& issue) {
-    return issue.type->source == IssueSource::LoadDiagnostics;
-  };
-  const auto fromValidator = [](const VerifyIssue& issue) {
-    return issue.type->source == IssueSource::Validator;
+  const auto hasIssuesFrom = [&](const IssueSource source) {
+    return hasUnsuppressedIssue(result.issues, [&](const VerifyIssue& issue) {
+      return issue.type->source == source;
+    });
   };
   result.stages = {
-    {"load_diagnostics", hasUnsuppressedIssue(result.issues, fromLoad), loadedMap.loadMs},
-    {"validators", hasUnsuppressedIssue(result.issues, fromValidator), validatorMs},
+    {"load_diagnostics", hasIssuesFrom(IssueSource::LoadDiagnostics), loadedMap.loadMs},
+    {"validators", hasIssuesFrom(IssueSource::Validator), validatorMs},
+    {"cli_checks", hasIssuesFrom(IssueSource::CliCheck), cliMs},
   };
+  if (materialCheck == MaterialCheck::Off)
+  {
+    result.stages.back().unchecked.push_back(findIssueType("missing_material"));
+  }
   return result;
 }
 

@@ -221,6 +221,92 @@ TEST_CASE("verify")
     CHECK(json["ok"] == Json{false});
   }
 
+  SECTION("CLI checks")
+  {
+    const auto json = VerifyFixture{"maps/cli_checks.map"}.json(
+      {"--type",
+       "fgd_property_type,entity_inside_solid,no_player_start,degenerate_brush"});
+
+    // see tst_CliValidators.cpp for what maps/cli_checks.map holds
+    const auto& items = json["issues"]["items"];
+    CHECK(
+      field(items, "type")
+      == std::vector<std::string>{
+        "no_player_start",
+        "fgd_property_type",
+        "fgd_property_type",
+        "degenerate_brush",
+        "degenerate_brush",
+        "fgd_property_type",
+        "entity_inside_solid",
+        "entity_inside_solid",
+      });
+    CHECK(
+      field(items, "node")
+      == std::vector<std::string>{
+        "null",
+        "world",
+        "world",
+        "layer:0/brush:2",
+        "layer:0/brush:3",
+        "layer:0/entity:0",
+        "layer:0/entity:0",
+        "layer:0/entity:5",
+      });
+    CHECK(json["counts"]["no_player_start"] == Json{1});
+    CHECK(json["counts"]["entity_inside_solid"] == Json{2});
+    CHECK(json["ok"] == Json{false});
+
+    SECTION("a missing player start is about the whole map")
+    {
+      auto issue = items[0];
+      CHECK(issue["key"].asString().size() == 12);
+      CHECK_THAT(issue["message"].asString(), StartsWith("Map has no player start"));
+      issue.set("key", "<key>");
+      issue.set("message", "<message>");
+      CHECK(issue == parseJsonLiteral(R"({
+        "type": "no_player_start",
+        "severity": "error",
+        "key": "<key>",
+        "message": "<message>",
+        "node": null,
+        "line": null,
+        "fixes": []
+      })"));
+    }
+
+    SECTION("an entity inside a solid has its origin")
+    {
+      CHECK(items[6]["origin"] == parseJsonLiteral("[0, 0, -8]"));
+      CHECK(items[6]["severity"] == Json{"error"});
+    }
+  }
+
+  SECTION("missing_material is reported only with a Quake directory")
+  {
+    auto fixture = VerifyFixture{"maps/cli_checks.map"};
+    const auto missingMaterial = std::vector<std::string>{"--type", "missing_material"};
+    const auto unchecked = fixture.json(missingMaterial);
+    CHECK(unchecked["issues"]["total"] == Json{0});
+    CHECK(
+      unchecked["stages"][2]["unchecked"] == parseJsonLiteral(R"(["missing_material"])"));
+
+    fixture.env.copyFile(texturesFixturePath() / "cr8_a_excerpt.wad", "textures.wad");
+    fixture.env.copyFile(
+      texturesFixturePath() / "palette.lmp", "quake/id1/gfx/palette.lmp");
+    auto config = quakeConfig();
+    config.set("quake_dir", arg(fixture.env.path("quake")));
+    fixture.env.writeConfig({}, config);
+
+    // only the water pool's material is not in the wad
+    const auto json = fixture.json(missingMaterial);
+    CHECK(json["stages"][2].find("unchecked") == nullptr);
+    CHECK(json["issues"]["total"] == Json{6});
+    CHECK(json["issues"]["items"][0]["node"] == Json{"layer:0/brush:1/face:0"});
+    CHECK(json["issues"]["items"][0]["message"] == Json{"Material '*water1' not found"});
+    CHECK(json["issues"]["items"][0]["severity"] == Json{"warning"});
+  }
+
   SECTION("stages")
   {
     const auto stagesOf = [](const Json& json) {
@@ -235,10 +321,16 @@ TEST_CASE("verify")
 
     CHECK(
       stagesOf(VerifyFixture{}.json())
-      == std::vector<std::string>{"load_diagnostics ok", "validators issues"});
+      == std::vector<std::string>{
+        "load_diagnostics ok", "validators issues", "cli_checks ok"});
     CHECK(
       stagesOf(VerifyFixture{"maps/lossy.map"}.json())
-      == std::vector<std::string>{"load_diagnostics issues", "validators issues"});
+      == std::vector<std::string>{
+        "load_diagnostics issues", "validators issues", "cli_checks ok"});
+    CHECK(
+      stagesOf(VerifyFixture{"maps/cli_checks.map"}.json())
+      == std::vector<std::string>{
+        "load_diagnostics ok", "validators issues", "cli_checks issues"});
 
     // a stage whose only issues are suppressed is ok
     const auto quiet = VerifyFixture{
@@ -247,7 +339,8 @@ TEST_CASE("verify")
         R"({"ignore": [{"type": "empty_property_value"}, {"type": "link_source"}]})")};
     CHECK(
       stagesOf(quiet.json())
-      == std::vector<std::string>{"load_diagnostics ok", "validators ok"});
+      == std::vector<std::string>{
+        "load_diagnostics ok", "validators ok", "cli_checks ok"});
   }
 
   SECTION("counts cover the whole map")

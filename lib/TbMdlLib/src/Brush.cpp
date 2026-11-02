@@ -572,6 +572,25 @@ bool Brush::containsPoint(const vm::vec3d& point) const
   });
 }
 
+bool Brush::containsPointStrictly(const vm::vec3d& point) const
+{
+  return bounds().contains(point) && std::ranges::all_of(m_faces, [&](const auto& face) {
+           return face.boundary().point_status(point) == vm::plane_status::below;
+         });
+}
+
+double Brush::volume() const
+{
+  // by the divergence theorem, a third of the sum of each face's area times the
+  // distance of its plane from the origin
+  auto result = 0.0;
+  for (const auto& face : m_faces)
+  {
+    result += face.area() * face.boundary().distance;
+  }
+  return result / 3.0;
+}
+
 std::vector<const BrushFace*> Brush::incidentFaces(const BrushVertex* vertex) const
 {
   auto result = std::vector<const BrushFace*>{};

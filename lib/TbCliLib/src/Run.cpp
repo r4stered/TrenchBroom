@@ -70,8 +70,11 @@ commands:
                         run one op; tbcli <op> --help lists its arguments.
                         An op's target is --target <path>, or
                         --query '<ql>' --expect <n | any>
-  verify <map>          run the in-process checks: load diagnostics and the
-                        editor's validators; exits 4 with --fail-on
+  verify <map>          run the in-process checks: load diagnostics, the
+                        editor's validators and tbcli's own checks; exits 4
+                        with --fail-on. Missing materials are checked only
+                        with a Quake directory, else the cli_checks stage
+                        lists missing_material as unchecked
   ops [--json]          the JSON Schema of every op and the issue types
 
 node paths:

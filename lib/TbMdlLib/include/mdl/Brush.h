@@ -161,6 +161,10 @@ public:
   size_t edgeCount() const;
   const EdgeList& edges() const;
   bool containsPoint(const vm::vec3d& point) const;
+  /** Whether the given point is inside this brush and not on its boundary. */
+  bool containsPointStrictly(const vm::vec3d& point) const;
+  /** The volume of this brush. */
+  double volume() const;
 
   std::vector<const BrushFace*> incidentFaces(const BrushVertex* vertex) const;
 

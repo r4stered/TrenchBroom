@@ -461,6 +461,18 @@ TEST_CASE("describe")
     })"));
   }
 
+  SECTION("CLI check issue counts")
+  {
+    const auto map = env.copyFixture("maps/cli_checks.map", "cli_checks.map");
+    env.writeConfig({}, quakeConfig());
+
+    const auto counts = parseOutput(runCli({"describe", arg(map)}))["issues"]["counts"];
+    CHECK(counts["fgd_property_type"] == Json{3});
+    CHECK(counts["entity_inside_solid"] == Json{2});
+    CHECK(counts["no_player_start"] == Json{1});
+    CHECK(counts["degenerate_brush"] == Json{2});
+  }
+
   SECTION("output stays bounded on a large map")
   {
     const auto map = env.writeFile("large.map", largeMap());
