@@ -325,6 +325,7 @@ LoadedMap loadMap(
   result.gameInfo = std::make_unique<mdl::GameInfo>(makeGameInfo(config, logger));
   const auto& gameInfo = *result.gameInfo;
   result.rev = computeRev(*bytes);
+  result.bytes = *bytes;
   result.taskManager = std::make_unique<kdl::task_manager>();
   result.resourceManager = std::make_unique<gl::ResourceManager>();
 

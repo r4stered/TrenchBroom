@@ -26,7 +26,11 @@
 #include "mdl/Map.h"
 #include "mdl/WorldNode.h"
 
+#include <algorithm>
+#include <filesystem>
 #include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -109,6 +113,93 @@ std::map<std::string, std::string> keysByNodeAndType(const Json& json)
        + issue["message"].asString()] = issue["key"].asString();
   }
   return result;
+}
+
+/*
+ * A verify --compile fixture: a map from fixture/compiled copied into a temp dir with a
+ * tbcli.json whose compilers.qbsp is the fake compiler replaying the map's recording.
+ *
+ * compile_warnings.map: qbsp warns about the mixed water and wall brush layer:0/brush:9
+ * by line (92, one of its faces) and about the info_null layer:0/entity:2 by
+ * classname and origin; six more warnings name no node.
+ *
+ * compile_fatal.map: qbsp warns that there is no wad and fails on the region brush
+ * layer:0/entity:2/brush:0 (line 105), exiting with 1.
+ */
+struct CompileFixture
+{
+  CliTestEnvironment env;
+  std::string map;
+  std::filesystem::path qbsp;
+
+  /**
+   * The fake qbsp sleeps for `sleepMs`; `timeout` is its timeout in tbcli.json, in
+   * seconds.
+   */
+  explicit CompileFixture(
+    const std::string& recording = "compile_warnings",
+    const int sleepMs = 0,
+    const std::optional<double> timeout = std::nullopt,
+    const std::optional<Json>& verifyConfig = std::nullopt)
+  {
+    qbsp = setUpFakeQbsp(env, recording, sleepMs);
+    auto tool = Json::object();
+    tool.set("path", arg(qbsp));
+    if (timeout)
+    {
+      tool.set("timeout", *timeout);
+    }
+    auto compilers = Json::object();
+    compilers.set("qbsp", std::move(tool));
+    auto config = quakeConfig();
+    config.set("compilers", std::move(compilers));
+    if (verifyConfig)
+    {
+      config.set("verify", *verifyConfig);
+    }
+    env.writeConfig({}, config);
+    const auto fixture = std::filesystem::path{"compiled"} / (recording + ".map");
+    map = arg(env.copyFixture(fixture, fixture.filename()));
+  }
+
+  RunResult run(const std::vector<std::string>& options = {"--compile"}) const
+  {
+    auto args = std::vector<std::string>{"verify", map};
+    args.insert(args.end(), options.begin(), options.end());
+    return runCli(args);
+  }
+
+  Json json(const std::vector<std::string>& options = {"--compile"}) const
+  {
+    const auto result = run(options);
+    INFO(result.out);
+    INFO(result.err);
+    REQUIRE(result.exitCode == 0);
+    return parseOutput(result);
+  }
+};
+
+/** The listed issues of the given type. */
+std::vector<Json> issuesOfType(const Json& json, const std::string_view type)
+{
+  auto result = std::vector<Json>{};
+  for (const auto& issue : json["issues"]["items"].asArray())
+  {
+    if (issue["type"].asString() == type)
+    {
+      result.push_back(issue);
+    }
+  }
+  return result;
+}
+
+const Json& stageNamed(const Json& json, const std::string_view name)
+{
+  const auto& stages = json["stages"].asArray();
+  const auto it = std::ranges::find_if(
+    stages, [&](const auto& stage) { return stage["name"].asString() == name; });
+  REQUIRE(it != stages.end());
+  return *it;
 }
 
 } // namespace
@@ -613,6 +704,297 @@ TEST_CASE("verify")
       const auto result = fixture.run({"--fail-on", "error", "--type", "empty_group"});
       CHECK(result.exitCode == 4);
       CHECK(parseOutput(result)["ok"] == Json{false});
+    }
+  }
+
+  SECTION("--compile")
+  {
+    SECTION("turns the qbsp log into compiler issues mapped to nodes")
+    {
+      const auto json = CompileFixture{}.json();
+
+      const auto compilerIssues = issuesOfType(json, "compiler");
+      REQUIRE(compilerIssues.size() == 8);
+      CHECK(json["counts"]["compiler"] == Json{8});
+      for (const auto& issue : compilerIssues)
+      {
+        CHECK(issue["tool"] == Json{"qbsp"});
+        CHECK(issue["severity"] == Json{"warning"});
+        CHECK(issue["unreliable_mapping"].isNull());
+      }
+
+      // issues without a line come first, then in file order
+      CHECK(
+        compilerIssues[0]
+        == parseJsonLiteral(
+          R"({
+          "type": "compiler",
+          "severity": "warning",
+          "key": ")"
+          + compilerIssues[0]["key"].asString() + R"(",
+          "message": "No wad or _wad key exists in the worldmodel",
+          "node": null,
+          "line": null,
+          "tool": "qbsp",
+          "fixes": []
+        })"));
+
+      // mapped by [line N] to the brush containing the line
+      const auto& byLine = compilerIssues[6];
+      CHECK_THAT(
+        byLine["message"].asString(),
+        StartsWith("compile_warnings.map[line 92]: brush has multiple face contents"));
+      CHECK(byLine["node"] == Json{"layer:0/brush:9"});
+      CHECK(byLine["line"] == Json{92});
+      CHECK(byLine["bounds"].isObject());
+
+      // mapped by classname and origin to the entity, with the entity's line
+      const auto& byOrigin = compilerIssues[7];
+      CHECK_THAT(byOrigin["message"].asString(), StartsWith("info_null at -192 64 32.5"));
+      CHECK(byOrigin["node"] == Json{"layer:0/entity:2"});
+      CHECK(byOrigin["line"] == Json{110});
+      CHECK(byOrigin["origin"] == parseJsonLiteral("[-192, 64, 32.5]"));
+    }
+
+    SECTION("adds a qbsp stage after the in-process stages")
+    {
+      const auto json = CompileFixture{}.json();
+      auto names = std::vector<std::string>{};
+      for (const auto& stage : json["stages"].asArray())
+      {
+        names.push_back(stage["name"].asString());
+      }
+      CHECK(
+        names
+        == std::vector<std::string>{
+          "load_diagnostics", "validators", "cli_checks", "qbsp"});
+      CHECK(stageNamed(json, "qbsp")["status"] == Json{"issues"});
+      CHECK(stageNamed(json, "qbsp")["ms"].isNumber());
+    }
+
+    SECTION("without --compile, qbsp does not run")
+    {
+      const auto fixture = CompileFixture{};
+      const auto json = fixture.json({});
+      CHECK(issuesOfType(json, "compiler").empty());
+      CHECK(json["stages"].size() == 3);
+      CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/qbsp.args")));
+    }
+
+    SECTION("--compile=bsp is --compile")
+    {
+      const auto json = CompileFixture{}.json({"--compile=bsp"});
+      CHECK(stageNamed(json, "qbsp")["status"] == Json{"issues"});
+    }
+
+    SECTION("qbsp compiles the exact bytes, with -keepprt and without -leaktest")
+    {
+      const auto fixture = CompileFixture{};
+      fixture.json();
+      CHECK(
+        fixture.env.readFile("tools/qbsp.args") == "-keepprt\ncompile_warnings.map\n");
+      CHECK(
+        fixture.env.readFile("tools/qbsp.input")
+        == fixture.env.readFile("compile_warnings.map"));
+    }
+
+    SECTION("a failed qbsp run is a compile_fatal issue, not a failed command")
+    {
+      const auto json = CompileFixture{"compile_fatal"}.json();
+      CHECK(stageNamed(json, "qbsp")["status"] == Json{"failed"});
+      CHECK(json["ok"] == Json{false});
+
+      const auto fatal = issuesOfType(json, "compile_fatal");
+      REQUIRE(fatal.size() == 1);
+      CHECK(fatal[0]["severity"] == Json{"error"});
+      CHECK(fatal[0]["message"] == Json{"qbsp exited with code 1"});
+      CHECK(fatal[0]["node"] == Json{});
+      CHECK(fatal[0]["tool"] == Json{"qbsp"});
+
+      // the error that made it fail is a compiler issue on the brush
+      const auto compilerIssues = issuesOfType(json, "compiler");
+      REQUIRE(compilerIssues.size() == 2);
+      CHECK(compilerIssues[1]["severity"] == Json{"error"});
+      CHECK(compilerIssues[1]["node"] == Json{"layer:0/entity:2/brush:0"});
+      CHECK(compilerIssues[1]["line"] == Json{105});
+    }
+
+    SECTION("timeouts")
+    {
+      SECTION("qbsp is stopped after the timeout in tbcli.json")
+      {
+        const auto json = CompileFixture{"compile_warnings", 10000, 0.2}.json();
+        CHECK(stageNamed(json, "qbsp")["status"] == Json{"failed"});
+        const auto fatal = issuesOfType(json, "compile_fatal");
+        REQUIRE(fatal.size() == 1);
+        CHECK(
+          fatal[0]["message"]
+          == Json{"qbsp did not finish within 0.2 seconds and was stopped"});
+      }
+
+      SECTION("--timeout overrides tbcli.json")
+      {
+        const auto json = CompileFixture{"compile_warnings", 10000, 600}.json(
+          {"--compile", "--timeout", "0.1"});
+        const auto fatal = issuesOfType(json, "compile_fatal");
+        REQUIRE(fatal.size() == 1);
+        CHECK(
+          fatal[0]["message"]
+          == Json{"qbsp did not finish within 0.1 seconds and was stopped"});
+      }
+
+      SECTION("a malformed --timeout is a usage error")
+      {
+        const auto fixture = CompileFixture{};
+        checkError(fixture.run({"--compile", "--timeout", "0"}), "usage", 2);
+        checkError(fixture.run({"--compile", "--timeout", "soon"}), "usage", 2);
+      }
+    }
+
+    SECTION("compiler paths")
+    {
+      auto fixture = CompileFixture{};
+      const auto writeQbspPath = [&](const std::optional<std::filesystem::path>& path) {
+        auto config = quakeConfig();
+        if (path)
+        {
+          auto compilers = Json::object();
+          compilers.set("qbsp", arg(*path));
+          config.set("compilers", std::move(compilers));
+        }
+        fixture.env.writeConfig({}, config);
+      };
+
+      SECTION("a missing qbsp is compiler_missing")
+      {
+        writeQbspPath(std::nullopt);
+        checkError(fixture.run(), "compiler_missing", 1);
+
+        writeQbspPath(fixture.env.path("tools/missing"));
+        checkError(fixture.run(), "compiler_missing", 1);
+      }
+
+      SECTION("--qbsp overrides tbcli.json")
+      {
+        writeQbspPath(fixture.env.path("tools/missing"));
+        const auto json = fixture.json({"--compile", "--qbsp", arg(fixture.qbsp)});
+        CHECK(stageNamed(json, "qbsp")["status"] == Json{"issues"});
+      }
+    }
+
+    SECTION("artifacts")
+    {
+      const auto fixture = CompileFixture{};
+
+      SECTION("are deleted without --artifacts")
+      {
+        fixture.json();
+        const auto workDir =
+          std::filesystem::path{fixture.env.readFile("tools/qbsp.cwd")};
+        CHECK_FALSE(std::filesystem::exists(workDir));
+        CHECK_FALSE(std::filesystem::exists(fixture.env.path("compile_warnings.bsp")));
+      }
+
+      SECTION("are kept with --artifacts, with a sidecar")
+      {
+        const auto json =
+          fixture.json({"--compile", "--artifacts", arg(fixture.env.path("out"))});
+        for (const auto* file :
+             {"out/compile_warnings.bsp",
+              "out/compile_warnings.prt",
+              "out/compile_warnings.log"})
+        {
+          CAPTURE(file);
+          CHECK(std::filesystem::is_regular_file(fixture.env.path(file)));
+        }
+        CHECK(
+          parseJsonLiteral(fixture.env.readFile("out/compile_warnings.bsp.tbcli.json"))
+          == parseJsonLiteral(
+            R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": false})"));
+      }
+
+      SECTION("--timeout and --artifacts require --compile")
+      {
+        checkError(fixture.run({"--timeout", "1"}), "usage", 2);
+        checkError(fixture.run({"--artifacts", "out"}), "usage", 2);
+      }
+    }
+
+    SECTION("--compile=vis and --compile=light are not supported yet")
+    {
+      const auto fixture = CompileFixture{};
+      checkError(fixture.run({"--compile=vis"}), "usage", 2);
+      checkError(fixture.run({"--compile=light"}), "usage", 2);
+    }
+
+    SECTION("other commands do not accept the compile options")
+    {
+      const auto fixture = CompileFixture{};
+      checkError(runCli({"describe", fixture.map, "--compile"}), "usage", 2);
+    }
+
+    SECTION("after a lossy load, compiler issues have unreliable_mapping")
+    {
+      auto fixture = CompileFixture{};
+      // a brush with a face that does not parse, after everything qbsp's log names
+      fixture.env.writeFile(
+        "compile_warnings.map",
+        fixture.env.readFile("compile_warnings.map") + R"(// entity 4
+  {
+  "classname" "func_wall"
+  {
+  ( 0 0 0 ) ( 0 0 0 ) ( 0 0 0 ) wall1_1 [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+  }
+  }
+  )");
+      const auto json = fixture.json();
+      CHECK(json["counts"]["load_error"].isNumber());
+      const auto compilerIssues = issuesOfType(json, "compiler");
+      REQUIRE(compilerIssues.size() == 8);
+      for (const auto& issue : compilerIssues)
+      {
+        CHECK(issue["unreliable_mapping"] == Json{true});
+      }
+      CHECK(compilerIssues[6]["node"] == Json{"layer:0/brush:9"});
+    }
+
+    SECTION("compiler issue keys do not depend on the temporary directory")
+    {
+      const auto fixture = CompileFixture{};
+      const auto keys = [&]() {
+        auto result = std::vector<std::string>{};
+        for (const auto& issue : issuesOfType(fixture.json(), "compiler"))
+        {
+          result.push_back(issue["key"].asString());
+        }
+        return result;
+      };
+      const auto first = keys();
+      CHECK(first == keys());
+      // and each issue has its own key
+      CHECK(std::set<std::string>(first.begin(), first.end()).size() == first.size());
+    }
+
+    SECTION("verify.ignore suppresses compiler issues, and the stage is ok")
+    {
+      const auto json =
+        CompileFixture{
+          "compile_warnings",
+          0,
+          std::nullopt,
+          parseJsonLiteral(R"({"ignore": [{"type": "compiler"}]})")}
+          .json();
+      CHECK(issuesOfType(json, "compiler").empty());
+      CHECK(json["counts"]["suppressed"] == Json{8});
+      CHECK(stageNamed(json, "qbsp")["status"] == Json{"ok"});
+    }
+
+    SECTION("--type and --target filter compiler issues")
+    {
+      const auto json = CompileFixture{}.json(
+        {"--compile", "--type", "compiler", "--target", "layer:0/brush:9"});
+      REQUIRE(json["issues"]["items"].size() == 1);
+      CHECK(json["issues"]["items"][0]["line"] == Json{92});
     }
   }
 }

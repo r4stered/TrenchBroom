@@ -94,6 +94,8 @@ struct LoadedMap
 {
   /** The short SHA-256 prefix of the file's bytes as they were loaded. */
   std::string rev;
+  /** The file's bytes as they were loaded, which `verify --compile` compiles. */
+  std::string bytes;
   /**
    * What the reader skipped or changed while loading, as it logged it. A load with any
    * such problems is lossy: saving would not write back what the file holds.

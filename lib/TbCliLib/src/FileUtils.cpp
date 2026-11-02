@@ -46,6 +46,23 @@ std::optional<std::string> readFile(const std::filesystem::path& path)
   return result;
 }
 
+std::optional<std::string> writeFile(
+  const std::filesystem::path& path, const std::string_view bytes)
+{
+  auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
+  if (!stream)
+  {
+    return fmt::format("cannot create {}", path);
+  }
+  stream.write(bytes.data(), std::streamsize(bytes.size()));
+  stream.close();
+  if (!stream)
+  {
+    return fmt::format("cannot write {}", path);
+  }
+  return std::nullopt;
+}
+
 namespace
 {
 
@@ -62,18 +79,9 @@ std::optional<std::string> writeAndConfirm(
   const std::string_view bytes,
   const FileReader readBack)
 {
+  if (auto error = writeFile(path, bytes))
   {
-    auto stream = std::ofstream{path, std::ios::binary | std::ios::trunc};
-    if (!stream)
-    {
-      return fmt::format("cannot create {}", path);
-    }
-    stream.write(bytes.data(), std::streamsize(bytes.size()));
-    stream.close();
-    if (!stream)
-    {
-      return fmt::format("cannot write {}", path);
-    }
+    return error;
   }
 
   if (readBack(path) != bytes)

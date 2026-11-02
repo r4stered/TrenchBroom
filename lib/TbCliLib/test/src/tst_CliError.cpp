@@ -42,6 +42,7 @@ TEST_CASE("CliError")
       T{ErrorCode::ExpectMismatch, 1},
       T{ErrorCode::LossyLoad, 1},
       T{ErrorCode::OpFailed, 1},
+      T{ErrorCode::CompilerMissing, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

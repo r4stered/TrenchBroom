@@ -74,7 +74,8 @@ commands:
                         editor's validators and tbcli's own checks; exits 4
                         with --fail-on. Missing materials are checked only
                         with a Quake directory, else the cli_checks stage
-                        lists missing_material as unchecked
+                        lists missing_material as unchecked. With --compile,
+                        also compile the map with qbsp and report its log
   ops [--json]          the JSON Schema of every op and the issue types
 
 node paths:
@@ -93,6 +94,8 @@ options:
   --key-entities <classes>
                         comma-separated classes describe lists in full,
                         overrides tbcli.json "describe.key_entities"
+  --qbsp <path>         qbsp executable, overrides tbcli.json
+                        "compilers.qbsp"; a bare name is looked up in PATH
   --limit <n>           query, verify: return at most n matches or issues
                         (default: 200)
   --offset <n>          query, verify: skip the first n matches or issues
@@ -117,6 +120,18 @@ options:
                         path, anything else a query
   --fail-on <s>         verify: exit 4 if an issue that tbcli.json does not
                         suppress has at least severity s
+  --compile[=bsp]       verify: also run qbsp (with -keepprt, without
+                        -leaktest) on the verified bytes in a temporary
+                        directory, and turn its log into compiler issues; a
+                        failed run is a compile_fatal issue, not an exit code
+  --timeout <seconds>   verify --compile: stop each compiler after this long,
+                        overriding the timeouts in tbcli.json (default for
+                        qbsp: 300)
+  --artifacts <dir>     verify --compile: keep the .bsp, .pts, .prt and .log
+                        in dir, replacing those of an earlier run, with a
+                        sidecar <map>.bsp.tbcli.json holding {{rev, leaked}};
+                        a failed run keeps no .bsp or .prt. Without it, they
+                        are deleted
   --json                ops: print JSON (the default)
   -h, --help            print this help
   --version             print the version
@@ -161,7 +176,7 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 20>{{
+constexpr auto CommandOptions = std::array<CommandOption, 23>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -176,6 +191,9 @@ constexpr auto CommandOptions = std::array<CommandOption, 20>{{
   {"--min-severity", "verify"},
   {"--target", "verify"},
   {"--fail-on", "verify"},
+  {"--compile", "verify"},
+  {"--timeout", "verify"},
+  {"--artifacts", "verify"},
   {"--json", "ops"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
@@ -232,6 +250,10 @@ struct Arguments
   QueryOptions queryOptions;
   bool raw = false;
   VerifyOptions verifyOptions;
+  /** --compile */
+  bool compile = false;
+  /** --timeout and --artifacts; the compilers come from the configuration */
+  CompileOptions compileOptions;
   ApplyOptions applyOptions;
   /** The flags of an op's subcommand, as (name without dashes, value). */
   OpFlags opFlags;
@@ -447,6 +469,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       result.configOverrides.keyEntities = splitList(value());
     }
+    else if (name == "--qbsp")
+    {
+      result.configOverrides.qbsp = std::filesystem::path{value()};
+    }
     else if (name == "--limit")
     {
       result.paging.limit = parseCount(name, value());
@@ -527,6 +553,33 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--fail-on")
     {
       result.verifyOptions.failOn = parseSeverityOption(name, value());
+    }
+    else if (name == "--compile")
+    {
+      // the value is optional, so --compile never takes the next argument
+      if (inlineValue && *inlineValue != "bsp")
+      {
+        throw usageError(
+          fmt::format("--compile accepts only bsp, not '{}'", *inlineValue));
+      }
+      result.compile = true;
+    }
+    else if (name == "--timeout")
+    {
+      const auto seconds = value();
+      const auto parsed = parseDecimal(seconds);
+      if (!parsed || *parsed <= 0.0)
+      {
+        throw usageError(
+          fmt::format(
+            "--timeout requires a positive number of seconds, not '{}'", seconds));
+      }
+      result.compileOptions.timeout = toMilliseconds(*parsed);
+    }
+    else if (name == "--artifacts")
+    {
+      result.compileOptions.artifacts =
+        std::filesystem::absolute(std::filesystem::path{value()});
     }
     else
     {
@@ -697,9 +750,21 @@ CommandResult runCommand(
   if (command == "verify")
   {
     checkArguments(arguments, command, {"a map file"});
+    const auto& compileOptions = arguments.compileOptions;
+    if (!arguments.compile && (compileOptions.timeout || compileOptions.artifacts))
+    {
+      throw usageError(
+        fmt::format(
+          "{} requires --compile", compileOptions.timeout ? "--timeout" : "--artifacts"));
+    }
     auto [loadedMap, config] = loadMapArgument(arguments, logger);
     auto options = arguments.verifyOptions;
     options.paging = arguments.paging;
+    if (arguments.compile)
+    {
+      options.compile = compileOptions;
+      options.compile->compilers = config.compilers;
+    }
     auto [output, failed] = verify(loadedMap, config.verify, options);
     return {std::move(output), failed ? ExitCode::FailOn : ExitCode::Ok};
   }

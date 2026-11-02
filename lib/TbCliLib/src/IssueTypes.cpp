@@ -174,6 +174,11 @@ const std::vector<IssueTypeDef>& issueTypes()
     cliCheckType<EntityInsideSolidValidator>("entity_inside_solid", Error),
     cliCheckType<NoPlayerStartValidator>("no_player_start", Error, IssueScope::Map),
     cliCheckType<DegenerateBrushValidator>("degenerate_brush", Warning),
+    {.id = "compiler",
+     .severity = Warning,
+     .source = IssueSource::Compiler,
+     .severityPerIssue = true},
+    {"compile_fatal", Error, IssueSource::Compiler},
   };
   return types;
 }
@@ -216,7 +221,8 @@ Json issueTypesJson()
   {
     auto entry = Json::object();
     entry.set("type", type.id);
-    entry.set("severity", toString(type.severity));
+    entry.set(
+      "severity", type.severityPerIssue ? Json{nullptr} : Json{toString(type.severity)});
     entry.set("fixes", fixIdsJson(type));
     result.push(std::move(entry));
   }

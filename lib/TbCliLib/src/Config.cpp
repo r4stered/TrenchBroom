@@ -20,11 +20,15 @@
 #include "cli/Config.h"
 
 #include "cli/CliError.h"
+#include "cli/Compile.h"
 #include "cli/FileUtils.h"
 #include "cli/Json.h"
+#include "cli/Process.h"
 
 #include <fmt/format.h>
 #include <fmt/std.h>
+
+#include <cmath>
 
 namespace tb::cli
 {
@@ -142,6 +146,100 @@ void readDescribeConfig(
     throw fileConfigError(file, "'describe' must be an object");
   }
   config.keyEntities = readStrings(describe, "key_entities", file);
+}
+
+/**
+ * The path of a compiler: a bare name stays as it is, to be looked up in PATH, and any
+ * other path is resolved against the given directory.
+ */
+std::filesystem::path resolveTool(
+  const std::filesystem::path& base, const std::filesystem::path& path)
+{
+  return isBareName(path) ? path : resolve(base, path);
+}
+
+ToolConfig readTool(
+  const Json& compilers,
+  const std::string_view key,
+  const std::filesystem::path& file,
+  const std::filesystem::path& base)
+{
+  const auto& value = compilers[key];
+  if (value.isNull())
+  {
+    return {};
+  }
+  if (value.isString())
+  {
+    return {resolveTool(base, std::filesystem::path{value.asString()}), std::nullopt};
+  }
+
+  const auto typeError = [&]() {
+    return fileConfigError(
+      file,
+      fmt::format(
+        "'compilers.{}' must be a path or an object {{path, timeout}}, with the "
+        "timeout in seconds",
+        key));
+  };
+  if (!value.isObject())
+  {
+    throw typeError();
+  }
+  for (const auto& [entryKey, entryValue] : value.asObject())
+  {
+    if (entryKey != "path" && entryKey != "timeout")
+    {
+      throw fileConfigError(
+        file, fmt::format("'compilers.{}': unknown key '{}'", key, entryKey));
+    }
+  }
+
+  auto result = ToolConfig{};
+  if (const auto& path = value["path"]; !path.isNull())
+  {
+    if (!path.isString())
+    {
+      throw typeError();
+    }
+    result.path = resolveTool(base, std::filesystem::path{path.asString()});
+  }
+  if (const auto& timeout = value["timeout"]; !timeout.isNull())
+  {
+    if (!timeout.isNumber() || timeout.asNumber() <= 0.0)
+    {
+      throw fileConfigError(
+        file,
+        fmt::format("'compilers.{}.timeout' must be a positive number of seconds", key));
+    }
+    result.timeout = toMilliseconds(timeout.asNumber());
+  }
+  return result;
+}
+
+void readCompilersConfig(
+  Config& config,
+  const Json& object,
+  const std::filesystem::path& file,
+  const std::filesystem::path& base)
+{
+  const auto& compilers = object["compilers"];
+  if (compilers.isNull())
+  {
+    return;
+  }
+  if (!compilers.isObject())
+  {
+    throw fileConfigError(file, "'compilers' must be an object");
+  }
+  for (const auto& [key, value] : compilers.asObject())
+  {
+    if (key != QbspTool)
+    {
+      throw fileConfigError(file, fmt::format("'compilers': unknown tool '{}'", key));
+    }
+  }
+  config.compilers.qbsp = readTool(compilers, QbspTool, file, base);
 }
 
 /** The known issue type that tbcli.json names under the given key. */
@@ -305,10 +403,16 @@ void readConfigFile(Config& config, const std::filesystem::path& file)
   config.fgd = readPaths(object, "fgd", file, base);
   config.quakeDir = readPath(object, "quake_dir", file, base);
   readDescribeConfig(config, object, file);
+  readCompilersConfig(config, object, file, base);
   readVerifyConfig(config, object, file);
 }
 
 } // namespace
+
+std::chrono::milliseconds toMilliseconds(const double seconds)
+{
+  return std::chrono::milliseconds{static_cast<long long>(std::ceil(seconds * 1000.0))};
+}
 
 std::optional<std::filesystem::path> findConfigFile(const std::filesystem::path& mapPath)
 {
@@ -365,6 +469,10 @@ Config loadConfig(const std::filesystem::path& mapPath, const ConfigOverrides& o
   if (overrides.keyEntities)
   {
     config.keyEntities = overrides.keyEntities;
+  }
+  if (overrides.qbsp)
+  {
+    config.compilers.qbsp.path = resolveTool(cwd, *overrides.qbsp);
   }
 
   // checked once the overrides are applied, so a flag can override a bad key

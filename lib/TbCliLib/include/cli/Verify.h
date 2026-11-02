@@ -20,6 +20,7 @@
 #pragma once
 
 #include "cli/CappedList.h"
+#include "cli/Compile.h"
 #include "cli/IssueTypes.h"
 #include "cli/Json.h"
 
@@ -63,6 +64,13 @@ struct VerifyIssue
   /** Set if the issue is about a property of `node`, which is then an entity. */
   std::optional<std::string> propertyKey;
   std::optional<size_t> line;
+  /** For an issue a compiler reported, the compiler's name, such as `qbsp`. */
+  std::optional<std::string> tool;
+  /**
+   * Whether the issue was mapped to a node after a lossy load, so that the map the
+   * compiler saw holds content that the loaded map lacks.
+   */
+  bool unreliableMapping = false;
   /** Whether a `verify.ignore` entry suppresses the issue. */
   bool suppressed = false;
 };
@@ -76,6 +84,8 @@ struct VerifyStage
   double ms = 0.0;
   /** The issue types that the stage could not check, such as missing materials. */
   std::vector<const IssueTypeDef*> unchecked = {};
+  /** Whether the stage's tool exited with a non-zero code or was stopped. */
+  bool failed = false;
 };
 
 /** What the in-process verify stages found in a whole map. */
@@ -89,16 +99,26 @@ struct IssueReport
 /**
  * Runs the in-process verify stages on the whole map: load diagnostics, which turn
  * what the reader skipped into `load_error` issues, then every validator the map
- * registers, then the CLI checks. Applies the severities and suppressions of the given
+ * registers, then the CLI checks. Given compile options, then compiles the map's bytes
+ * and turns the compilers' logs into `compiler` issues and a failed compiler into a
+ * `compile_fatal` issue. Applies the severities and suppressions of the given
  * configuration.
  *
- * @throw CliError if a validator is not in the issue-type table
+ * A compiler message that names a line (`[line N]`) is put on the innermost node
+ * containing that line; one that names a classname and origin is put on the first
+ * entity of that class whose bounds contain the origin. Other messages have no node.
+ *
+ * @throw CliError if a validator is not in the issue-type table, or as `compile` does
  */
-IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config);
+IssueReport collectIssues(
+  LoadedMap& loadedMap,
+  const VerifyConfig& config,
+  const std::optional<CompileOptions>& compileOptions = std::nullopt);
 
 /**
  * The issue record `{type, severity, key, message, node, line, origin? | bounds?,
- * fixes}`, with the node's path taken from the given paths, which must contain it.
+ * tool?, unreliable_mapping?, fixes}`, with the node's path taken from the given
+ * paths, which must contain it.
  */
 Json issueToJson(
   const VerifyIssue& issue,
@@ -156,6 +176,8 @@ struct VerifyOptions
   std::optional<std::string> target;
   /** The severity at which verify fails (exit 4). */
   std::optional<Severity> failOn;
+  /** If set, verify also compiles the map (`--compile`). */
+  std::optional<CompileOptions> compile;
 };
 
 struct VerifyResult

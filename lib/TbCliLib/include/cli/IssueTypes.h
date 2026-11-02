@@ -57,6 +57,8 @@ enum class IssueSource
   Validator,
   /** a validator of tbcli's own checks */
   CliCheck,
+  /** a compiler that `verify --compile` runs */
+  Compiler,
 };
 
 /** What an issue is about. */
@@ -94,6 +96,11 @@ struct IssueTypeDef
   std::unique_ptr<mdl::Validator> (*createValidator)() = nullptr;
   /** The quick-fixes of the type's validator, in the validator's order. */
   std::vector<QuickFixDef> fixes = {};
+  /**
+   * Whether each issue brings its own severity, as compiler log lines do. `severity`
+   * is then only a placeholder.
+   */
+  bool severityPerIssue = false;
 };
 
 /**
@@ -115,7 +122,10 @@ const QuickFixDef* findQuickFix(const IssueTypeDef& type, std::string_view id);
 /** The ids of the quick-fixes for issues of the given type, as a JSON array. */
 Json fixIdsJson(const IssueTypeDef& type);
 
-/** The issue-type table as `ops --json` lists it: `[{type, severity, fixes}]`. */
+/**
+ * The issue-type table as `ops --json` lists it: `[{type, severity, fixes}]`, where
+ * `severity` is null for a type whose issues bring their own severity.
+ */
 Json issueTypesJson();
 
 } // namespace tb::cli

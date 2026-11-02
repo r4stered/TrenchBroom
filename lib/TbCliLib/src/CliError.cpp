@@ -68,6 +68,8 @@ std::string_view toString(const ErrorCode code)
     return "lossy_load";
   case ErrorCode::OpFailed:
     return "op_failed";
+  case ErrorCode::CompilerMissing:
+    return "compiler_missing";
   case ErrorCode::InternalError:
     return "internal_error";
   }

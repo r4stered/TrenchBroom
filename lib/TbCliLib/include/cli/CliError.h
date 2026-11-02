@@ -78,6 +78,8 @@ enum class ErrorCode
   LossyLoad,
   /** an op cannot be carried out with the given arguments */
   OpFailed,
+  /** a needed compiler is not configured or not found */
+  CompilerMissing,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

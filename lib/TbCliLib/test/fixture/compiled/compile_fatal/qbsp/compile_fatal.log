@@ -1,0 +1,13 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+
+Input file: ${WORKDIR}\compile_fatal.map
+Output file: ${WORKDIR}\compile_fatal.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+************ ERROR ************
+ParseBrush: Region brush at compile_fatal.map[line 105] isn't part of the world entity
+
+

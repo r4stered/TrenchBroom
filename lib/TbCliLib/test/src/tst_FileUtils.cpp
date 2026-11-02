@@ -58,6 +58,15 @@ TEST_CASE("FileUtils")
     CHECK(readFile(env.path("missing")) == std::nullopt);
   }
 
+  SECTION("writeFile")
+  {
+    const auto bytes = std::string{"a\r\nb\n\0c", 7};
+    const auto path = env.writeFile("file.bin", "old contents");
+    CHECK(writeFile(path, bytes) == std::nullopt);
+    CHECK(readFile(path) == bytes);
+    CHECK(writeFile(env.path("missing/file.bin"), bytes).has_value());
+  }
+
   SECTION("writeFileAtomically")
   {
     const auto path = env.writeFile("file.map", "old");

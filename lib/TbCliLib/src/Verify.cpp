@@ -208,20 +208,23 @@ public:
     return sha256Hex(input).substr(0, KeyLength);
   }
 
+  /**
+   * The key of an issue of the given type on the given node, which is told apart from
+   * other issues of that type on the node by the given detail.
+   */
+  std::string key(
+    const std::string_view type, mdl::Node& node, const std::string_view detail)
+  {
+    return key(type, fmt::format("{}\n{}", textOf(node), detail));
+  }
+
   /** The key of a validator issue of the given type, on the given face if it has one. */
   std::string key(
     const std::string_view type,
     const mdl::Issue& issue,
     const std::optional<size_t> faceIndex)
   {
-    auto& node = issue.node();
-    auto [it, inserted] = m_texts.try_emplace(&node);
-    if (inserted)
-    {
-      it->second = serializedText(m_worldNode, node, m_taskManager);
-    }
-
-    auto text = it->second;
+    auto text = textOf(issue.node());
     if (faceIndex)
     {
       text += fmt::format("\nface:{}", *faceIndex);
@@ -232,6 +235,17 @@ public:
       text += fmt::format("\nproperty:{}", propertyIssue->propertyKey());
     }
     return key(type, text);
+  }
+
+private:
+  const std::string& textOf(mdl::Node& node)
+  {
+    auto [it, inserted] = m_texts.try_emplace(&node);
+    if (inserted)
+    {
+      it->second = serializedText(m_worldNode, node, m_taskManager);
+    }
+    return it->second;
   }
 };
 
@@ -339,6 +353,125 @@ private:
       });
   }
 };
+
+/** The innermost node whose lines contain the given line, or nullptr. */
+mdl::Node* nodeAtLine(mdl::Node& node, const size_t line)
+{
+  // the default layer has no lines of its own, so the children of a node that does not
+  // contain the line are searched, too
+  auto* result = node.containsLine(line) ? &node : nullptr;
+  for (auto* child : node.children())
+  {
+    if (auto* inner = nodeAtLine(*child, line))
+    {
+      return inner;
+    }
+  }
+  return result;
+}
+
+/**
+ * The first entity in file order of the given class whose bounds contain the given
+ * point, or nullptr.
+ */
+mdl::Node* entityAt(mdl::Node& node, const std::string& classname, const vm::vec3d& point)
+{
+  if (
+    auto* entityNode = dynamic_cast<mdl::EntityNode*>(&node);
+    entityNode && entityNode->entity().classname() == classname
+    && entityNode->logicalBounds().contains(point))
+  {
+    return entityNode;
+  }
+  for (auto* child : node.children())
+  {
+    if (auto* found = entityAt(*child, classname, point))
+    {
+      return found;
+    }
+  }
+  return nullptr;
+}
+
+/** The node a compiler message is about, if it names one that the map has. */
+mdl::Node* nodeOf(mdl::WorldNode& worldNode, const CompilerMessage& message)
+{
+  if (message.line)
+  {
+    return nodeAtLine(worldNode, *message.line);
+  }
+  if (message.classname && message.origin)
+  {
+    return entityAt(worldNode, *message.classname, *message.origin);
+  }
+  return nullptr;
+}
+
+std::string failureMessage(const ToolRun& run)
+{
+  if (run.process.timedOut)
+  {
+    return fmt::format(
+      "{} did not finish within {:g} seconds and was stopped",
+      run.tool,
+      double(run.timeout.count()) / 1000.0);
+  }
+  return fmt::format(
+    "{} exited with code {}", run.tool, run.process.exitCode.value_or(0));
+}
+
+/**
+ * Turns the messages of the compilers into `compiler` issues and every failed
+ * compiler into a `compile_fatal` issue.
+ */
+void collectCompilerIssues(
+  const CompileResult& compileResult,
+  LoadedMap& loadedMap,
+  KeyMaker& keys,
+  std::vector<VerifyIssue>& issues)
+{
+  const auto& compilerType = *findIssueType("compiler");
+  const auto& fatalType = *findIssueType("compile_fatal");
+  const auto lossy = !loadedMap.loadProblems.empty();
+  auto& worldNode = loadedMap.map->worldNode();
+
+  for (const auto& run : compileResult.runs)
+  {
+    for (const auto& message : run.messages)
+    {
+      auto* node = nodeOf(worldNode, message);
+      const auto detail =
+        fmt::format("{}\n{}", run.tool, withoutLineNumbers(message.message));
+      const auto nodeLine =
+        node && node->lineNumber() > 0 ? std::optional{node->lineNumber()} : std::nullopt;
+      issues.push_back(
+        VerifyIssue{
+          .type = &compilerType,
+          .severity = message.severity,
+          .key = node ? keys.key(compilerType.id, *node, detail)
+                      : keys.key(compilerType.id, detail),
+          .message = message.message,
+          .node = node,
+          .line = message.line ? message.line : nodeLine,
+          .tool = run.tool,
+          .unreliableMapping = lossy,
+        });
+    }
+
+    if (run.failed())
+    {
+      const auto message = failureMessage(run);
+      issues.push_back(
+        VerifyIssue{
+          .type = &fatalType,
+          .severity = fatalType.severity,
+          .key = keys.key(fatalType.id, fmt::format("{}\n{}", run.tool, message)),
+          .message = message,
+          .tool = run.tool,
+        });
+    }
+  }
+}
 
 std::vector<const mdl::Validator*> pointers(
   const std::vector<std::unique_ptr<mdl::Validator>>& validators)
@@ -459,7 +592,7 @@ Json stageToJson(const VerifyStage& stage)
 {
   auto result = Json::object();
   result.set("name", stage.name);
-  result.set("status", stage.hasIssues ? "issues" : "ok");
+  result.set("status", stage.failed ? "failed" : stage.hasIssues ? "issues" : "ok");
   if (!stage.unchecked.empty())
   {
     auto unchecked = Json::array();
@@ -536,6 +669,14 @@ Json issueToJson(
   {
     setLocation(result, issue);
   }
+  if (issue.tool)
+  {
+    result.set("tool", *issue.tool);
+  }
+  if (issue.unreliableMapping)
+  {
+    result.set("unreliable_mapping", true);
+  }
 
   result.set("fixes", fixIdsJson(*issue.type));
   return result;
@@ -569,7 +710,10 @@ std::vector<const VerifyIssue*> filterIssues(
 
 } // namespace
 
-IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
+IssueReport collectIssues(
+  LoadedMap& loadedMap,
+  const VerifyConfig& config,
+  const std::optional<CompileOptions>& compileOptions)
 {
   auto& map = *loadedMap.map;
   auto& worldNode = map.worldNode();
@@ -590,9 +734,19 @@ IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
       worldNode);
   });
 
+  const auto compileResult =
+    compileOptions
+      ? std::optional{compile(
+          loadedMap.bytes, map.path().stem().string(), loadedMap.rev, *compileOptions)}
+      : std::nullopt;
+  if (compileResult)
+  {
+    collectCompilerIssues(*compileResult, loadedMap, keys, result.issues);
+  }
+
   // validator issues are collected depth first; the lines give the file order, with
   // issues that have no line first, and on a line, load errors before validator issues
-  // before CLI check issues
+  // before CLI check issues before compiler issues
   std::ranges::stable_sort(
     result.issues, {}, [](const auto& issue) { return issue.line.value_or(0); });
 
@@ -611,6 +765,20 @@ IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
   if (materialCheck == MaterialCheck::Off)
   {
     result.stages.back().unchecked.push_back(findIssueType("missing_material"));
+  }
+
+  if (compileResult)
+  {
+    for (const auto& run : compileResult->runs)
+    {
+      result.stages.push_back(
+        {.name = run.tool,
+         .hasIssues = hasUnsuppressedIssue(
+           result.issues,
+           [&](const VerifyIssue& issue) { return issue.tool == run.tool; }),
+         .ms = run.ms,
+         .failed = run.failed()});
+    }
   }
   return result;
 }
@@ -676,7 +844,7 @@ VerifyResult verify(
   LoadedMap& loadedMap, const VerifyConfig& config, const VerifyOptions& options)
 {
   auto& map = *loadedMap.map;
-  const auto report = collectIssues(loadedMap, config);
+  const auto report = collectIssues(loadedMap, config, options.compile);
   const auto listed = filterIssues(map, report.issues, options);
 
   const auto threshold = options.failOn.value_or(Severity::Error);

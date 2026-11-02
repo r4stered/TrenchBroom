@@ -1,11 +1,23 @@
+# A stand-in for the ericw-tools compilers that replays recorded outputs; see
+# src/FakeCompiler.cpp and fixture/compiled/record.sh
+add_executable(TbCliFakeCompiler)
+EMBED_UTF8_MANIFEST(TbCliFakeCompiler)
+target_sources(TbCliFakeCompiler PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/FakeCompiler.cpp)
+target_link_libraries(TbCliFakeCompiler PRIVATE CompilerConfig)
+
 add_executable(TbCliLibTest)
 EMBED_UTF8_MANIFEST(TbCliLibTest)
+add_dependencies(TbCliLibTest TbCliFakeCompiler)
+target_compile_definitions(TbCliLibTest PRIVATE
+  TB_CLI_FAKE_COMPILER="$<TARGET_FILE:TbCliFakeCompiler>"
+)
 
 target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Apply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliValidators.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Compile.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Config.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
@@ -25,6 +37,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodePath.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Ops.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ParseUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Process.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Query.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Run.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Sha256.cpp

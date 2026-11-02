@@ -5,6 +5,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Apply.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliError.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliValidators.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Compile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CsgOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Describe.cpp
@@ -25,6 +26,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodePath.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ParseUtils.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Process.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Query.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Sha256.cpp

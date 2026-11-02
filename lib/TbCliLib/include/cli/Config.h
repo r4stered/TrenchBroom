@@ -21,6 +21,7 @@
 
 #include "cli/IssueTypes.h"
 
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <optional>
@@ -43,6 +44,29 @@ struct ConfigOverrides
   std::vector<std::filesystem::path> fgd;
   std::optional<std::filesystem::path> quakeDir;
   std::optional<std::vector<std::string>> keyEntities;
+  /** The qbsp executable, overriding `compilers.qbsp`. */
+  std::optional<std::filesystem::path> qbsp;
+};
+
+/** A compiler entry of tbcli.json's `compilers`. */
+struct ToolConfig
+{
+  /**
+   * The executable: an absolute path, or a bare name that is looked up in PATH when
+   * the tool runs.
+   */
+  std::optional<std::filesystem::path> path;
+  /** How long the tool may run before it is stopped. */
+  std::optional<std::chrono::milliseconds> timeout;
+};
+
+/**
+ * tbcli.json's `compilers`. Each tool is given as a path, or as an object `{path,
+ * timeout}` with the timeout in seconds.
+ */
+struct CompilersConfig
+{
+  ToolConfig qbsp;
 };
 
 /**
@@ -82,8 +106,12 @@ struct Config
   std::optional<std::filesystem::path> quakeDir;
   /** `describe.key_entities`: overrides the classes describe lists in full. */
   std::optional<std::vector<std::string>> keyEntities;
+  CompilersConfig compilers;
   VerifyConfig verify;
 };
+
+/** A timeout given in seconds, rounded up to whole milliseconds. */
+std::chrono::milliseconds toMilliseconds(double seconds);
 
 /**
  * Returns the nearest tbcli.json in the directory containing the given map or any of

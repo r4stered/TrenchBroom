@@ -182,6 +182,13 @@ TEST_CASE("ops command")
       entry("no_player_start")
       == parseJsonLiteral(
         R"({"type": "no_player_start", "severity": "error", "fixes": []})"));
+    CHECK(
+      entry("compiler")
+      == parseJsonLiteral(R"({"type": "compiler", "severity": null, "fixes": []})"));
+    CHECK(
+      entry("compile_fatal")
+      == parseJsonLiteral(
+        R"({"type": "compile_fatal", "severity": "error", "fixes": []})"));
   }
 
   SECTION("JSON is the default")

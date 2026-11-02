@@ -30,6 +30,14 @@ namespace tb::cli
 /** Reads the raw bytes of the given file, or nullopt if it cannot be read. */
 std::optional<std::string> readFile(const std::filesystem::path& path);
 
+/**
+ * Writes the given bytes to the given file, replacing it.
+ *
+ * @return a description of the failure, or nullopt if the file was written
+ */
+std::optional<std::string> writeFile(
+  const std::filesystem::path& path, std::string_view bytes);
+
 /** A function that reads a file as readFile does. */
 using FileReader = std::optional<std::string> (*)(const std::filesystem::path&);
 

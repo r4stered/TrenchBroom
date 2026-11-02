@@ -21,6 +21,8 @@
 #include "cli/CliError.h"
 #include "cli/Config.h"
 
+#include <chrono>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <vector>
@@ -36,6 +38,12 @@ TEST_CASE("Config")
 {
   auto env = CliTestEnvironment{};
   const auto mapPath = env.path("project/maps/sub/test.map");
+
+  SECTION("toMilliseconds")
+  {
+    CHECK(toMilliseconds(1.0) == std::chrono::milliseconds{1000});
+    CHECK(toMilliseconds(0.0001) == std::chrono::milliseconds{1});
+  }
 
   SECTION("findConfigFile")
   {
@@ -132,6 +140,36 @@ TEST_CASE("Config")
       CHECK(config.verify.ignore[0].query == std::nullopt);
       CHECK(config.verify.ignore[1].key == "0123456789ab");
       CHECK(config.verify.ignore[2].query == R"(classname is "x")");
+    }
+
+    SECTION("compilers")
+    {
+      env.writeFile("project/tbcli.json", R"({"compilers": {"qbsp": "tools/qbsp"}})");
+      auto config = loadConfig(mapPath, {});
+      // a path is resolved against the directory of tbcli.json
+      CHECK(config.compilers.qbsp.path == env.path("project/tools/qbsp"));
+      CHECK(config.compilers.qbsp.timeout == std::nullopt);
+
+      env.writeFile(
+        "project/tbcli.json",
+        R"({"compilers": {"qbsp": {"path": "qbsp", "timeout": 1.5}}})");
+      config = loadConfig(mapPath, {});
+      // a bare name is kept, to be looked up in PATH
+      CHECK(config.compilers.qbsp.path == "qbsp");
+      CHECK(config.compilers.qbsp.timeout == std::chrono::milliseconds{1500});
+
+      env.writeFile("project/tbcli.json", R"({"compilers": {"qbsp": {"timeout": 60}}})");
+      config = loadConfig(mapPath, {});
+      CHECK(config.compilers.qbsp.path == std::nullopt);
+      CHECK(config.compilers.qbsp.timeout == std::chrono::milliseconds{60000});
+
+      const auto cwd = std::filesystem::current_path();
+      CHECK(
+        loadConfig(mapPath, ConfigOverrides{.qbsp = "bin/qbsp"}).compilers.qbsp.path
+        == cwd / "bin/qbsp");
+      CHECK(
+        loadConfig(mapPath, ConfigOverrides{.qbsp = "qbsp"}).compilers.qbsp.path
+        == "qbsp");
     }
 
     SECTION("overrides replace keys and resolve against the working directory")
@@ -236,6 +274,24 @@ TEST_CASE("Config")
         CAPTURE(verify);
 
         env.writeFile("project/tbcli.json", std::string{R"({"verify": )"} + verify + "}");
+        CHECK(errorCode() == ErrorCode::ConfigError);
+      }
+
+      SECTION("malformed compilers section")
+      {
+        const auto compilers = GENERATE(
+          R"([])",
+          R"({"bsp": "qbsp"})",
+          R"({"vis": "vis"})",
+          R"({"qbsp": 1})",
+          R"({"qbsp": {"path": 1}})",
+          R"({"qbsp": {"timeout": "long"}})",
+          R"({"qbsp": {"timeout": 0}})",
+          R"({"qbsp": {"args": "-bsp2"}})");
+        CAPTURE(compilers);
+
+        env.writeFile(
+          "project/tbcli.json", std::string{R"({"compilers": )"} + compilers + "}");
         CHECK(errorCode() == ErrorCode::ConfigError);
       }
 

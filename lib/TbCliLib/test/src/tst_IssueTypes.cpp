@@ -98,6 +98,8 @@ TEST_CASE("IssueTypes")
         {"entity_inside_solid", Error},
         {"no_player_start", Error},
         {"degenerate_brush", Warning},
+        {"compiler", Warning},
+        {"compile_fatal", Error},
       });
 
     // only a missing player start is about the whole map
@@ -109,6 +111,8 @@ TEST_CASE("IssueTypes")
         == (type.id == "no_player_start" ? IssueScope::Map : IssueScope::Node));
       // and only CLI check types create their validators
       CHECK((type.createValidator != nullptr) == (type.source == IssueSource::CliCheck));
+      // compiler log lines bring their own severity
+      CHECK(type.severityPerIssue == (type.id == "compiler"));
     }
   }
 
@@ -235,6 +239,10 @@ TEST_CASE("IssueTypes")
       json[1]
       == parseJsonLiteral(
         R"({"type": "missing_classname", "severity": "error", "fixes": ["delete_objects"]})"));
+    // compiler issues have no fixed severity
+    CHECK(
+      json[json.size() - 2]
+      == parseJsonLiteral(R"({"type": "compiler", "severity": null, "fixes": []})"));
   }
 }
 
