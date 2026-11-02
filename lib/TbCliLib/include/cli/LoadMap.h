@@ -133,5 +133,8 @@ std::string computeRev(std::string_view bytes);
 LoadedMap loadMap(
   const std::filesystem::path& mapPath, const Config& config, Logger& logger);
 
+/** The name of the loaded map's file without its extension, as compilers name outputs. */
+std::string mapName(const LoadedMap& loadedMap);
+
 } // namespace cli
 } // namespace tb

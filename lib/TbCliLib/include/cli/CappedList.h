@@ -59,6 +59,36 @@ void setCapped(
   setCapped(object, std::move(items), elements.size(), elements.size() > max);
 }
 
+/**
+ * Sets `items` (the page of the given elements that the paging selects), `total` and
+ * `truncated` on `object`.
+ */
+template <typename T, typename F>
+void setPage(
+  Json& object, const std::vector<T>& elements, const Paging& paging, const F& toJson)
+{
+  auto items = Json::array();
+  for (const auto& element :
+       elements | std::views::drop(paging.offset) | std::views::take(paging.limit))
+  {
+    items.push(toJson(element));
+  }
+  setCapped(
+    object,
+    std::move(items),
+    elements.size(),
+    elements.size() > paging.offset && elements.size() - paging.offset > paging.limit);
+}
+
+/** `{items, total, truncated}` for the page of the given elements. */
+template <typename T, typename F>
+Json page(const std::vector<T>& elements, const Paging& paging, const F& toJson)
+{
+  auto result = Json::object();
+  setPage(result, elements, paging, toJson);
+  return result;
+}
+
 /** `{items, total, truncated}` for the first `max` of the given elements. */
 template <typename T, typename F>
 Json capped(const std::vector<T>& elements, const size_t max, const F& toJson)

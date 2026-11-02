@@ -1,0 +1,107 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "nodetail" was set to "1" (from command line)
+    "forceprt1" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\rooms_sky.map
+Output file: ${WORKDIR}\rooms_sky.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     3 entities
+     4 unique textures
+    19 texinfos
+    34 unique planes
+
+INFO: world extents calculated to 776 units
+     9 brushes
+    54 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture ground1_6
+WARNING: unable to find texture sky1
+WARNING: unable to find texture wall1_1
+Processing hull 0...
+    8 SOLID brushes
+    1 SKY brushes
+    9 brushes total
+    54 visible sides
+INFO: calculating BSP for 9 brushes with 54 sides
+     9 brushes
+    54 visible faces
+    33 nodes
+    33 expensive split nodes
+    34 leaves
+    25 EMPTY leafs
+     1 SKY leafs
+     8 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+    155 tree portals
+    18 outside leaves
+    0 detail filled leafs
+     9 brushes
+    15 visible faces
+    39 non-visible faces
+    33 nodes
+    18 non-visible nodes
+    33 expensive split nodes
+    34 leaves
+    25 EMPTY leafs
+     1 SKY leafs
+     8 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+    155 tree portals
+    18 outside leaves
+    0 detail filled leafs
+    155 tree portals
+    64 sides visible
+    38 makefaces
+    16 merged
+    12 subdivided
+    13 nodes pruned
+    8 player-occupiable leaves
+    8 clusters of leaves
+    6 vis portals
+    13 SOLID leafs
+     1 SKY leafs
+     7 EMPTY leafs
+    21 leafs total
+    11 max tree height
+     7 avg tree height
+    26 edges added by tjunctions
+    32 faces optimized through MWT
+    90 triangles computed from MWT
+     9 faces created via optimization of MWT triangles
+    86 edges
+    41 faces
+Processing hull 1...
+Processing hull 2...
+Writing rooms_sky.bsp as Quake BSP bsp29
+Wrote rooms_sky.bsp
+
+count   lump name    byte size 
+      1 models               64
+     32 planes              640
+     47 vertexes            564
+     20 nodes               480
+      7 texinfos            280
+     41 faces               820
+     31 clipnodes           248
+      9 leafs               252
+     71 marksurfaces        142
+     87 edges               348
+    172 surfedges           688
+      4 textures             20
+        lightdata             0
+        visdata               0
+        entdata             159
+
+0.014s seconds elapsed
+
+

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -80,6 +81,12 @@ enum class ErrorCode
   OpFailed,
   /** a needed compiler is not configured or not found */
   CompilerMissing,
+  /** a compiler that a command needs failed or was stopped */
+  CompileFailed,
+  /** `rooms --from-artifacts` dir does not match the rev, leaked or lacks files */
+  StaleArtifact,
+  /** `rooms` on a map that leaks; the error carries the `leak` issue */
+  MapLeaks,
   /** an unexpected failure inside tbcli */
   InternalError,
 };
@@ -88,7 +95,7 @@ std::string_view toString(ErrorCode code);
 
 /**
  * A failed command, rendered as the error envelope
- * `{"error": {"code", "message", "node"?, "line"?, "op_index"?}}` on stdout.
+ * `{"error": {"code", "message", "node"?, "line"?, "op_index"?, "issue"?}}` on stdout.
  *
  * Commands throw this and run() turns it into output and an exit code, so that every
  * failure, however deep, reaches the caller in the same shape.
@@ -100,6 +107,7 @@ private:
   std::optional<std::string> m_node;
   std::optional<size_t> m_line;
   std::optional<size_t> m_opIndex;
+  std::shared_ptr<const Json> m_issue;
 
 public:
   CliError(
@@ -116,6 +124,9 @@ public:
 
   /** This error, attributed to the op at the given index of a batch. */
   CliError withOpIndex(size_t opIndex) const;
+
+  /** This error, carrying the given issue record, such as the `leak` issue. */
+  CliError withIssue(Json issue) const;
 
   Json toJson() const;
 };

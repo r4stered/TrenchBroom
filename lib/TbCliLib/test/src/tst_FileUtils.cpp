@@ -112,4 +112,27 @@ TEST_CASE("FileUtils")
   }
 }
 
+TEST_CASE("TemporaryDirectory")
+{
+  SECTION("TemporaryDirectory")
+  {
+    const auto dir = TemporaryDirectory{"tbcli-test-"};
+    CHECK(std::filesystem::is_directory(dir.path()));
+    CHECK(dir.path().filename().string().starts_with("tbcli-test-"));
+    CHECK(std::filesystem::is_empty(dir.path()));
+    CHECK(dir.path() != TemporaryDirectory{"tbcli-test-"}.path());
+  }
+
+  SECTION("~TemporaryDirectory")
+  {
+    auto path = std::filesystem::path{};
+    {
+      const auto dir = TemporaryDirectory{"tbcli-test-"};
+      path = dir.path();
+      REQUIRE(writeFile(path / "file", "contents") == std::nullopt);
+    }
+    CHECK_FALSE(std::filesystem::exists(path));
+  }
+}
+
 } // namespace tb::cli

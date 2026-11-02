@@ -19,7 +19,10 @@
 
 #include "CliTestUtils.h"
 #include "base/Logger.h"
+#include "cli/Compile.h"
+#include "cli/Config.h"
 #include "cli/IssueTypes.h"
+#include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Verify.h"
 #include "mdl/LayerNode.h"
@@ -1137,6 +1140,33 @@ TEST_CASE("verify")
       REQUIRE(json["issues"]["items"].size() == 1);
       CHECK(json["issues"]["items"][0]["line"] == Json{92});
     }
+  }
+
+  SECTION("leakIssueToJson")
+  {
+    auto logger = NullLogger{};
+    auto loadedMap = loadFixtureMap("compiled/compile_leak.map", logger);
+
+    auto run = ToolRun{std::string{QbspTool}, {0, false}};
+    run.messages = parseCompilerLog(
+      R"(WARNING: Reached occupant "light" at (144 0 96), no filling performed.)", {});
+    auto compileResult = CompileResult{};
+    compileResult.runs.push_back(run);
+    compileResult.leaked = true;
+    compileResult.leakTrail = {
+      {144, 0, 96}, {280, 100, 64}, {280, 100, 64}, {400, 100, 64}};
+
+    auto config = VerifyConfig{};
+    config.severity[findIssueType("leak")] = Severity::Warning;
+    const auto issue = leakIssueToJson(loadedMap, config, compileResult);
+
+    CHECK(issue["type"] == Json{"leak"});
+    CHECK(issue["severity"] == Json{"warning"});
+    CHECK(issue["node"] == Json{"layer:0/entity:1"});
+    CHECK(issue["tool"] == Json{"qbsp"});
+    CHECK(issue["trail"]["start"] == parseJsonLiteral("[144, 0, 96]"));
+    CHECK(issue["trail"]["end"] == parseJsonLiteral("[400, 100, 64]"));
+    CHECK(issue["nearest_brushes"].size() == 3);
   }
 }
 

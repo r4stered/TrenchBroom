@@ -17,6 +17,17 @@
 #   compile_full.map      the sealed rooms_prt1.map with a light of an unknown delay (a
 #                         warning light ties to the entity's classname and origin),
 #                         recorded through qbsp, vis -fast and light
+#   rooms_prt1, rooms_prt2_water
+#                         TbMdlLib's CompiledMaps fixtures, which the test build copies
+#                         here; recorded with -nodetail -forceprt1, as tbcli rooms runs
+#                         qbsp, so the water map's .prt has one cell per leaf, too
+#   rooms_slot.map        rooms_prt1.map with an 8 unit wide, 80 unit deep slot in room
+#                         A's west wall, recorded as tbcli rooms runs qbsp
+#   rooms_sky.map         rooms_prt1.map with a sky ceiling, recorded as tbcli rooms runs
+#                         qbsp
+#   rooms_prt2_water_keepprt
+#                         rooms_prt2_water.map recorded as verify runs qbsp, which
+#                         writes a PRT2 file of clusters
 #
 # Usage: ERICW_TOOLS_DIR=<dir> lib/TbCliLib/test/fixture/compiled/record.sh
 
@@ -30,3 +41,14 @@ record="$(git -C "$here" rev-parse --show-toplevel)/scripts/record-ericw-tools.s
 "$record" "$here/compile_fatal.map" "$here/compile_fatal" || true
 "$record" --qbsp-args "-keepprt" "$here/compile_leak.map" "$here/compile_leak"
 "$record" --vis "-fast" --light "" "$here/compile_full.map" "$here/compile_full"
+
+mdl="$(git -C "$here" rev-parse --show-toplevel)/lib/TbMdlLib/test/fixture/mdl/CompiledMaps"
+"$record" --qbsp-args "-nodetail -forceprt1" "$mdl/rooms_prt1.map" "$here/rooms_prt1"
+"$record" --qbsp-args "-nodetail -forceprt1" "$mdl/rooms_prt2_water.map" "$here/rooms_prt2_water"
+"$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_slot.map" "$here/rooms_slot"
+"$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_sky.map" "$here/rooms_sky"
+# recorded under the name that the test build copies the map to
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+cp "$mdl/rooms_prt2_water.map" "$tmp/rooms_prt2_water_keepprt.map"
+"$record" --qbsp-args "-keepprt" "$tmp/rooms_prt2_water_keepprt.map" "$here/rooms_prt2_water_keepprt"

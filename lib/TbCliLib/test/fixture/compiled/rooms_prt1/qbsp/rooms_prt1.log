@@ -1,0 +1,103 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "nodetail" was set to "1" (from command line)
+    "forceprt1" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\rooms_prt1.map
+Output file: ${WORKDIR}\rooms_prt1.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     3 entities
+     4 unique textures
+    19 texinfos
+    34 unique planes
+
+INFO: world extents calculated to 776 units
+     9 brushes
+    54 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture ground1_6
+WARNING: unable to find texture ceiling1_1
+WARNING: unable to find texture wall1_1
+Processing hull 0...
+    9 SOLID brushes
+    9 brushes total
+    54 visible sides
+INFO: calculating BSP for 9 brushes with 54 sides
+     9 brushes
+    54 visible faces
+    33 nodes
+    33 expensive split nodes
+    34 leaves
+    25 EMPTY leafs
+     9 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+    155 tree portals
+    18 outside leaves
+    0 detail filled leafs
+     9 brushes
+    15 visible faces
+    39 non-visible faces
+    33 nodes
+    18 non-visible nodes
+    33 expensive split nodes
+    34 leaves
+    25 EMPTY leafs
+     9 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+    155 tree portals
+    18 outside leaves
+    0 detail filled leafs
+    155 tree portals
+    64 sides visible
+    32 makefaces
+    12 merged
+    18 subdivided
+    18 nodes pruned
+    7 player-occupiable leaves
+    7 clusters of leaves
+    6 vis portals
+     9 SOLID leafs
+     7 EMPTY leafs
+    16 leafs total
+    11 max tree height
+     7 avg tree height
+     28 edges added by tjunctions
+     38 faces optimized through MWT
+    104 triangles computed from MWT
+      6 faces created via optimization of MWT triangles
+    96 edges
+    44 faces
+Processing hull 1...
+Processing hull 2...
+Writing rooms_prt1.bsp as Quake BSP bsp29
+Wrote rooms_prt1.bsp
+
+count   lump name    byte size 
+      1 models               64
+     27 planes              540
+     54 vertexes            648
+     15 nodes               360
+      7 texinfos            280
+     44 faces               880
+     31 clipnodes           248
+      8 leafs               224
+     72 marksurfaces        144
+     97 edges               388
+    192 surfedges           768
+      4 textures             20
+        lightdata             0
+        visdata               0
+        entdata             159
+
+0.014s seconds elapsed
+
+

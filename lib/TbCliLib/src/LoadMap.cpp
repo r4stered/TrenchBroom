@@ -377,4 +377,9 @@ LoadedMap loadMap(
   return result;
 }
 
+std::string mapName(const LoadedMap& loadedMap)
+{
+  return loadedMap.map->path().stem().string();
+}
+
 } // namespace tb::cli

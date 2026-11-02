@@ -135,6 +135,12 @@ struct ToolRun
 
   /** Whether the tool exited with a non-zero code or was stopped. */
   bool failed() const;
+
+  /**
+   * How the tool failed, such as `qbsp exited with code 1`; only meaningful if it
+   * failed.
+   */
+  std::string failureMessage() const;
 };
 
 /** How far `--compile` goes: each level runs the tools of the levels before it, too. */
@@ -157,6 +163,8 @@ struct CompileOptions
   std::optional<std::chrono::milliseconds> timeout;
   /** Where to keep the artifacts; they are deleted if this is unset. */
   std::optional<std::filesystem::path> artifacts;
+  /** The flags qbsp is given before the map instead of `-keepprt`. */
+  std::optional<std::vector<std::string>> qbspFlags;
 };
 
 struct CompileResult
@@ -179,11 +187,11 @@ struct CompileResult
 
 /**
  * Compiles the given map bytes in a new temporary directory, as `<mapName>.map`: runs
- * qbsp without `-leaktest` and with `-keepprt`, then, as the level asks, `vis -fast`
- * and light without `-extra` on `<mapName>.bsp`. Parses the logs the tools write
- * (`<mapName>.log`, `<mapName>-vis.log` and `<mapName>-light.log`), not what they
- * print. The map leaks if qbsp writes a pointfile (`<mapName>.pts`); then, or if qbsp
- * fails, vis and light are skipped.
+ * qbsp without `-leaktest` and with `-keepprt` (or `options.qbspFlags`), then, as the
+ * level asks, `vis -fast` and light without `-extra` on `<mapName>.bsp`. Parses the logs
+ * the tools write (`<mapName>.log`, `<mapName>-vis.log` and `<mapName>-light.log`), not
+ * what they print. The map leaks if qbsp writes a pointfile (`<mapName>.pts`); then, or
+ * if qbsp fails, vis and light are skipped.
  *
  * The temporary directory is deleted afterwards. If `options.artifacts` is set, the
  * artifacts (`.bsp`, `.pts`, `.prt` and the logs) are first copied there, replacing

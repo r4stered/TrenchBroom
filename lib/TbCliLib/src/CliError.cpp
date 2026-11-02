@@ -70,6 +70,12 @@ std::string_view toString(const ErrorCode code)
     return "op_failed";
   case ErrorCode::CompilerMissing:
     return "compiler_missing";
+  case ErrorCode::CompileFailed:
+    return "compile_failed";
+  case ErrorCode::StaleArtifact:
+    return "stale_artifact";
+  case ErrorCode::MapLeaks:
+    return "map_leaks";
   case ErrorCode::InternalError:
     return "internal_error";
   }
@@ -130,6 +136,13 @@ CliError CliError::withOpIndex(const size_t opIndex) const
   return result;
 }
 
+CliError CliError::withIssue(Json issue) const
+{
+  auto result = *this;
+  result.m_issue = std::make_shared<const Json>(std::move(issue));
+  return result;
+}
+
 Json CliError::toJson() const
 {
   auto error = Json::object();
@@ -146,6 +159,10 @@ Json CliError::toJson() const
   if (m_opIndex)
   {
     error.set("op_index", *m_opIndex);
+  }
+  if (m_issue)
+  {
+    error.set("issue", *m_issue);
   }
 
   auto result = Json::object();

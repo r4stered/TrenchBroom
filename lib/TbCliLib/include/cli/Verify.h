@@ -147,6 +147,13 @@ Json issueToJson(
   const std::unordered_map<const mdl::Node*, std::string>& paths);
 
 /**
+ * The record of the `leak` issue that verify reports for the given compile, which must
+ * have leaked, with the severity that the configuration sets for `leak`.
+ */
+Json leakIssueToJson(
+  LoadedMap& loadedMap, const VerifyConfig& config, const CompileResult& compileResult);
+
+/**
  * Collects the issues of single nodes as verify does, with their keys. Keys tell
  * otherwise alike issues apart by the order in which they are collected.
  */

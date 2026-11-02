@@ -408,19 +408,6 @@ mdl::Node* nodeOf(mdl::WorldNode& worldNode, const CompilerMessage& message)
   return nullptr;
 }
 
-std::string failureMessage(const ToolRun& run)
-{
-  if (run.process.timedOut)
-  {
-    return fmt::format(
-      "{} did not finish within {:g} seconds and was stopped",
-      run.tool,
-      double(run.timeout.count()) / 1000.0);
-  }
-  return fmt::format(
-    "{} exited with code {}", run.tool, run.process.exitCode.value_or(0));
-}
-
 /** How many brushes the `leak` issue lists. */
 constexpr auto LeakBrushCount = size_t{3};
 
@@ -521,7 +508,7 @@ void collectCompilerIssues(
 
     if (run.failed())
     {
-      const auto message = failureMessage(run);
+      const auto message = run.failureMessage();
       issues.push_back(
         VerifyIssue{
           .type = &fatalType,
@@ -800,6 +787,18 @@ Json issueToJson(
   return result;
 }
 
+Json leakIssueToJson(
+  LoadedMap& loadedMap, const VerifyConfig& config, const CompileResult& compileResult)
+{
+  auto& map = *loadedMap.map;
+  auto& worldNode = map.worldNode();
+  auto keys = KeyMaker{worldNode, *loadedMap.taskManager};
+  auto issues = std::vector<VerifyIssue>{
+    leakIssue(compileResult, worldNode, !loadedMap.loadProblems.empty(), keys)};
+  applyConfig(map, config, issues);
+  return issueToJson(issues.front(), nodePaths(worldNode));
+}
+
 namespace
 {
 
@@ -855,7 +854,7 @@ IssueReport collectIssues(
   const auto compileResult =
     compileOptions
       ? std::optional{compile(
-          loadedMap.bytes, map.path().stem().string(), loadedMap.rev, *compileOptions)}
+          loadedMap.bytes, mapName(loadedMap), loadedMap.rev, *compileOptions)}
       : std::nullopt;
   if (compileResult)
   {
@@ -974,19 +973,9 @@ VerifyResult verify(
     report.issues, [&](const auto& issue) { return issue.severity >= threshold; });
 
   const auto paths = nodePaths(map.worldNode());
-  auto items = Json::array();
-  for (const auto* issue : listed | std::views::drop(options.paging.offset)
-                             | std::views::take(options.paging.limit))
-  {
-    items.push(issueToJson(*issue, paths));
-  }
-
-  auto issues = Json::object();
-  setCapped(
-    issues,
-    std::move(items),
-    listed.size(),
-    options.paging.offset + options.paging.limit < listed.size());
+  auto issues = page(listed, options.paging, [&](const VerifyIssue* issue) {
+    return issueToJson(*issue, paths);
+  });
 
   auto stages = Json::array();
   for (const auto& stage : report.stages)

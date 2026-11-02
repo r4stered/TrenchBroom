@@ -183,6 +183,13 @@ TEST_CASE("Compile")
       CHECK_FALSE(std::filesystem::exists(workDir));
     }
 
+    SECTION("gives qbsp the given flags instead of -keepprt")
+    {
+      options.qbspFlags = std::vector<std::string>{"-nodetail", "-forceprt1"};
+      compile(bytes, "m", "rev", options);
+      CHECK(env.readFile("tools/qbsp.args") == "-nodetail\n-forceprt1\nm.map\n");
+    }
+
     SECTION("reports a failed run")
     {
       options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_fatal");
@@ -390,6 +397,14 @@ TEST_CASE("ToolRun")
     CHECK_FALSE(ToolRun{"qbsp", {0, false}}.failed());
     CHECK(ToolRun{"qbsp", {1, false}}.failed());
     CHECK(ToolRun{"qbsp", {std::nullopt, true}}.failed());
+  }
+
+  SECTION("failureMessage")
+  {
+    CHECK(ToolRun{"qbsp", {1, false}}.failureMessage() == "qbsp exited with code 1");
+    CHECK(
+      ToolRun{"vis", {std::nullopt, true}, 1500ms}.failureMessage()
+      == "vis did not finish within 1.5 seconds and was stopped");
   }
 }
 

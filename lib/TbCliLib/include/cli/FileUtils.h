@@ -57,4 +57,25 @@ std::optional<std::string> writeFileAtomically(
   std::string_view bytes,
   FileReader readBack = readFile);
 
+/** A new, empty temporary directory that is deleted when this goes out of scope. */
+class TemporaryDirectory
+{
+private:
+  std::filesystem::path m_path;
+
+public:
+  /**
+   * Creates `<temp>/<prefix>XXXXXXXX`, where X is a random hex digit.
+   *
+   * @throw CliError `write_failed` if the directory cannot be created
+   */
+  explicit TemporaryDirectory(std::string_view prefix);
+  ~TemporaryDirectory();
+
+  TemporaryDirectory(const TemporaryDirectory&) = delete;
+  TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
+
+  const std::filesystem::path& path() const;
+};
+
 } // namespace tb::cli

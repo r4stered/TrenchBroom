@@ -283,9 +283,7 @@ Json keyEntities(
     return kdl::ranges::contains(keyEntityClasses, entityNode->entity().classname());
   };
   const auto isLinked = [&](const mdl::EntityNode* entityNode) {
-    const auto& entity = entityNode->entity();
-    return !isOfKeyClass(entityNode)
-           && (entity.hasProperty(mdl::EntityPropertyKeys::Targetname) || entity.hasProperty(mdl::EntityPropertyKeys::Target));
+    return !isOfKeyClass(entityNode) && hasLink(entityNode->entity());
   };
 
   auto keyEntities = std::vector<const mdl::EntityNodeBase*>{&worldNode};
@@ -419,6 +417,23 @@ Json linkGraph(const std::vector<const mdl::EntityNode*>& entities)
 
 } // namespace
 
+const std::vector<std::string>& keyEntityClasses(
+  const std::optional<std::vector<std::string>>& configured)
+{
+  return configured ? *configured : DefaultKeyEntityClasses;
+}
+
+bool hasLink(const mdl::Entity& entity)
+{
+  return entity.hasProperty(mdl::EntityPropertyKeys::Targetname)
+         || entity.hasProperty(mdl::EntityPropertyKeys::Target);
+}
+
+bool isKeyEntity(const mdl::Entity& entity, const std::vector<std::string>& classes)
+{
+  return kdl::ranges::contains(classes, entity.classname()) || hasLink(entity);
+}
+
 Json describe(
   const LoadedMap& loadedMap,
   const std::optional<std::vector<std::string>>& keyEntityClasses,
@@ -440,8 +455,7 @@ Json describe(
   result.set("textures", textures(contents.brushes, !map.gamePath().empty()));
   result.set(
     "key_entities",
-    keyEntities(
-      worldNode, contents.entities, keyEntityClasses.value_or(DefaultKeyEntityClasses)));
+    keyEntities(worldNode, contents.entities, cli::keyEntityClasses(keyEntityClasses)));
   result.set("link_graph", linkGraph(contents.entities));
   auto issues = Json::object();
   setIssueCounts(issues, issueReport.issues);

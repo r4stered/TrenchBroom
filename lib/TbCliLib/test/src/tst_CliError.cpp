@@ -43,6 +43,9 @@ TEST_CASE("CliError")
       T{ErrorCode::LossyLoad, 1},
       T{ErrorCode::OpFailed, 1},
       T{ErrorCode::CompilerMissing, 1},
+      T{ErrorCode::CompileFailed, 1},
+      T{ErrorCode::StaleArtifact, 1},
+      T{ErrorCode::MapLeaks, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);
@@ -72,6 +75,18 @@ TEST_CASE("CliError")
     CHECK(attributed.code() == ErrorCode::OpFailed);
     CHECK(attributed.node() == "world");
     CHECK(std::string{attributed.what()} == "failed");
+  }
+
+  SECTION("withIssue")
+  {
+    const auto error = CliError{ErrorCode::MapLeaks, "leaks"};
+    const auto withIssue = error.withIssue(parseJsonLiteral(R"({"type": "leak"})"));
+    CHECK(
+      error.toJson()
+      == parseJsonLiteral(R"({"error": {"code": "map_leaks", "message": "leaks"}})"));
+    CHECK(withIssue.toJson() == parseJsonLiteral(R"({"error": {
+        "code": "map_leaks", "message": "leaks", "issue": {"type": "leak"}
+      }})"));
   }
 
   SECTION("attributeToOp")

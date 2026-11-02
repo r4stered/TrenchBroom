@@ -31,6 +31,7 @@
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Query.h"
+#include "cli/Rooms.h"
 #include "cli/Show.h"
 #include "cli/TextFormat.h"
 #include "cli/Verify.h"
@@ -77,6 +78,13 @@ commands:
                         lists missing_material as unchecked. With --compile,
                         also compile the map and report the compilers' logs
                         and any leak
+  rooms <map>           a heuristic graph of the map's rooms: runs qbsp (never
+                        vis or light) on the map's bytes in a temporary
+                        directory, first as verify does to find a leak, then
+                        with -nodetail -forceprt1, and merges the leafs of that
+                        run into rooms, cutting at constrictions and where the
+                        contents change. A leaking map fails with map_leaks,
+                        carrying the leak issue
   ops [--json]          the JSON Schema of every op and the issue types
 
 node paths:
@@ -100,12 +108,13 @@ options:
   --vis <path>          vis executable, overrides tbcli.json "compilers.vis"
   --light <path>        light executable, overrides tbcli.json
                         "compilers.light"
-  --limit <n>           query, verify: return at most n matches or issues
-                        (default: 200)
-  --offset <n>          query, verify: skip the first n matches or issues
-                        (default: 0)
+  --limit <n>           query, verify, rooms: return at most n matches, issues,
+                        rooms or cells (default: 200)
+  --offset <n>          query, verify, rooms: skip the first n matches, issues,
+                        rooms or cells (default: 0)
   --count-only          query: return only the number of matches
-  --within <box>        query: keep matches whose bounds lie inside the box
+  --within <box>        query, rooms: keep matches, rooms or cells whose
+                        bounds lie inside the box
   --intersects <box>    query: keep matches whose bounds overlap the box
   --touching <path>     query: keep matches whose bounds overlap or touch the
                         bounds of the node or face at the path (not world),
@@ -132,14 +141,27 @@ options:
                         and a leak into a leak issue; a leak or a failed qbsp
                         skips vis and light, and a failed run is a
                         compile_fatal issue, not an exit code
-  --timeout <seconds>   verify --compile: stop each compiler after this long,
-                        overriding the timeouts in tbcli.json (defaults: qbsp
-                        300, vis 300, light 600)
+  --timeout <seconds>   verify --compile, rooms: stop each compiler after this
+                        long, overriding the timeouts in tbcli.json (defaults:
+                        qbsp 300, vis 300, light 600)
   --artifacts <dir>     verify --compile: keep the .bsp, .pts, .prt and logs
                         in dir, replacing those of an earlier run, with a
                         sidecar <map>.bsp.tbcli.json holding {{rev, leaked}};
                         a failed run keeps no .bsp or .prt. Without it, they
                         are deleted
+  --from-artifacts <dir>
+                        rooms: read the .bsp, .prt and sidecar that verify
+                        --compile --artifacts kept in dir instead of running
+                        qbsp; they must be of the map's rev, must not have
+                        leaked, and the .prt must have one cell per leaf (no
+                        detail or liquids), else stale_artifact
+  --split-ratio <r>     rooms: cut where the opening is less than r times the
+                        cross-section of the space on either side (0 to 1,
+                        default: 0.5)
+  --cells               rooms: list the unmerged cells (the .prt's leafs) and
+                        their portals instead of the rooms
+  --room <id>           rooms: list only the room with this id, or its cells;
+                        nothing if there is no such room
   --json                ops: print JSON (the default)
   -h, --help            print this help
   --version             print the version
@@ -184,14 +206,17 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 23>{{
+constexpr auto CommandOptions = std::array<CommandOption, 31>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
+  {"--limit", "rooms"},
   {"--offset", "query"},
   {"--offset", "verify"},
+  {"--offset", "rooms"},
   {"--count-only", "query"},
   {"--within", "query"},
+  {"--within", "rooms"},
   {"--intersects", "query"},
   {"--touching", "query"},
   {"--raw", "show"},
@@ -201,7 +226,12 @@ constexpr auto CommandOptions = std::array<CommandOption, 23>{{
   {"--fail-on", "verify"},
   {"--compile", "verify"},
   {"--timeout", "verify"},
+  {"--timeout", "rooms"},
   {"--artifacts", "verify"},
+  {"--from-artifacts", "rooms"},
+  {"--split-ratio", "rooms"},
+  {"--cells", "rooms"},
+  {"--room", "rooms"},
   {"--json", "ops"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
@@ -262,6 +292,8 @@ struct Arguments
   bool compile = false;
   /** --timeout and --artifacts; the compilers come from the configuration */
   CompileOptions compileOptions;
+  /** --split-ratio, --cells, --room and --from-artifacts */
+  RoomsOptions roomsOptions;
   ApplyOptions applyOptions;
   /** The flags of an op's subcommand, as (name without dashes, value). */
   OpFlags opFlags;
@@ -604,6 +636,31 @@ Arguments parseArguments(const std::vector<std::string>& args)
       result.compileOptions.artifacts =
         std::filesystem::absolute(std::filesystem::path{value()});
     }
+    else if (name == "--from-artifacts")
+    {
+      result.roomsOptions.fromArtifacts =
+        std::filesystem::absolute(std::filesystem::path{value()});
+    }
+    else if (name == "--split-ratio")
+    {
+      const auto ratio = value();
+      const auto parsed = parseDecimal(ratio);
+      if (!parsed || *parsed < 0.0 || *parsed > 1.0)
+      {
+        throw usageError(
+          fmt::format("--split-ratio requires a number from 0 to 1, not '{}'", ratio));
+      }
+      result.roomsOptions.splitRatio = *parsed;
+    }
+    else if (name == "--cells")
+    {
+      noValue();
+      result.roomsOptions.cells = true;
+    }
+    else if (name == "--room")
+    {
+      result.roomsOptions.room = parseCount(name, value());
+    }
     else
     {
       throw usageError(fmt::format("unknown option {}", name));
@@ -790,6 +847,20 @@ CommandResult runCommand(
     }
     auto [output, failed] = verify(loadedMap, config.verify, options);
     return {std::move(output), failed ? ExitCode::FailOn : ExitCode::Ok};
+  }
+  if (command == "rooms")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto options = arguments.roomsOptions;
+    options.paging = arguments.paging;
+    options.within = arguments.queryOptions.within;
+    options.timeout = arguments.compileOptions.timeout;
+    if (options.fromArtifacts && options.timeout)
+    {
+      throw usageError("--timeout cannot be used with --from-artifacts");
+    }
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    return rooms(loadedMap, config, options);
   }
   if (command == "ops")
   {

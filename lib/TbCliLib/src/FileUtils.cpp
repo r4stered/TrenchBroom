@@ -19,6 +19,8 @@
 
 #include "cli/FileUtils.h"
 
+#include "cli/CliError.h"
+
 #include <fmt/format.h>
 #include <fmt/std.h>
 
@@ -116,6 +118,42 @@ std::optional<std::string> writeFileAtomically(
     std::filesystem::remove(tempPath, ec);
   }
   return error;
+}
+
+TemporaryDirectory::TemporaryDirectory(const std::string_view prefix)
+{
+  auto random = std::random_device{};
+  auto ec = std::error_code{};
+  const auto base = std::filesystem::temp_directory_path(ec);
+  if (ec)
+  {
+    throw CliError{
+      ErrorCode::WriteFailed,
+      fmt::format("cannot find the temporary directory: {}", ec.message())};
+  }
+  for (auto attempt = 0; attempt < 16; ++attempt)
+  {
+    auto path = base / fmt::format("{}{:08x}", prefix, random());
+    if (std::filesystem::create_directory(path, ec))
+    {
+      m_path = std::move(path);
+      return;
+    }
+  }
+  throw CliError{
+    ErrorCode::WriteFailed,
+    fmt::format("cannot create a temporary directory in {}", base)};
+}
+
+TemporaryDirectory::~TemporaryDirectory()
+{
+  auto ec = std::error_code{};
+  std::filesystem::remove_all(m_path, ec);
+}
+
+const std::filesystem::path& TemporaryDirectory::path() const
+{
+  return m_path;
 }
 
 } // namespace tb::cli

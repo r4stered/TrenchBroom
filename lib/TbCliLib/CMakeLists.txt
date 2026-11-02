@@ -29,6 +29,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ParseUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Process.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Query.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Rooms.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Run.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Sha256.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Show.cpp

@@ -18,6 +18,8 @@
  */
 
 #include "CliTestUtils.h"
+#include "cli/Describe.h"
+#include "mdl/Entity.h"
 
 #include "vm/vec.h"
 
@@ -139,6 +141,35 @@ TEST_CASE("describe")
 {
   auto env = CliTestEnvironment{};
   env.writeConfig({}, quakeConfig());
+
+  SECTION("keyEntityClasses")
+  {
+    CHECK(
+      keyEntityClasses(std::nullopt)
+      == std::vector<std::string>{
+        "info_player_start",
+        "info_player_deathmatch",
+        "info_player_coop",
+        "trigger_changelevel"});
+    CHECK(
+      keyEntityClasses(std::vector<std::string>{"light"})
+      == std::vector<std::string>{"light"});
+  }
+
+  SECTION("hasLink")
+  {
+    CHECK_FALSE(hasLink(mdl::Entity{{{"classname", "light"}}}));
+    CHECK(hasLink(mdl::Entity{{{"classname", "light"}, {"targetname", "t"}}}));
+    CHECK(hasLink(mdl::Entity{{{"classname", "trigger_once"}, {"target", "t"}}}));
+  }
+
+  SECTION("isKeyEntity")
+  {
+    const auto classes = std::vector<std::string>{"info_player_start"};
+    CHECK(isKeyEntity(mdl::Entity{{{"classname", "info_player_start"}}}, classes));
+    CHECK(isKeyEntity(mdl::Entity{{{"classname", "light"}, {"target", "t"}}}, classes));
+    CHECK_FALSE(isKeyEntity(mdl::Entity{{{"classname", "light"}}}, classes));
+  }
 
   SECTION("Valve 220 map")
   {

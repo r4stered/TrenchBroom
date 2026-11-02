@@ -33,7 +33,6 @@
 
 #include <algorithm>
 #include <array>
-#include <random>
 #include <ranges>
 #include <regex>
 
@@ -137,50 +136,6 @@ CompilerMessage parseMessage(const Severity severity, std::string message)
   return result;
 }
 
-/** A new, empty temporary directory that is deleted when this goes out of scope. */
-class TemporaryDirectory
-{
-private:
-  std::filesystem::path m_path;
-
-public:
-  TemporaryDirectory()
-  {
-    auto random = std::random_device{};
-    auto ec = std::error_code{};
-    const auto base = std::filesystem::temp_directory_path(ec);
-    if (ec)
-    {
-      throw CliError{
-        ErrorCode::WriteFailed,
-        fmt::format("cannot find the temporary directory: {}", ec.message())};
-    }
-    for (auto attempt = 0; attempt < 16; ++attempt)
-    {
-      auto path = base / fmt::format("tbcli-compile-{:08x}", random());
-      if (std::filesystem::create_directory(path, ec))
-      {
-        m_path = std::move(path);
-        return;
-      }
-    }
-    throw CliError{
-      ErrorCode::WriteFailed,
-      fmt::format("cannot create a temporary directory in {}", base)};
-  }
-
-  ~TemporaryDirectory()
-  {
-    auto ec = std::error_code{};
-    std::filesystem::remove_all(m_path, ec);
-  }
-
-  TemporaryDirectory(const TemporaryDirectory&) = delete;
-  TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
-
-  const std::filesystem::path& path() const { return m_path; }
-};
-
 void writeOrThrow(const std::filesystem::path& path, const std::string_view bytes)
 {
   if (auto error = writeFile(path, bytes))
@@ -226,20 +181,30 @@ std::filesystem::path executableOf(const Tool& tool)
     ErrorCode::CompilerMissing, fmt::format("{} not found at {}", name, *configured)};
 }
 
+/** The flags the given tool is given before its input. */
+std::vector<std::string> flagsOf(
+  const CompilerTool& compiler, const CompileOptions& options)
+{
+  if (compiler.name == QbspTool && options.qbspFlags)
+  {
+    return *options.qbspFlags;
+  }
+  return compiler.flag.empty() ? std::vector<std::string>{}
+                               : std::vector<std::string>{std::string{compiler.flag}};
+}
+
 ToolRun runTool(
   const Tool& tool,
   const std::filesystem::path& executable,
   const std::filesystem::path& workDir,
   const std::string& mapName,
-  const std::optional<std::chrono::milliseconds> timeoutOverride)
+  const CompileOptions& options)
 {
   const auto& compiler = tool.compiler;
-  const auto input = mapName + std::string{compiler.input};
-  const auto arguments = compiler.flag.empty()
-                           ? std::vector<std::string>{input}
-                           : std::vector<std::string>{std::string{compiler.flag}, input};
+  auto arguments = flagsOf(compiler, options);
+  arguments.push_back(mapName + std::string{compiler.input});
   const auto timeout =
-    timeoutOverride.value_or(tool.config.timeout.value_or(compiler.defaultTimeout));
+    options.timeout.value_or(tool.config.timeout.value_or(compiler.defaultTimeout));
 
   auto result = ToolRun{std::string{compiler.name}, {}, timeout};
   const auto start = std::chrono::steady_clock::now();
@@ -367,6 +332,18 @@ bool ToolRun::failed() const
   return process.timedOut || process.exitCode != 0;
 }
 
+std::string ToolRun::failureMessage() const
+{
+  if (process.timedOut)
+  {
+    return fmt::format(
+      "{} did not finish within {:g} seconds and was stopped",
+      tool,
+      double(timeout.count()) / 1000.0);
+  }
+  return fmt::format("{} exited with code {}", tool, process.exitCode.value_or(0));
+}
+
 CompileResult compile(
   const std::string_view mapBytes,
   const std::string& mapName,
@@ -378,13 +355,13 @@ CompileResult compile(
   const auto executables = tools | std::views::transform(executableOf)
                            | kdl::ranges::to<std::vector<std::filesystem::path>>();
 
-  const auto workDir = TemporaryDirectory{};
+  const auto workDir = TemporaryDirectory{"tbcli-compile-"};
   writeOrThrow(workDir.path() / (mapName + ".map"), mapBytes);
 
   // qbsp runs first
   auto result = CompileResult{};
   result.runs.push_back(
-    runTool(tools[0], executables[0], workDir.path(), mapName, options.timeout));
+    runTool(tools[0], executables[0], workDir.path(), mapName, options));
   const auto qbspFailed = result.runs.front().failed();
 
   const auto pointFile = workDir.path() / (mapName + ".pts");
@@ -405,7 +382,7 @@ CompileResult compile(
     else
     {
       result.runs.push_back(
-        runTool(tools[i], executables[i], workDir.path(), mapName, options.timeout));
+        runTool(tools[i], executables[i], workDir.path(), mapName, options));
     }
   }
 

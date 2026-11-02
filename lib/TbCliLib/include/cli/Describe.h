@@ -23,12 +23,30 @@
 #include <string>
 #include <vector>
 
+namespace tb::mdl
+{
+class Entity;
+}
+
 namespace tb::cli
 {
 
 class Json;
 struct IssueReport;
 struct LoadedMap;
+
+/**
+ * The classes whose entities are key entities: the given ones, or else the player starts
+ * and trigger_changelevel.
+ */
+const std::vector<std::string>& keyEntityClasses(
+  const std::optional<std::vector<std::string>>& configured);
+
+/** Whether the entity has a targetname or target. */
+bool hasLink(const mdl::Entity& entity);
+
+/** Whether the entity is of one of the given classes, or has a link. */
+bool isKeyEntity(const mdl::Entity& entity, const std::vector<std::string>& classes);
 
 /**
  * The `tbcli.describe/1` result for the given map: a summary whose size is bounded

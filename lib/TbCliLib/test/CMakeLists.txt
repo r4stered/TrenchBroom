@@ -40,6 +40,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ParseUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Process.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Query.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Rooms.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Run.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Sha256.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Show.cpp
@@ -70,6 +71,9 @@ set(TB_MDL_TEST_FIXTURE_DIR ${CMAKE_SOURCE_DIR}/lib/TbMdlLib/test/fixture/mdl)
 add_custom_command(TARGET TbCliLibTest POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E rm -rf "${TEST_FIXTURE_DEST_DIR}"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TEST_FIXTURE_SOURCE_DIR}" "${TEST_FIXTURE_DEST_DIR}/test"
+  # the maps of TbMdlLib's compiled fixtures, whose recordings for rooms are in compiled/
+  COMMAND ${CMAKE_COMMAND} -E copy "${TB_MDL_TEST_FIXTURE_DIR}/CompiledMaps/rooms_prt1.map" "${TB_MDL_TEST_FIXTURE_DIR}/CompiledMaps/rooms_prt2_water.map" "${TEST_FIXTURE_DEST_DIR}/test/compiled"
+  COMMAND ${CMAKE_COMMAND} -E copy "${TB_MDL_TEST_FIXTURE_DIR}/CompiledMaps/rooms_prt2_water.map" "${TEST_FIXTURE_DEST_DIR}/test/compiled/rooms_prt2_water_keepprt.map"
   COMMAND ${CMAKE_COMMAND} -E copy_directory "${TB_RESOURCE_DIR}/games/Quake" "${TEST_FIXTURE_DEST_DIR}/games/Quake"
   # a palette and a texture wad, so that tests can tell found textures from missing ones
   COMMAND ${CMAKE_COMMAND} -E copy "${TB_MDL_TEST_FIXTURE_DIR}/Palette/palette.lmp" "${TEST_FIXTURE_DEST_DIR}/textures/palette.lmp"
