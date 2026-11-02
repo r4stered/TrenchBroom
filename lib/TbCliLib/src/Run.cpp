@@ -377,6 +377,28 @@ Arguments parseArguments(const std::vector<std::string>& args)
       }
     };
 
+    // an op's own flags, such as --target, are checked against its definition when the
+    // op is built
+    const auto addOpFlag = [&]() {
+      const auto flag = std::string{name.substr(2)};
+      if (!inlineValue && isBoolFlag(*opDef, flag))
+      {
+        // a bool flag alone means true; a following true or false is its value
+        const auto hasValue = i + 1 < args.size() && parseBool(args[i + 1]).has_value();
+        result.opFlags.emplace_back(flag, hasValue ? args[++i] : "true");
+        return;
+      }
+      result.opFlags.emplace_back(flag, value());
+    };
+
+    if (opCommand && definesFlag(*opDef, name.substr(2)))
+    {
+      // an op's arguments take precedence over options of the same name, such as
+      // set_uv's --offset over the paging option
+      addOpFlag();
+      continue;
+    }
+
     if (name == "--help")
     {
       noValue();
@@ -481,18 +503,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
     }
     else if (opCommand)
     {
-      // an op's own flags, such as --target, are checked against its definition when
-      // the op is built. This must come before the verify options below, which share
-      // names with op flags.
-      const auto flag = std::string{name.substr(2)};
-      if (!inlineValue && isBoolFlag(*opDef, flag))
-      {
-        // a bool flag alone means true; a following true or false is its value
-        const auto hasValue = i + 1 < args.size() && parseBool(args[i + 1]).has_value();
-        result.opFlags.emplace_back(flag, hasValue ? args[++i] : "true");
-        continue;
-      }
-      result.opFlags.emplace_back(flag, value());
+      // the flags that the op does not define, such as --query, or unknown ones that
+      // building the op refuses. This must come before the verify options below, which
+      // share names with op flags.
+      addOpFlag();
       continue;
     }
     else if (name == "--type")

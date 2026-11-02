@@ -10,8 +10,10 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityJson.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FaceOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Fgd.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FileUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryJson.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueTracker.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueTypes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
@@ -27,6 +29,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Show.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Targets.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextFormat.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Verify.cpp
 )
 

@@ -21,10 +21,13 @@
 
 #include "cli/CliError.h"
 #include "cli/EditOps.h"
+#include "cli/FaceOps.h"
 #include "cli/IssueTypes.h"
 #include "cli/ParseUtils.h"
+#include "cli/TransformOps.h"
 
 #include "kd/contracts.h"
+#include "kd/string_utils.h"
 
 #include <fmt/format.h>
 
@@ -33,6 +36,8 @@
 #include <cmath>
 #include <iterator>
 #include <set>
+#include <string_view>
+#include <vector>
 
 namespace tb::cli
 {
@@ -89,6 +94,48 @@ bool isSpawnFlag(const Json& value)
   return (flag & (flag - 1)) == 0;
 }
 
+bool isNumber(const Json& value)
+{
+  return value.isNumber();
+}
+
+bool isAxis(const Json& value)
+{
+  return value.isString() && parseAxis(value.asString()).has_value();
+}
+
+bool isBox(const Json& value)
+{
+  const auto* min = value.find("min");
+  const auto* max = value.find("max");
+  return value.isObject() && value.size() == 2 && min && max && isVec3(*min)
+         && isVec3(*max);
+}
+
+/** A number, or a pair of numbers `[u, v]`. */
+bool isNumberOrPair(const Json& value)
+{
+  return isNumber(value)
+         || (value.isArray() && value.size() == 2 && std::ranges::all_of(value.asArray(), isNumber));
+}
+
+/** Whether the value is `{"add": <value>}` with a value that `accepts` accepts. */
+bool isAddOf(const Json& value, bool (*accepts)(const Json&))
+{
+  const auto* add = value.find("add");
+  return value.isObject() && value.size() == 1 && add && accepts(*add);
+}
+
+bool isNumberOrAdd(const Json& value)
+{
+  return isNumber(value) || isAddOf(value, isNumber);
+}
+
+bool isPairOrAdd(const Json& value)
+{
+  return isNumberOrPair(value) || isAddOf(value, isNumberOrPair);
+}
+
 Json stringSchema()
 {
   auto result = Json::object();
@@ -137,6 +184,121 @@ Json spawnFlagSchema()
   auto options = Json::array();
   options.push(std::move(name));
   options.push(std::move(value));
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
+  return result;
+}
+
+Json numberSchema()
+{
+  auto result = Json::object();
+  result.set("type", "number");
+  return result;
+}
+
+/** A schema of one of the given strings. */
+Json enumSchema(const auto& values)
+{
+  auto options = Json::array();
+  for (const auto& value : values)
+  {
+    options.push(value);
+  }
+
+  auto result = Json::object();
+  result.set("enum", std::move(options));
+  return result;
+}
+
+Json axisSchema()
+{
+  return enumSchema(axisNames());
+}
+
+Json boxSchema()
+{
+  auto properties = Json::object();
+  properties.set("min", vec3Schema());
+  properties.set("max", vec3Schema());
+
+  auto required = Json::array();
+  required.push("min");
+  required.push("max");
+
+  auto result = Json::object();
+  result.set("type", "object");
+  result.set("properties", std::move(properties));
+  result.set("required", std::move(required));
+  result.set("additionalProperties", false);
+  return result;
+}
+
+/** A number, or a pair of numbers. */
+Json numberOrPairSchema()
+{
+  auto pair = Json::object();
+  pair.set("type", "array");
+  pair.set("items", numberSchema());
+  pair.set("minItems", 2);
+  pair.set("maxItems", 2);
+
+  auto options = Json::array();
+  options.push(numberSchema());
+  options.push(std::move(pair));
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
+  return result;
+}
+
+/** A schema of a value that `valueSchema` describes, or of `{"add": <value>}`. */
+Json orAddSchema(Json valueSchema)
+{
+  auto properties = Json::object();
+  properties.set("add", valueSchema);
+
+  auto required = Json::array();
+  required.push("add");
+
+  auto add = Json::object();
+  add.set("type", "object");
+  add.set("properties", std::move(properties));
+  add.set("required", std::move(required));
+  add.set("additionalProperties", false);
+
+  auto options = Json::array();
+  options.push(std::move(valueSchema));
+  options.push(std::move(add));
+
+  auto result = Json::object();
+  result.set("oneOf", std::move(options));
+  return result;
+}
+
+Json numberOrAddSchema()
+{
+  return orAddSchema(numberSchema());
+}
+
+Json pairOrAddSchema()
+{
+  return orAddSchema(numberOrPairSchema());
+}
+
+Json faceSelectorSchema()
+{
+  auto list = Json::object();
+  list.set("type", "array");
+  list.set("items", enumSchema(faceDirectionNames()));
+  list.set("minItems", 1);
+
+  auto names = std::vector<std::string_view>{"all"};
+  std::ranges::copy(faceDirectionNames(), std::back_inserter(names));
+
+  auto options = Json::array();
+  options.push(enumSchema(names));
+  options.push(std::move(list));
 
   auto result = Json::object();
   result.set("oneOf", std::move(options));
@@ -198,10 +360,11 @@ Json targetSchema()
   return result;
 }
 
-std::optional<Json> vec3FromFlag(const std::string& value)
+/** A flag value written as `count` numbers, as a JSON array. */
+std::optional<Json> numbersFromFlag(const std::string& value, const size_t count)
 {
   const auto numbers = parseNumberList(value);
-  if (!numbers || numbers->size() != 3)
+  if (!numbers || numbers->size() != count)
   {
     return std::nullopt;
   }
@@ -212,6 +375,11 @@ std::optional<Json> vec3FromFlag(const std::string& value)
     result.push(number);
   }
   return result;
+}
+
+std::optional<Json> vec3FromFlag(const std::string& value)
+{
+  return numbersFromFlag(value, 3);
 }
 
 std::optional<Json> stringFromFlag(const std::string& value)
@@ -241,6 +409,93 @@ std::optional<Json> spawnFlagFromFlag(const std::string& value)
   return Json{value};
 }
 
+std::optional<Json> numberFromFlag(const std::string& value)
+{
+  const auto number = parseDecimal(value);
+  return number ? std::optional{Json{*number}} : std::nullopt;
+}
+
+/**
+ * A flag value written as a JSON object if it starts with `{`, otherwise what `fromFlag`
+ * makes of it.
+ */
+std::optional<Json> objectOrFromFlag(
+  const std::string& value, std::optional<Json> (*fromFlag)(const std::string&))
+{
+  if (!value.starts_with('{'))
+  {
+    return fromFlag(value);
+  }
+  auto json = parseJson(value);
+  return json && json.value().isObject() ? std::optional{std::move(json).value()}
+                                         : std::nullopt;
+}
+
+/** A box written as six numbers `x1,y1,z1,x2,y2,z2`. */
+std::optional<Json> boxFromNumbersFlag(const std::string& value)
+{
+  const auto numbers = numbersFromFlag(value, 6);
+  if (!numbers)
+  {
+    return std::nullopt;
+  }
+
+  auto min = Json::array();
+  auto max = Json::array();
+  for (size_t i = 0; i < 3; ++i)
+  {
+    min.push((*numbers)[i]);
+    max.push((*numbers)[i + 3]);
+  }
+
+  auto result = Json::object();
+  result.set("min", std::move(min));
+  result.set("max", std::move(max));
+  return result;
+}
+
+/** A box written as JSON, or as six numbers `x1,y1,z1,x2,y2,z2`. */
+std::optional<Json> boxFromFlag(const std::string& value)
+{
+  return objectOrFromFlag(value, boxFromNumbersFlag);
+}
+
+/** A number, or `{"add": n}` written as JSON. */
+std::optional<Json> numberOrAddFromFlag(const std::string& value)
+{
+  return objectOrFromFlag(value, numberFromFlag);
+}
+
+/** A number or a pair `u,v`. */
+std::optional<Json> pairFromFlag(const std::string& value)
+{
+  auto number = numberFromFlag(value);
+  return number ? number : numbersFromFlag(value, 2);
+}
+
+/** A number, a pair `u,v`, or `{"add": n | [u, v]}` written as JSON. */
+std::optional<Json> pairOrAddFromFlag(const std::string& value)
+{
+  return objectOrFromFlag(value, pairFromFlag);
+}
+
+/** A face selector written as `all`, a direction, or directions separated by commas. */
+std::optional<Json> faceSelectorFromFlag(const std::string& value)
+{
+  const auto elements = kdl::str_split(value, ",");
+  if (elements.size() == 1)
+  {
+    return Json{elements.front()};
+  }
+
+  auto result = Json::array();
+  for (const auto& element : elements)
+  {
+    result.push(element);
+  }
+  return result;
+}
+
 /** How the arguments of one type are written, checked and described. */
 struct ArgTypeTraits
 {
@@ -255,7 +510,7 @@ struct ArgTypeTraits
   std::optional<Json> (*fromFlag)(const std::string& value);
 };
 
-const auto ArgTypes = std::array<ArgTypeTraits, 8>{{
+const auto ArgTypes = std::array<ArgTypeTraits, 14>{{
   {ArgType::Vec3,
    "<x,y,z>",
    "three numbers [x, y, z] (x,y,z as a flag)",
@@ -295,6 +550,34 @@ const auto ArgTypes = std::array<ArgTypeTraits, 8>{{
    isSpawnFlag,
    spawnFlagSchema,
    spawnFlagFromFlag},
+  {ArgType::Number, "<number>", "a number", isNumber, numberSchema, numberFromFlag},
+  {ArgType::Axis, "<x|y|z>", "\"x\", \"y\" or \"z\"", isAxis, axisSchema, stringFromFlag},
+  {ArgType::Box,
+   "<x1,y1,z1,x2,y2,z2>",
+   "a box {\"min\": [x, y, z], \"max\": [x, y, z]} (x1,y1,z1,x2,y2,z2 as a flag)",
+   isBox,
+   boxSchema,
+   boxFromFlag},
+  {ArgType::NumberOrAdd,
+   "<n | {\"add\": n}>",
+   "a number, or {\"add\": n} to add n",
+   isNumberOrAdd,
+   numberOrAddSchema,
+   numberOrAddFromFlag},
+  {ArgType::PairOrAdd,
+   "<u,v | n | {\"add\": ...}>",
+   "a pair [u, v] (u,v as a flag) or one number n for both, or {\"add\": [u, v] | n} "
+   "to add it",
+   isPairOrAdd,
+   pairOrAddSchema,
+   pairOrAddFromFlag},
+  {ArgType::FaceSelector,
+   "<all | +x,-z,...>",
+   "\"all\", one of the directions \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" and \"-z\", "
+   "or a non-empty list of them (separated by commas as a flag)",
+   isFaceSelector,
+   faceSelectorSchema,
+   faceSelectorFromFlag},
 }};
 
 const ArgTypeTraits& traits(const ArgType type)
@@ -464,6 +747,53 @@ Op parseOp(const Json& entry, const size_t index)
   return Op{def, checkArgs(*def, given)};
 }
 
+/** What transform ops accept: whatever can be moved, and layers for their contents. */
+const auto TransformTargetRules = TargetRules{
+  {TargetKind::Layer,
+   TargetKind::Group,
+   TargetKind::PointEntity,
+   TargetKind::BrushEntity,
+   TargetKind::Brush,
+   TargetKind::Patch}};
+
+/** What face ops accept: faces, and brushes for the faces that `faces` picks. */
+const auto FaceTargetRules = TargetRules{{TargetKind::Brush, TargetKind::Face}, true};
+
+/** The required Target argument `target`, which accepts what the rules say. */
+ArgDef targetArg(const std::string_view description, const TargetRules& rules)
+{
+  return ArgDef{
+    "target", ArgType::Target, std::string{description}, true, std::nullopt, rules};
+}
+
+ArgDef uvLockArg()
+{
+  return ArgDef{
+    "uv_lock",
+    ArgType::Bool,
+    "keep the materials aligned to the moved faces",
+    false,
+    Json{true}};
+}
+
+ArgDef centerArg(const std::string_view description)
+{
+  return ArgDef{
+    "center",
+    ArgType::Vec3,
+    fmt::format(
+      "{}, in absolute units (default: the center of the targets' bounds)", description)};
+}
+
+ArgDef facesArg()
+{
+  return ArgDef{
+    "faces",
+    ArgType::FaceSelector,
+    "which faces of the brush targets to act on: all (the default), or those whose "
+    "normals are within 0.5 degrees of the given directions; not with face paths"};
+}
+
 /** What property ops accept: the world and entities, but not brushes. */
 const auto PropertyTargetRules =
   TargetRules{{TargetKind::World, TargetKind::PointEntity, TargetKind::BrushEntity}};
@@ -573,13 +903,7 @@ std::vector<OpDef> makeOpDefs()
       "are strings; origin must be three numbers and angle a number. The classname "
       "cannot be changed.",
       {
-        ArgDef{
-          "target",
-          ArgType::Target,
-          "the entities to set the property on",
-          true,
-          std::nullopt,
-          PropertyTargetRules},
+        targetArg("the entities to set the property on", PropertyTargetRules),
         ArgDef{"key", ArgType::String, "the property's key", true},
         ArgDef{"value", ArgType::String, "the property's value", true},
       },
@@ -591,13 +915,7 @@ std::vector<OpDef> makeOpDefs()
       "Removes a property from entities or the world. Warns property_not_found if a "
       "target does not have it.",
       {
-        ArgDef{
-          "target",
-          ArgType::Target,
-          "the entities to remove the property from",
-          true,
-          std::nullopt,
-          PropertyTargetRules},
+        targetArg("the entities to remove the property from", PropertyTargetRules),
         ArgDef{"key", ArgType::String, "the property's key", true},
       },
       removeProperty,
@@ -609,13 +927,7 @@ std::vector<OpDef> makeOpDefs()
       "property_not_found if a target does not have it, and fails if a target has a "
       "property with the new key already.",
       {
-        ArgDef{
-          "target",
-          ArgType::Target,
-          "the entities to rename the property of",
-          true,
-          std::nullopt,
-          PropertyTargetRules},
+        targetArg("the entities to rename the property of", PropertyTargetRules),
         ArgDef{"from", ArgType::String, "the property's key", true},
         ArgDef{"to", ArgType::String, "the property's new key", true},
       },
@@ -627,13 +939,7 @@ std::vector<OpDef> makeOpDefs()
       "Sets or clears one spawnflag of entities. tbcli fgd <classname> lists the "
       "spawnflags of a class.",
       {
-        ArgDef{
-          "target",
-          ArgType::Target,
-          "the entities to set the spawnflag of",
-          true,
-          std::nullopt,
-          PropertyTargetRules},
+        targetArg("the entities to set the spawnflag of", PropertyTargetRules),
         ArgDef{
           "flag",
           ArgType::SpawnFlag,
@@ -643,6 +949,122 @@ std::vector<OpDef> makeOpDefs()
         ArgDef{"on", ArgType::Bool, "whether to set the spawnflag or clear it", true},
       },
       setSpawnflag,
+    },
+    OpDef{
+      "translate",
+      "Moves nodes by a delta. With uv_lock (the default), materials move with the "
+      "faces.",
+      {
+        targetArg(
+          "the nodes to move; a layer stands for the nodes in it", TransformTargetRules),
+        ArgDef{"delta", ArgType::Vec3, "the distance to move, in units", true},
+        uvLockArg(),
+      },
+      translate,
+    },
+    OpDef{
+      "rotate",
+      "Rotates nodes about an axis through a center, counterclockwise when looking "
+      "against the axis. Point entities have their angle, angles or mangle property "
+      "updated. With uv_lock (the default), materials turn with the faces.",
+      {
+        targetArg(
+          "the nodes to rotate; a layer stands for the nodes in it",
+          TransformTargetRules),
+        ArgDef{"axis", ArgType::Axis, "the axis to rotate about", true},
+        ArgDef{"degrees", ArgType::Number, "the angle, in degrees", true},
+        centerArg("the point the axis goes through"),
+        uvLockArg(),
+      },
+      rotate,
+    },
+    OpDef{
+      "scale",
+      "Scales nodes so that their bounds become \"to\", or by \"factors\" about a "
+      "center; "
+      "give one of the two. There is no shear. With uv_lock (the default), materials "
+      "scale with the faces.",
+      {
+        targetArg(
+          "the nodes to scale; a layer stands for the nodes in it", TransformTargetRules),
+        ArgDef{"to", ArgType::Box, "the new bounds of the targets"},
+        ArgDef{
+          "factors", ArgType::Vec3, "the scale factors on the x, y and z axes; not 0"},
+        centerArg("the point that stays in place when scaling by factors"),
+        uvLockArg(),
+      },
+      scale,
+      checkScaleArgs,
+    },
+    OpDef{
+      "flip",
+      "Mirrors nodes along an axis through a center. With uv_lock (the default), "
+      "materials are mirrored with the faces.",
+      {
+        targetArg(
+          "the nodes to flip; a layer stands for the nodes in it", TransformTargetRules),
+        ArgDef{"axis", ArgType::Axis, "the axis to mirror along", true},
+        centerArg("a point on the mirror plane"),
+        uvLockArg(),
+      },
+      flip,
+    },
+    OpDef{
+      "set_material",
+      "Sets the material of faces. Warns missing_material if the map's materials can be "
+      "checked (quake_dir is set) and the material is not among them, and "
+      "no_faces_selected if faces picks no face of the brush targets.",
+      {
+        targetArg(
+          "the faces, or the brushes whose faces to set the material of",
+          FaceTargetRules),
+        facesArg(),
+        ArgDef{"material", ArgType::String, "the material's name", true},
+      },
+      setMaterial,
+      checkSetMaterialArgs,
+    },
+    OpDef{
+      "set_uv",
+      "Sets the UV offset, scale and rotation of faces, each to a value or by adding "
+      "{\"add\": ...} to it. Warns no_faces_selected if faces picks no face of the brush "
+      "targets.",
+      {
+        targetArg(
+          "the faces, or the brushes whose faces to set the UV of", FaceTargetRules),
+        facesArg(),
+        ArgDef{"offset", ArgType::PairOrAdd, "the offset in texels, [u, v]"},
+        ArgDef{"scale", ArgType::PairOrAdd, "the scale, [u, v]; not 0"},
+        ArgDef{"rotation", ArgType::NumberOrAdd, "the rotation, in degrees"},
+      },
+      setUv,
+      checkSetUvArgs,
+    },
+    OpDef{
+      "fit_uv",
+      "Aligns, justifies and scales the UV of faces so that the material covers each "
+      "face exactly once, as the editor's auto fit does. Needs the materials' sizes, so "
+      "quake_dir must be set and the materials must be found. Warns no_faces_selected if "
+      "faces picks no face of the brush targets.",
+      {
+        targetArg(
+          "the faces, or the brushes whose faces to fit the UV of", FaceTargetRules),
+        facesArg(),
+      },
+      fitUv,
+    },
+    OpDef{
+      "reset_uv",
+      "Resets the UV of faces to the game's defaults: offset and rotation 0, the default "
+      "scale, and the face's default axes. Warns no_faces_selected if faces picks no "
+      "face "
+      "of the brush targets.",
+      {
+        targetArg(
+          "the faces, or the brushes whose faces to reset the UV of", FaceTargetRules),
+        facesArg(),
+      },
+      resetUv,
     },
     OpDef{
       "delete",
@@ -745,6 +1167,12 @@ bool isBoolFlag(const OpDef& def, const std::string_view flag)
   return std::ranges::any_of(def.args, [&](const auto& arg) {
     return arg.type == ArgType::Bool && flagName(arg.name) == flag;
   });
+}
+
+bool definesFlag(const OpDef& def, const std::string_view flag)
+{
+  return std::ranges::any_of(
+    def.args, [&](const auto& arg) { return flagName(arg.name) == flag; });
 }
 
 bool addressesNodes(const ArgDef& arg)

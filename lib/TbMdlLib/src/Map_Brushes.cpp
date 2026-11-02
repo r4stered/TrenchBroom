@@ -206,13 +206,20 @@ bool createBrush(Map& map, const std::vector<vm::vec3d>& points)
 
 bool setBrushFaceAttributes(Map& map, const UpdateBrushFaceAttributes& update)
 {
-  return applyAndSwap(
-    map, "Change Face Attributes", map.selection().allBrushFaces(), [&](auto& brushFace) {
-      return evaluate(update, brushFace) | kdl::if_error([&](auto e) {
-               map.logger().error() << "Could not set face attributes: " << e.msg;
-             })
-             | kdl::is_success();
-    });
+  return setBrushFaceAttributes(map, map.selection().allBrushFaces(), update);
+}
+
+bool setBrushFaceAttributes(
+  Map& map,
+  const std::vector<BrushFaceHandle>& faces,
+  const UpdateBrushFaceAttributes& update)
+{
+  return applyAndSwap(map, "Change Face Attributes", faces, [&](auto& brushFace) {
+    return evaluate(update, brushFace) | kdl::if_error([&](auto e) {
+             map.logger().error() << "Could not set face attributes: " << e.msg;
+           })
+           | kdl::is_success();
+  });
 }
 
 bool copyUv(
@@ -327,8 +334,13 @@ void fitUv(
 
 void autoFitUv(Map& map)
 {
-  applyAndSwap(
-    map, "Auto Fit Texture", map.selection().allBrushFaces(), [&](auto& brushFace) {
+  autoFitUv(map, map.selection().allBrushFaces());
+}
+
+bool autoFitUv(Map& map, const std::vector<BrushFaceHandle>& faces)
+{
+  return applyAndSwap(
+    map, "Auto Fit Texture", faces, [&](auto& brushFace) {
       // cannot fail: these calls only adjust the scale/offset of an already-valid face
       evaluate(mdl::align(brushFace, UvPolicy::best), brushFace) | kdl::ignore();
 

@@ -349,6 +349,11 @@ MaterialCheck materialCheckOf(const mdl::Map& map)
   return map.gamePath().empty() ? MaterialCheck::Off : MaterialCheck::On;
 }
 
+bool isMaterialMissing(const mdl::Map& map, const mdl::BrushFace& face)
+{
+  return materialCheckOf(map) == MaterialCheck::On && face.material() == nullptr;
+}
+
 std::vector<std::unique_ptr<mdl::Validator>> makeCliValidators(
   const MaterialCheck materialCheck)
 {

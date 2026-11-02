@@ -9,6 +9,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Describe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FaceOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Fgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryJson.cpp
@@ -27,6 +28,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Show.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Targets.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextFormat.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/TransformOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Verify.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS

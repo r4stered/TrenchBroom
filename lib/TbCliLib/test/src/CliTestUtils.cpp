@@ -105,6 +105,16 @@ Json quakeConfig()
   return config;
 }
 
+void setUpMaterials(CliTestEnvironment& env)
+{
+  env.copyFile(texturesFixturePath() / "cr8_a_excerpt.wad", "textures.wad");
+  env.copyFile(texturesFixturePath() / "palette.lmp", "quake/id1/gfx/palette.lmp");
+
+  auto config = quakeConfig();
+  config.set("quake_dir", arg(env.path("quake")));
+  env.writeConfig({}, config);
+}
+
 LoadedMap loadFixtureMap(const std::filesystem::path& fixture, Logger& logger)
 {
   auto config = Config{};

@@ -20,11 +20,14 @@
 #include "cli/EditOps.h"
 
 #include "cli/CliError.h"
+#include "cli/CliValidators.h"
+#include "cli/GeometryJson.h"
 #include "cli/IssueTypes.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Targets.h"
 #include "mdl/BrushBuilder.h"
+#include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
@@ -75,11 +78,6 @@ namespace tb::cli
 {
 namespace
 {
-
-vm::vec3d toVec3(const Json& json)
-{
-  return {json[0].asNumber(), json[1].asNumber(), json[2].asNumber()};
-}
 
 /** Appends the node unless the nodes contain it already. */
 void appendOnce(std::vector<mdl::Node*>& nodes, mdl::Node* node)
@@ -522,8 +520,8 @@ void recordFixOutcome(
 void createBox(OpContext& context)
 {
   const auto& args = context.args;
-  const auto min = toVec3(args["min"]);
-  const auto max = toVec3(args["max"]);
+  const auto min = vec3FromJson(args["min"]);
+  const auto max = vec3FromJson(args["max"]);
   for (size_t i = 0; i < 3; ++i)
   {
     if (!(min[i] < max[i]))
@@ -566,6 +564,12 @@ void createBox(OpContext& context)
   {
     throw CliError{ErrorCode::OpFailed, "create_box: cannot add the box to the map"};
   }
+  if (std::ranges::any_of(brushNode->brush().faces(), [&](const auto& face) {
+        return isMaterialMissing(map, face);
+      }))
+  {
+    context.outcome.warnings.emplace_back("missing_material");
+  }
   context.outcome.created.push_back(brushNode.release());
 }
 
@@ -575,7 +579,7 @@ void createPointEntity(OpContext& context)
   const auto& parent = context.node("parent");
 
   auto entityNode = std::make_unique<mdl::EntityNode>(
-    newEntity(context, definition, toVec3(context.args["origin"])));
+    newEntity(context, definition, vec3FromJson(context.args["origin"])));
   if (mdl::addNodes(context.map, {{parent.node, {entityNode.get()}}}).empty())
   {
     throw CliError{

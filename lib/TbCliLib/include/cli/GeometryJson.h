@@ -33,4 +33,10 @@ Json toJson(const vm::vec3d& v);
 /** `{"min": [x, y, z], "max": [x, y, z]}` */
 Json toJson(const vm::bbox3d& bounds);
 
+/** The point of a well-formed `[x, y, z]`. */
+vm::vec3d vec3FromJson(const Json& json);
+
+/** The box of a well-formed `{"min": [x, y, z], "max": [x, y, z]}`. */
+vm::bbox3d bboxFromJson(const Json& json);
+
 } // namespace tb::cli

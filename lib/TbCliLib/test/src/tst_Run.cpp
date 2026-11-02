@@ -157,6 +157,36 @@ TEST_CASE("run")
         runCli({"delete", "x.map", "--target", "layer:0/brush:0"}), "file_not_found", 1);
     }
 
+    SECTION("an op's argument wins over an option of the same name")
+    {
+      // set_uv's --offset, not the paging option that op commands refuse
+      checkErrorEnvelope(
+        runCli({"set_uv", "x.map", "--target", "layer:0/brush:0", "--offset", "8,0"}),
+        "file_not_found",
+        1);
+      checkErrorEnvelope(
+        runCli({"set_uv", "x.map", "--target", "layer:0/brush:0", "--offset", "x"}),
+        "invalid_argument",
+        2);
+      checkErrorEnvelope(
+        runCli({"query", "x.map", "--offset", "8"}), "file_not_found", 1);
+
+      // the op's other flags and the mutating options still parse
+      checkErrorEnvelope(
+        runCli(
+          {"set_uv",
+           "x.map",
+           "--target",
+           "layer:0/brush:0",
+           "--offset",
+           "8,0",
+           "--dry-run",
+           "--rotation",
+           "90"}),
+        "file_not_found",
+        1);
+    }
+
     SECTION("an op's bool flag may leave out its value")
     {
       using Args = std::vector<std::string>;

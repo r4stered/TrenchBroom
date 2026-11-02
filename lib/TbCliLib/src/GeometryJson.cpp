@@ -35,4 +35,14 @@ Json toJson(const vm::bbox3d& bounds)
   return result;
 }
 
+vm::vec3d vec3FromJson(const Json& json)
+{
+  return {json[0].asNumber(), json[1].asNumber(), json[2].asNumber()};
+}
+
+vm::bbox3d bboxFromJson(const Json& json)
+{
+  return {vec3FromJson(json["min"]), vec3FromJson(json["max"])};
+}
+
 } // namespace tb::cli

@@ -68,6 +68,27 @@ enum class ArgType
    * a spawnflag: its name as the FGD gives it, or its value (a power of two such as 256)
    */
   SpawnFlag,
+  /** any number */
+  Number,
+  /** an axis: `"x"`, `"y"` or `"z"` */
+  Axis,
+  /**
+   * a box `{"min": [x, y, z], "max": [x, y, z]}`, written as JSON or as six numbers
+   * `x1,y1,z1,x2,y2,z2` as a flag
+   */
+  Box,
+  /** a number, or `{"add": n}` to add n to the current value */
+  NumberOrAdd,
+  /**
+   * a pair `[u, v]` or one number for both, or `{"add": [u, v] | n}` to add to the
+   * current values
+   */
+  PairOrAdd,
+  /**
+   * the faces of brush targets that face ops act on: `"all"`, a direction such as `"+z"`,
+   * or a list of directions; written as a comma-separated list as a flag
+   */
+  FaceSelector,
 };
 
 /** One argument of an op. */
@@ -164,6 +185,9 @@ struct Op
  * left out.
  */
 bool isBoolFlag(const OpDef& def, std::string_view flag);
+
+/** Whether the given flag of the op's subcommand gives one of its arguments. */
+bool definesFlag(const OpDef& def, std::string_view flag);
 
 /** Every op, in the order `ops --json` and the help list them. */
 const std::vector<OpDef>& opDefs();

@@ -439,6 +439,25 @@ TEST_CASE("Map_Brushes")
         getFace(*brushNode, faceIndex), MatchesBrushFaceAttributes(originalFace));
       CHECK(map.canUndoCommand() == canUndoBefore);
     }
+
+    SECTION("Given faces that are not selected")
+    {
+      auto& map = fixture.create();
+
+      auto* brushNode = createBrushNode(map);
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      deselectAll(map);
+
+      const auto originalFace = getFace(*brushNode, 1u);
+
+      CHECK(setBrushFaceAttributes(
+        map, {{*brushNode, 0u}}, {.materialName = "given", .xOffset = SetValue{8.0f}}));
+
+      CHECK(getFace(*brushNode, 0u).materialName() == "given");
+      CHECK(getFace(*brushNode, 0u).uvAttributes().offset.x() == 8.0f);
+      CHECK_THAT(getFace(*brushNode, 1u), MatchesBrushFaceAttributes(originalFace));
+      CHECK(!map.selection().hasAny());
+    }
   }
 
   SECTION("copyUv")
@@ -1255,6 +1274,25 @@ TEST_CASE("Map_Brushes")
         getFace(*brushNode, iFront), MatchesBrushFaceAttributes(modifiedFrontFace));
       REQUIRE_THAT(
         getFace(*brushNode, iRight), MatchesBrushFaceAttributes(modifiedRightFace));
+    }
+
+    SECTION("Given faces that are not selected")
+    {
+      deselectAll(map);
+      REQUIRE(setBrushFaceAttributes(
+        map, {{*brushNode, iFront}}, {.rotation = SetValue{15.0f}}));
+      REQUIRE(!isAligned(getFace(*brushNode, iFront)));
+
+      const auto originalTopFace = getFace(*brushNode, iTop);
+
+      CHECK(autoFitUv(map, {{*brushNode, iFront}}));
+
+      CHECK(isAligned(getFace(*brushNode, iFront)));
+      CHECK(isJustified(getFace(*brushNode, iFront), UvAxis::u, UvSign::plus));
+      CHECK(isFitted(getFace(*brushNode, iFront), UvAxis::u));
+      CHECK(isFitted(getFace(*brushNode, iFront), UvAxis::v));
+      CHECK_THAT(getFace(*brushNode, iTop), MatchesBrushFaceAttributes(originalTopFace));
+      CHECK(!map.selection().hasAny());
     }
   }
 }

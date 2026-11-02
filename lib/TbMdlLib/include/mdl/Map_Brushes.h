@@ -27,6 +27,7 @@
 
 namespace tb::mdl
 {
+class BrushFaceHandle;
 struct UvAttributes;
 class Map;
 struct UvCoordSystemSnapshot;
@@ -58,6 +59,15 @@ bool createBrush(Map& map, const std::vector<vm::vec3d>& points);
 
 bool setBrushFaceAttributes(Map& map, const UpdateBrushFaceAttributes& update);
 
+/**
+ * Applies the update to the given faces, whether they are selected or not. Returns false
+ * and changes nothing if the update cannot be applied to every face.
+ */
+bool setBrushFaceAttributes(
+  Map& map,
+  const std::vector<BrushFaceHandle>& faces,
+  const UpdateBrushFaceAttributes& update);
+
 bool copyUv(
   Map& map,
   const UvCoordSystemSnapshot& coordSystemSnapshot,
@@ -86,5 +96,11 @@ void justifyUv(Map& map, UvJustifyDirection uvJustifyDirection, UvPolicy uvPolic
 void fitUv(
   Map& map, UvFitDirection uvFitDirection, UvPolicy uvPolicy, UvFitMode uvFitMode);
 void autoFitUv(Map& map);
+
+/**
+ * Aligns, justifies and fits the UV of the given faces to the faces, whether they are
+ * selected or not, as autoFitUv does for the selected faces.
+ */
+bool autoFitUv(Map& map, const std::vector<BrushFaceHandle>& faces);
 
 } // namespace tb::mdl

@@ -26,8 +26,9 @@
 
 namespace tb::mdl
 {
+class BrushFace;
 class Map;
-}
+} // namespace tb::mdl
 
 /*
  * The validators of verify's CLI checks: mistakes that agents commonly make and that the
@@ -130,6 +131,12 @@ enum class MaterialCheck
  * a game path.
  */
 MaterialCheck materialCheckOf(const mdl::Map& map);
+
+/**
+ * Whether the missing material validator would report the face: never if the map's
+ * materials cannot be checked (see materialCheckOf).
+ */
+bool isMaterialMissing(const mdl::Map& map, const mdl::BrushFace& face);
 
 /**
  * The validators of the CLI check types of the issue-type table, in its order. Missing

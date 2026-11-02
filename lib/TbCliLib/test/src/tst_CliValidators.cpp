@@ -24,6 +24,9 @@
 #include "cli/IssueTypes.h"
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
+#include "mdl/Brush.h"
+#include "mdl/BrushFace.h"
+#include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Issue.h"
@@ -300,6 +303,39 @@ TEST_CASE("materialCheckOf")
   CHECK(
     materialCheckOf(*loadMap(fixturePath("maps/simple.map"), config, logger).map)
     == MaterialCheck::On);
+}
+
+TEST_CASE("isMaterialMissing")
+{
+  auto logger = NullLogger{};
+  const auto faceOf =
+    [](const LoadedMap& loaded, const std::string& path) -> const mdl::BrushFace& {
+    const auto [node, faceIndex] = resolveNodePath(loaded.map->worldNode(), path);
+    return static_cast<const mdl::BrushNode*>(node)->brush().face(*faceIndex);
+  };
+
+  SECTION("materials that cannot be checked are not missing")
+  {
+    const auto loaded = loadFixtureMap("maps/faces.map", logger);
+    CHECK_FALSE(isMaterialMissing(*loaded.map, faceOf(loaded, "layer:0/brush:0/face:0")));
+  }
+
+  SECTION("materials that can be checked")
+  {
+    auto env = CliTestEnvironment{};
+    const auto map = env.copyFixture("maps/faces.map", "faces.map");
+    setUpMaterials(env);
+
+    auto config = Config{};
+    config.gameConfig = quakeGameConfigPath();
+    config.fgd = {quakeFgdPath()};
+    config.quakeDir = env.path("quake");
+    const auto found = loadMap(map, config, logger);
+    CHECK_FALSE(isMaterialMissing(*found.map, faceOf(found, "layer:0/brush:0/face:0")));
+
+    const auto missing = loadMap(fixturePath("maps/simple.map"), config, logger);
+    CHECK(isMaterialMissing(*missing.map, faceOf(missing, "layer:0/brush:0/face:0")));
+  }
 }
 
 } // namespace tb::cli

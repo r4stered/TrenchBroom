@@ -91,6 +91,30 @@ TEST_CASE("create_box")
       == Json{"layer:0/entity:1"});
   }
 
+  SECTION("warns if the material is not found")
+  {
+    auto faces = EditFixture{"maps/faces.map"};
+    setUpMaterials(faces.env);
+
+    const auto found = runJson(
+      {"create_box",
+       faces.map,
+       "--min=0,0,64",
+       "--max=8,8,72",
+       "--material=cr8_czg_1",
+       "--dry-run"});
+    CHECK(found["ops"][0]["warnings"] == parseJsonLiteral("[]"));
+
+    const auto missing = runJson(
+      {"create_box",
+       faces.map,
+       "--min=0,0,64",
+       "--max=8,8,72",
+       "--material=no_such_material",
+       "--dry-run"});
+    CHECK(missing["ops"][0]["warnings"] == parseJsonLiteral(R"(["missing_material"])"));
+  }
+
   SECTION("refuses a parent that cannot hold brushes")
   {
     const auto parent =

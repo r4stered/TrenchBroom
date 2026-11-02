@@ -91,6 +91,13 @@ public:
 Json quakeConfig();
 
 /**
+ * Lets tbcli load and check materials in the given environment: copies the texture wad
+ * into it as textures.wad, which fixture maps name in their wad property, and writes a
+ * tbcli.json with a Quake directory that holds the palette.
+ */
+void setUpMaterials(CliTestEnvironment& env);
+
+/**
  * Loads a fixture map in-process with the Quake game config and FGD. The logger must
  * outlive the result.
  */

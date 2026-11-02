@@ -42,9 +42,16 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 10);
+    REQUIRE(json["ops"].size() == 18);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
-    CHECK(json["ops"][8] == parseJsonLiteral(R"json({
+    const auto opNamed = [&](const std::string_view name) -> const Json& {
+      const auto& ops = json["ops"].asArray();
+      const auto it = std::ranges::find_if(
+        ops, [&](const auto& op) { return op["name"] == Json{name}; });
+      REQUIRE(it != ops.end());
+      return *it;
+    };
+    CHECK(opNamed("delete") == parseJsonLiteral(R"json({
       "name": "delete",
       "description": "Deletes groups, entities, brushes and patches. An entity or group left empty is deleted with them.",
       "schema": {
@@ -94,7 +101,7 @@ TEST_CASE("ops command")
       == parseJsonLiteral(R"(["layer", "group", "brush_entity"])"));
     CHECK(createBox["properties"]["as"]["pattern"].isString());
 
-    const auto& fix = json["ops"][9];
+    const auto& fix = opNamed("fix");
     CHECK(fix["name"] == Json{"fix"});
     CHECK(
       fix["schema"]["required"] == parseJsonLiteral(R"(["op", "issue_type", "fix"])"));
@@ -317,6 +324,15 @@ TEST_CASE("Ops")
     CHECK(!isBoolFlag(*findOpDef("create_point_entity"), "allow_undefined"));
     CHECK(!isBoolFlag(*findOpDef("create_point_entity"), "classname"));
     CHECK(isBoolFlag(*findOpDef("set_spawnflag"), "on"));
+  }
+
+  SECTION("definesFlag")
+  {
+    CHECK(definesFlag(*findOpDef("set_uv"), "offset"));
+    CHECK(definesFlag(*findOpDef("create_point_entity"), "allow-undefined"));
+    CHECK(!definesFlag(*findOpDef("create_point_entity"), "allow_undefined"));
+    CHECK(!definesFlag(*findOpDef("set_uv"), "query"));
+    CHECK(!definesFlag(*findOpDef("set_uv"), "dry-run"));
   }
 
   SECTION("findOpDef")

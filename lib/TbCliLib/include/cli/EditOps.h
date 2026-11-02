@@ -32,7 +32,8 @@ struct OpContext;
 
 /**
  * `create_box {min, max, material, parent}`: an axis-aligned box brush in a layer,
- * group or brush entity.
+ * group or brush entity. Warns `missing_material` if the map's materials can be checked
+ * and the material is not among them.
  */
 void createBox(OpContext& context);
 
