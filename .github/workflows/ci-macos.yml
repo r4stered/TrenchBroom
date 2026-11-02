@@ -104,10 +104,11 @@ jobs:
         run: ./CI-macos.sh
 
       - name: ccache stats
+        if: ${{ !cancelled() }}
         run: ccache --show-stats
 
       - name: Save ccache
-        if: ${{ success() && github.ref == 'refs/heads/master' }}
+        if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
         uses: ./.github/actions/ccache-save
         with:
           os: ${{ matrix.os }}

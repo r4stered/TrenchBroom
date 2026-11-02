@@ -13,22 +13,27 @@ inputs:
 runs:
   using: composite
   steps:
-    # We only ever save from master builds, and restores always want the newest
-    # cache for this key, so there is no reason to keep older generations around
-    # racking up storage against the repository's total cache quota.
-    - name: Delete previous ccache generations
-      shell: bash
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        gh cache list \
-          --key "${{ env.CCACHE_CACHE_KEY_PREFIX }}-${{ inputs.os }}-${{ inputs.build-type }}-${{ inputs.arch }}-" \
-          --json id --jq '.[].id' \
-        | xargs -r -n1 gh cache delete
-      continue-on-error: true
-
     - name: Save ccache
       uses: actions/cache/save@v4
       with:
         path: ${{ env.CCACHE_DIR }}
         key: ${{ env.CCACHE_CACHE_KEY_PREFIX }}-${{ inputs.os }}-${{ inputs.build-type }}-${{ inputs.arch }}-${{ github.run_id }}
+
+    # Every branch saves its own cache, even from failed builds, so that a branch keeps
+    # its compiled objects between pushes. Restores always want the newest cache for this
+    # key, so older generations saved from the same branch are deleted to stay within the
+    # repository's cache quota. Caches of other branches, including master's, which every
+    # branch falls back to, are left alone.
+    - name: Delete previous ccache generations of this branch
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        CURRENT_KEY: ${{ env.CCACHE_CACHE_KEY_PREFIX }}-${{ inputs.os }}-${{ inputs.build-type }}-${{ inputs.arch }}-${{ github.run_id }}
+      run: |
+        gh cache list \
+          --ref "$GITHUB_REF" \
+          --key "${{ env.CCACHE_CACHE_KEY_PREFIX }}-${{ inputs.os }}-${{ inputs.build-type }}-${{ inputs.arch }}-" \
+          --limit 100 \
+          --json id,key --jq ".[] | select(.key != \"$CURRENT_KEY\") | .id" \
+        | xargs -r -n1 gh cache delete
+      continue-on-error: true
