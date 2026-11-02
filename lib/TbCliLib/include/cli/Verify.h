@@ -75,19 +75,19 @@ struct VerifyIssue
   /** The node the issue is on, if any. */
   mdl::Node* node = nullptr;
   /** Set if the issue is on a face of `node`, which is then a brush. */
-  std::optional<size_t> faceIndex;
+  std::optional<size_t> faceIndex = std::nullopt;
   /** Set if the issue is about a property of `node`, which is then an entity. */
-  std::optional<std::string> propertyKey;
-  std::optional<size_t> line;
+  std::optional<std::string> propertyKey = std::nullopt;
+  std::optional<size_t> line = std::nullopt;
   /** For an issue a compiler reported, the compiler's name, such as `qbsp`. */
-  std::optional<std::string> tool;
+  std::optional<std::string> tool = std::nullopt;
   /**
    * Whether the issue was mapped to a node after a lossy load, so that the map the
    * compiler saw holds content that the loaded map lacks.
    */
   bool unreliableMapping = false;
   /** Set for a `leak` issue, whose node is the occupant entity, if qbsp named one. */
-  std::optional<LeakDetails> leak;
+  std::optional<LeakDetails> leak = std::nullopt;
   /** Whether a `verify.ignore` entry suppresses the issue. */
   bool suppressed = false;
 };

@@ -296,7 +296,7 @@ std::map<const IssueTypeDef*, Severity> readSeverities(
   auto result = std::map<const IssueTypeDef*, Severity>{};
   for (const auto& [type, value] : severity.asObject())
   {
-    const auto& issueType = readIssueType(Json{type}, "verify.severity", file);
+    const auto* issueType = &readIssueType(Json{type}, "verify.severity", file);
     const auto parsed = value.isString() ? parseSeverity(value.asString()) : std::nullopt;
     if (!parsed)
     {
@@ -305,7 +305,7 @@ std::map<const IssueTypeDef*, Severity> readSeverities(
         fmt::format(
           "'verify.severity.{}' must be \"error\", \"warning\" or \"info\"", type));
     }
-    result[&issueType] = *parsed;
+    result[issueType] = *parsed;
   }
   return result;
 }

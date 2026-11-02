@@ -451,6 +451,16 @@ private:
 
 Json::Json() = default;
 
+Json::Json(const Json& other) = default;
+
+Json::Json(Json&& other) noexcept = default;
+
+Json& Json::operator=(const Json& other) = default;
+
+Json& Json::operator=(Json&& other) noexcept = default;
+
+Json::~Json() = default;
+
 Json::Json(std::nullptr_t) {}
 
 Json::Json(const bool b)

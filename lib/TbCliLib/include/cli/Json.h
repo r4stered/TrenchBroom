@@ -69,6 +69,14 @@ public:
   Json(Array a);
   Json(Object o);
 
+  // Defined in Json.cpp, where JsonMember is complete: libc++ cannot instantiate
+  // std::vector<JsonMember>'s members while JsonMember is still incomplete.
+  Json(const Json& other);
+  Json(Json&& other) noexcept;
+  Json& operator=(const Json& other);
+  Json& operator=(Json&& other) noexcept;
+  ~Json();
+
   static Json object();
   static Json array();
 

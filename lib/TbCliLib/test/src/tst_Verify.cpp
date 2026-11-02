@@ -743,20 +743,19 @@ TEST_CASE("verify")
       }
 
       // issues without a line come first, then in file order
-      CHECK(
-        compilerIssues[0]
-        == parseJsonLiteral(
-          R"({
+      const auto expectedFirst = parseJsonLiteral(
+        R"({
           "type": "compiler",
           "severity": "warning",
           "key": ")"
-          + compilerIssues[0]["key"].asString() + R"(",
+        + compilerIssues[0]["key"].asString() + R"(",
           "message": "No wad or _wad key exists in the worldmodel",
           "node": null,
           "line": null,
           "tool": "qbsp",
           "fixes": []
-        })"));
+        })");
+      CHECK(compilerIssues[0] == expectedFirst);
 
       // mapped by [line N] to the brush containing the line
       const auto& byLine = compilerIssues[6];
@@ -846,14 +845,12 @@ TEST_CASE("verify")
 
       const auto leaks = issuesOfType(json, "leak");
       REQUIRE(leaks.size() == 1);
-      CHECK(
-        leaks[0]
-        == parseJsonLiteral(
-          R"({
+      const auto expectedLeak = parseJsonLiteral(
+        R"({
           "type": "leak",
           "severity": "error",
           "key": ")"
-          + leaks[0]["key"].asString() + R"json(",
+        + leaks[0]["key"].asString() + R"json(",
           "message": "the map leaks: the void can be reached from light at (144 0 96)",
           "node": "layer:0/entity:1",
           "line": 96,
@@ -866,7 +863,8 @@ TEST_CASE("verify")
           },
           "nearest_brushes": ["layer:0/brush:3", "layer:0/brush:5", "layer:0/brush:0"],
           "fixes": []
-        })json"));
+        })json");
+      CHECK(leaks[0] == expectedLeak);
 
       // the leak issue replaces the compiler issues of the "Reached occupant" lines
       for (const auto& issue : issuesOfType(json, "compiler"))
@@ -929,11 +927,10 @@ TEST_CASE("verify")
         const auto json = fixture.json({"--compile=light"});
         for (const auto name : {VisTool, LightTool})
         {
-          CHECK(
-            stageNamed(json, name)
-            == parseJsonLiteral(
-              R"({"name": ")" + std::string{name}
-              + R"(", "status": "skipped", "reason": "leak", "ms": 0})"));
+          const auto expected = parseJsonLiteral(
+            R"({"name": ")" + std::string{name}
+            + R"(", "status": "skipped", "reason": "leak", "ms": 0})");
+          CHECK(stageNamed(json, name) == expected);
         }
         CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/vis.args")));
         CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/light.args")));
@@ -1046,10 +1043,11 @@ TEST_CASE("verify")
           CAPTURE(file);
           CHECK(std::filesystem::is_regular_file(fixture.env.path(file)));
         }
+        const auto expected = parseJsonLiteral(
+          R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": false})");
         CHECK(
           parseJsonLiteral(fixture.env.readFile("out/compile_warnings.bsp.tbcli.json"))
-          == parseJsonLiteral(
-            R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": false})"));
+          == expected);
       }
 
       SECTION("of a leaking map keep the pointfile, with leaked in the sidecar")
@@ -1058,10 +1056,11 @@ TEST_CASE("verify")
         const auto json =
           leaking.json({"--compile", "--artifacts", arg(leaking.env.path("out"))});
         CHECK(std::filesystem::is_regular_file(leaking.env.path("out/compile_leak.pts")));
+        const auto expected = parseJsonLiteral(
+          R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": true})");
         CHECK(
           parseJsonLiteral(leaking.env.readFile("out/compile_leak.bsp.tbcli.json"))
-          == parseJsonLiteral(
-            R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": true})"));
+          == expected);
       }
 
       SECTION("--timeout and --artifacts require --compile")

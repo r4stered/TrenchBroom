@@ -33,9 +33,9 @@ TEST_CASE("Json")
     object.set("b", true);
     object.set("a", Json{Json::Array{1, 2.5, nullptr, "x"}});
     object.set("s", "quote \" backslash \\ newline \n tab \t");
-    CHECK(
-      object.dump()
-      == R"({"b":true,"a":[1,2.5,null,"x"],"s":"quote \" backslash \\ newline \n tab \t"})");
+    const auto expected =
+      R"({"b":true,"a":[1,2.5,null,"x"],"s":"quote \" backslash \\ newline \n tab \t"})";
+    CHECK(object.dump() == expected);
   }
 
   SECTION("set")

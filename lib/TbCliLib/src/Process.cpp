@@ -41,7 +41,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <csignal>
+#include <cstring>
 #include <thread>
 #endif
 
@@ -206,26 +208,50 @@ ProcessResult runProcess(
   }
   argv.push_back(nullptr);
 
+  // the child reports a failed chdir or exec through this pipe; a successful exec
+  // closes it
+  int errorPipe[2];
+  if (
+    pipe(errorPipe) != 0 || fcntl(errorPipe[0], F_SETFD, FD_CLOEXEC) != 0
+    || fcntl(errorPipe[1], F_SETFD, FD_CLOEXEC) != 0)
+  {
+    throw cannotStart(executable, "pipe failed");
+  }
+
   const auto pid = fork();
   if (pid < 0)
   {
+    close(errorPipe[0]);
+    close(errorPipe[1]);
     throw cannotStart(executable, "fork failed");
   }
   if (pid == 0)
   {
     // only async-signal-safe calls between fork and exec
-    if (chdir(workDir.c_str()) != 0)
+    close(errorPipe[0]);
+    if (chdir(workDir.c_str()) == 0)
     {
-      _exit(127);
+      if (const auto nul = open("/dev/null", O_RDWR); nul >= 0)
+      {
+        dup2(nul, STDIN_FILENO);
+        dup2(nul, STDOUT_FILENO);
+        dup2(nul, STDERR_FILENO);
+      }
+      execv(argv[0], argv.data());
     }
-    if (const auto nul = open("/dev/null", O_RDWR); nul >= 0)
-    {
-      dup2(nul, STDIN_FILENO);
-      dup2(nul, STDOUT_FILENO);
-      dup2(nul, STDERR_FILENO);
-    }
-    execv(argv[0], argv.data());
+    const auto error = errno;
+    [[maybe_unused]] const auto written = write(errorPipe[1], &error, sizeof(error));
     _exit(127);
+  }
+
+  close(errorPipe[1]);
+  auto childError = 0;
+  const auto readCount = read(errorPipe[0], &childError, sizeof(childError));
+  close(errorPipe[0]);
+  if (readCount == static_cast<ssize_t>(sizeof(childError)))
+  {
+    waitpid(pid, nullptr, 0);
+    throw cannotStart(executable, std::strerror(childError));
   }
 
   const auto deadline = std::chrono::steady_clock::now() + timeout;

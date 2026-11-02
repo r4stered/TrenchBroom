@@ -122,24 +122,24 @@ bool addressesNodes(const ArgDef& arg);
 /** What an op did, as reported in its entry of the apply result. */
 struct OpOutcome
 {
-  std::vector<mdl::Node*> created;
-  std::vector<mdl::Node*> modified;
+  std::vector<mdl::Node*> created = {};
+  std::vector<mdl::Node*> modified = {};
   /** Removed nodes; reported by their paths in the input rev. */
-  std::vector<mdl::Node*> removed;
-  std::vector<std::string> warnings;
+  std::vector<mdl::Node*> removed = {};
+  std::vector<std::string> warnings = {};
   /**
    * The linked groups whose contents changed when an edit inside one of them reached its
    * linked copies: the edited group and its copies.
    */
-  std::vector<mdl::Node*> instancesAffected;
+  std::vector<mdl::Node*> instancesAffected = {};
   /**
    * The carriers of built rooms that a rebuild left where they are because the room
    * that they are placed against no longer stands where their placement puts it.
    */
-  std::vector<mdl::Node*> stalePlacements;
+  std::vector<mdl::Node*> stalePlacements = {};
   /** The nodes that the map library replaced with copies when it updated linked groups.
    */
-  std::vector<NodeReplacement> replaced;
+  std::vector<NodeReplacement> replaced = {};
 };
 
 /** What an op runs with. */

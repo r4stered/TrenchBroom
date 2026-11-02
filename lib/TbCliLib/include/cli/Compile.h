@@ -93,11 +93,11 @@ struct CompilerMessage
    */
   std::string message;
   /** The line of the map that the message names as `<map>[line N]`. */
-  std::optional<size_t> line;
+  std::optional<size_t> line = std::nullopt;
   /** The classname of the entity that the message names as `<classname> at <origin>`. */
-  std::optional<std::string> classname;
+  std::optional<std::string> classname = std::nullopt;
   /** The origin of the entity that the message names as `<classname> at <origin>`. */
-  std::optional<vm::vec3d> origin;
+  std::optional<vm::vec3d> origin = std::nullopt;
 };
 
 /**
@@ -131,7 +131,7 @@ struct ToolRun
   std::chrono::milliseconds timeout{0};
   double ms = 0.0;
   /** The severity-marked lines of the tool's log, in log order. */
-  std::vector<CompilerMessage> messages;
+  std::vector<CompilerMessage> messages = {};
 
   /** Whether the tool exited with a non-zero code or was stopped. */
   bool failed() const;

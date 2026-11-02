@@ -102,7 +102,7 @@ void addBuiltRoom(Json& json, const mdl::Node& node, const mdl::WorldNode& world
 
 Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bool raw)
 {
-  auto result = node.accept(
+  auto json = node.accept(
     kdl::overload(
       [](const mdl::WorldNode& world) {
         auto result = entityToJson(world);
@@ -127,8 +127,8 @@ Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bo
       },
       [&](const mdl::BrushNode& brushNode) { return brushToJson(brushNode, raw); },
       [](const mdl::PatchNode& patchNode) { return patchSummaryToJson(patchNode); }));
-  addBuiltRoom(result, node, worldNode);
-  return result;
+  addBuiltRoom(json, node, worldNode);
+  return json;
 }
 
 } // namespace

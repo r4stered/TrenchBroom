@@ -51,7 +51,7 @@ TEST_CASE("ops command")
       REQUIRE(it != ops.end());
       return *it;
     };
-    CHECK(opNamed("delete") == parseJsonLiteral(R"json({
+    const auto expectedDelete = parseJsonLiteral(R"json({
       "name": "delete",
       "description": "Deletes groups, entities, brushes and patches. An entity or group left empty is deleted with them.",
       "schema": {
@@ -88,7 +88,8 @@ TEST_CASE("ops command")
         "required": ["op", "target"],
         "additionalProperties": false
       }
-    })json"));
+    })json");
+    CHECK(opNamed("delete") == expectedDelete);
 
     const auto& createBox = json["ops"][0]["schema"];
     CHECK(

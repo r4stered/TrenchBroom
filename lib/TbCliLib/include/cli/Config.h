@@ -39,16 +39,16 @@ inline constexpr auto ConfigFileName = "tbcli.json";
  */
 struct ConfigOverrides
 {
-  std::optional<std::string> mapFormat;
-  std::optional<std::filesystem::path> gameConfig;
-  std::vector<std::filesystem::path> fgd;
-  std::optional<std::filesystem::path> quakeDir;
-  std::optional<std::vector<std::string>> keyEntities;
+  std::optional<std::string> mapFormat = std::nullopt;
+  std::optional<std::filesystem::path> gameConfig = std::nullopt;
+  std::vector<std::filesystem::path> fgd = {};
+  std::optional<std::filesystem::path> quakeDir = std::nullopt;
+  std::optional<std::vector<std::string>> keyEntities = std::nullopt;
   /**
    * The executables of compilers by name, such as `qbsp`, each overriding the path in
    * `compilers.<name>`.
    */
-  std::map<std::string, std::filesystem::path, std::less<>> compilers;
+  std::map<std::string, std::filesystem::path, std::less<>> compilers = {};
 };
 
 /** A compiler entry of tbcli.json's `compilers`. */

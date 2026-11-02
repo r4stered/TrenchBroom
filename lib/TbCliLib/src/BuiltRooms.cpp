@@ -489,7 +489,7 @@ private:
       if (cell[axis] != plane)
       {
         auto target = cell;
-        target[axis] -= cell[axis] > plane ? 1 : 0;
+        target[axis] -= cell[axis] > plane ? size_t{1} : size_t{0};
         merged.m_filled[merged.indexOf(target)] = m_filled[indexOf(cell)];
       }
     });
