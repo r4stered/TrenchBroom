@@ -43,6 +43,11 @@ std::filesystem::path quakeFgdPath()
   return getFixtureRoot() / "games" / "Quake" / "Quake.fgd";
 }
 
+std::filesystem::path texturesFixturePath()
+{
+  return getFixtureRoot() / "textures";
+}
+
 CliTestEnvironment::CliTestEnvironment() = default;
 
 std::filesystem::path CliTestEnvironment::path(
@@ -51,17 +56,21 @@ std::filesystem::path CliTestEnvironment::path(
   return m_env.dir() / relativePath;
 }
 
-std::filesystem::path CliTestEnvironment::copyFixture(
-  const std::filesystem::path& fixtureRelativePath,
-  const std::filesystem::path& relativePath)
+std::filesystem::path CliTestEnvironment::copyFile(
+  const std::filesystem::path& source, const std::filesystem::path& relativePath)
 {
   const auto target = path(relativePath);
   std::filesystem::create_directories(target.parent_path());
   std::filesystem::copy_file(
-    fixturePath(fixtureRelativePath),
-    target,
-    std::filesystem::copy_options::overwrite_existing);
+    source, target, std::filesystem::copy_options::overwrite_existing);
   return target;
+}
+
+std::filesystem::path CliTestEnvironment::copyFixture(
+  const std::filesystem::path& fixtureRelativePath,
+  const std::filesystem::path& relativePath)
+{
+  return copyFile(fixturePath(fixtureRelativePath), relativePath);
 }
 
 std::filesystem::path CliTestEnvironment::writeFile(
@@ -112,6 +121,13 @@ std::string arg(const std::filesystem::path& path)
 Json parseOutput(const RunResult& result)
 {
   auto json = parseJson(result.out);
+  REQUIRE(json.is_success());
+  return std::move(json).value();
+}
+
+Json parseJsonLiteral(const std::string_view str)
+{
+  auto json = parseJson(str);
   REQUIRE(json.is_success());
   return std::move(json).value();
 }

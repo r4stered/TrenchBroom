@@ -19,13 +19,27 @@
 
 #pragma once
 
+#include <optional>
+#include <string>
+#include <vector>
+
 namespace tb::cli
 {
 
 class Json;
 struct LoadedMap;
 
-/** The `tbcli.describe/1` result for the given map. */
-Json describe(const LoadedMap& loadedMap);
+/**
+ * The `tbcli.describe/1` result for the given map: a summary whose size is bounded
+ * regardless of the size of the map. Lists that could grow with the map are capped and
+ * written as `{items, total, truncated}`.
+ *
+ * Entities of the given key entity classes are listed in full, in addition to
+ * worldspawn and every entity with a targetname or target. Without a list, the player
+ * starts and trigger_changelevel are.
+ */
+Json describe(
+  const LoadedMap& loadedMap,
+  const std::optional<std::vector<std::string>>& keyEntityClasses = std::nullopt);
 
 } // namespace tb::cli

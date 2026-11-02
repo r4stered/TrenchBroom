@@ -32,6 +32,7 @@
 
 #include <exception>
 #include <optional>
+#include <ranges>
 #include <string_view>
 
 namespace tb::cli
@@ -50,6 +51,9 @@ options:
   --fgd <path>          FGD file, overrides tbcli.json "fgd"
   --quake-dir <path>    Quake directory, overrides tbcli.json "quake_dir"
   --map-format valve    map format, overrides tbcli.json "format"
+  --key-entities <classes>
+                        comma-separated classes describe lists in full,
+                        overrides tbcli.json "describe.key_entities"
   -h, --help            print this help
   --version             print the version
 
@@ -102,6 +106,20 @@ struct Arguments
   bool help = false;
   bool version = false;
 };
+
+/** The non-empty elements of a comma-separated list. */
+std::vector<std::string> splitList(const std::string_view str)
+{
+  auto result = std::vector<std::string>{};
+  for (const auto element : str | std::views::split(','))
+  {
+    if (!element.empty())
+    {
+      result.emplace_back(element.begin(), element.end());
+    }
+  }
+  return result;
+}
 
 Arguments parseArguments(const std::vector<std::string>& args)
 {
@@ -197,6 +215,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
       // validated with the rest of the configuration
       result.configOverrides.mapFormat = value();
     }
+    else if (name == "--key-entities")
+    {
+      result.configOverrides.keyEntities = splitList(value());
+    }
     else
     {
       throw usageError(fmt::format("unknown option {}", name));
@@ -232,7 +254,7 @@ Json runCommand(const Arguments& arguments, Logger& logger)
     const auto mapPath = mapArgument(arguments, command);
     const auto config = loadConfig(mapPath, arguments.configOverrides);
     const auto loadedMap = loadMap(mapPath, config, logger);
-    return describe(loadedMap);
+    return describe(loadedMap, config.keyEntities);
   }
 
   throw usageError(fmt::format("unknown command '{}'", command));

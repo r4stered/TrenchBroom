@@ -100,6 +100,50 @@ std::vector<std::filesystem::path> readPaths(
   return result;
 }
 
+std::optional<std::vector<std::string>> readStrings(
+  const Json& object, const std::string_view key, const std::filesystem::path& file)
+{
+  const auto& value = object[key];
+  if (value.isNull())
+  {
+    return std::nullopt;
+  }
+
+  const auto typeError = [&]() {
+    return fileConfigError(file, fmt::format("'{}' must be an array of strings", key));
+  };
+  if (!value.isArray())
+  {
+    throw typeError();
+  }
+
+  auto result = std::vector<std::string>{};
+  for (const auto& element : value.asArray())
+  {
+    if (!element.isString())
+    {
+      throw typeError();
+    }
+    result.push_back(element.asString());
+  }
+  return result;
+}
+
+void readDescribeConfig(
+  Config& config, const Json& object, const std::filesystem::path& file)
+{
+  const auto& describe = object["describe"];
+  if (describe.isNull())
+  {
+    return;
+  }
+  if (!describe.isObject())
+  {
+    throw fileConfigError(file, "'describe' must be an object");
+  }
+  config.keyEntities = readStrings(describe, "key_entities", file);
+}
+
 void readConfigFile(Config& config, const std::filesystem::path& file)
 {
   const auto contents = readFile(file);
@@ -133,6 +177,7 @@ void readConfigFile(Config& config, const std::filesystem::path& file)
   config.gameConfig = readPath(object, "game_config", file, base);
   config.fgd = readPaths(object, "fgd", file, base);
   config.quakeDir = readPath(object, "quake_dir", file, base);
+  readDescribeConfig(config, object, file);
 }
 
 } // namespace
@@ -188,6 +233,10 @@ Config loadConfig(const std::filesystem::path& mapPath, const ConfigOverrides& o
   if (overrides.quakeDir)
   {
     config.quakeDir = resolve(cwd, *overrides.quakeDir);
+  }
+  if (overrides.keyEntities)
+  {
+    config.keyEntities = overrides.keyEntities;
   }
 
   // checked once the overrides are applied, so a flag can override a bad key

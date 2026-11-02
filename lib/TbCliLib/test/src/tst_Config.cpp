@@ -21,7 +21,11 @@
 #include "cli/CliError.h"
 #include "cli/Config.h"
 
+#include <string>
+#include <vector>
+
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_exception.hpp>
 
 namespace tb::cli
@@ -86,6 +90,24 @@ TEST_CASE("Config")
           env.path("project/a.fgd"), env.path("project/b.fgd")});
     }
 
+    SECTION("describe.key_entities")
+    {
+      auto describe = Json::object();
+      describe.set("key_entities", Json{Json::Array{"light", "monster_army"}});
+      auto json = Json::object();
+      json.set("describe", describe);
+      env.writeConfig("project", json);
+
+      CHECK(
+        loadConfig(mapPath, {}).keyEntities
+        == std::vector<std::string>{"light", "monster_army"});
+      CHECK(
+        loadConfig(
+          mapPath, ConfigOverrides{.keyEntities = std::vector<std::string>{"info_null"}})
+          .keyEntities
+        == std::vector<std::string>{"info_null"});
+    }
+
     SECTION("overrides replace keys and resolve against the working directory")
     {
       auto json = Json::object();
@@ -148,6 +170,26 @@ TEST_CASE("Config")
       {
         auto json = Json::object();
         json.set("fgd", Json{Json::Array{"a.fgd", true}});
+        env.writeConfig("project", json);
+        CHECK(errorCode() == ErrorCode::ConfigError);
+      }
+
+      SECTION("describe is not an object")
+      {
+        auto json = Json::object();
+        json.set("describe", Json{Json::Array{"light"}});
+        env.writeConfig("project", json);
+        CHECK(errorCode() == ErrorCode::ConfigError);
+      }
+
+      SECTION("describe.key_entities is not a list of strings")
+      {
+        const auto keyEntities = GENERATE(Json{"light"}, Json{Json::Array{"light", 1}});
+
+        auto describe = Json::object();
+        describe.set("key_entities", keyEntities);
+        auto json = Json::object();
+        json.set("describe", describe);
         env.writeConfig("project", json);
         CHECK(errorCode() == ErrorCode::ConfigError);
       }

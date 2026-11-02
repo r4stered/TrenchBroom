@@ -43,6 +43,12 @@ std::filesystem::path quakeGameConfigPath();
 std::filesystem::path quakeFgdPath();
 
 /**
+ * A directory holding a Quake palette (palette.lmp) and a texture wad
+ * (cr8_a_excerpt.wad, containing the textures "added" and "cr8_czg_1").
+ */
+std::filesystem::path texturesFixturePath();
+
+/**
  * A temporary directory for one test. Fixture maps are copied into it so that tests
  * can let tbcli read and write them, and tbcli.json files are written into it so that
  * configuration discovery can be exercised.
@@ -57,6 +63,10 @@ public:
 
   /** The absolute path of the given path relative to this environment. */
   std::filesystem::path path(const std::filesystem::path& relativePath) const;
+
+  /** Copies a file into this environment and returns its absolute path. */
+  std::filesystem::path copyFile(
+    const std::filesystem::path& source, const std::filesystem::path& relativePath);
 
   /** Copies a fixture file into this environment and returns its absolute path. */
   std::filesystem::path copyFixture(
@@ -85,6 +95,9 @@ std::string arg(const std::filesystem::path& path);
 
 /** Parses stdout as JSON, failing the test if it is not valid JSON. */
 Json parseOutput(const RunResult& result);
+
+/** Parses a JSON literal written in a test, failing the test if it is not valid JSON. */
+Json parseJsonLiteral(std::string_view str);
 
 } // namespace tb::cli
 

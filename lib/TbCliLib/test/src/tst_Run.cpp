@@ -258,6 +258,26 @@ TEST_CASE("run")
       CHECK(maxY(result) == 112.0);
     }
 
+    SECTION("--key-entities overrides describe.key_entities")
+    {
+      auto describe = Json::object();
+      describe.set("key_entities", Json{Json::Array{"func_door"}});
+      auto config = quakeConfig();
+      config.set("describe", describe);
+      env.writeConfig("project", config);
+
+      // empty elements are ignored
+      const auto result = runCli({"describe", arg(map), "--key-entities", ",light,"});
+      CHECK(result.exitCode == 0);
+
+      const auto output = parseOutput(result);
+      const auto& items = output["key_entities"]["items"];
+      CHECK(items.size() == 3);
+      CHECK(items[1]["classname"] == Json{"light"});
+      // listed because it has a targetname, not because of its class
+      CHECK(items[2]["classname"] == Json{"func_door"});
+    }
+
     SECTION("flags work without tbcli.json")
     {
       const auto result = runCli(

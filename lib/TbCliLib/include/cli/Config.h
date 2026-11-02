@@ -39,6 +39,7 @@ struct ConfigOverrides
   std::optional<std::filesystem::path> gameConfig;
   std::vector<std::filesystem::path> fgd;
   std::optional<std::filesystem::path> quakeDir;
+  std::optional<std::vector<std::string>> keyEntities;
 };
 
 /**
@@ -55,6 +56,8 @@ struct Config
   std::optional<std::filesystem::path> gameConfig;
   std::vector<std::filesystem::path> fgd;
   std::optional<std::filesystem::path> quakeDir;
+  /** `describe.key_entities`: overrides the classes describe lists in full. */
+  std::optional<std::vector<std::string>> keyEntities;
 };
 
 /**
