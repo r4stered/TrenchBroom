@@ -117,7 +117,9 @@ std::map<std::string, std::string> keysByNodeAndType(const Json& json)
 
 /*
  * A verify --compile fixture: a map from fixture/compiled copied into a temp dir with a
- * tbcli.json whose compilers.qbsp is the fake compiler replaying the map's recording.
+ * tbcli.json whose compilers are the fake compiler replaying the map's recording of
+ * each tool. Without a recording of vis or light, the recording of compile_full.map
+ * stands in for it.
  *
  * compile_warnings.map: qbsp warns about the mixed water and wall brush layer:0/brush:9
  * by line (92, one of its faces) and about the info_null layer:0/entity:2 by
@@ -125,6 +127,12 @@ std::map<std::string, std::string> keysByNodeAndType(const Json& json)
  *
  * compile_fatal.map: qbsp warns that there is no wad and fails on the region brush
  * layer:0/entity:2/brush:0 (line 105), exiting with 1.
+ *
+ * compile_leak.map: two rooms whose east wall layer:0/brush:3 stops short of the
+ * north wall layer:0/brush:5; qbsp reaches the void from the light layer:0/entity:1.
+ *
+ * compile_full.map: two sealed rooms; light warns about the empty wad property of
+ * worldspawn and the unknown delay of the light layer:0/entity:1.
  */
 struct CompileFixture
 {
@@ -142,7 +150,7 @@ struct CompileFixture
     const std::optional<double> timeout = std::nullopt,
     const std::optional<Json>& verifyConfig = std::nullopt)
   {
-    qbsp = setUpFakeQbsp(env, recording, sleepMs);
+    qbsp = setUpFakeCompiler(env, QbspTool, recording, sleepMs);
     auto tool = Json::object();
     tool.set("path", arg(qbsp));
     if (timeout)
@@ -150,7 +158,15 @@ struct CompileFixture
       tool.set("timeout", *timeout);
     }
     auto compilers = Json::object();
-    compilers.set("qbsp", std::move(tool));
+    compilers.set(std::string{QbspTool}, std::move(tool));
+    for (const auto name : {VisTool, LightTool})
+    {
+      const auto hasRecording = std::filesystem::is_directory(
+        fixturePath(std::filesystem::path{"compiled"} / recording / name));
+      compilers.set(
+        std::string{name},
+        arg(setUpFakeCompiler(env, name, hasRecording ? recording : "compile_full")));
+    }
     auto config = quakeConfig();
     config.set("compilers", std::move(compilers));
     if (verifyConfig)
@@ -819,6 +835,113 @@ TEST_CASE("verify")
       CHECK(compilerIssues[1]["line"] == Json{105});
     }
 
+    SECTION("a leak is one leak issue on the occupant")
+    {
+      const auto json = CompileFixture{"compile_leak"}.json();
+      CHECK(json["ok"] == Json{false});
+      CHECK(stageNamed(json, "qbsp")["status"] == Json{"issues"});
+
+      const auto leaks = issuesOfType(json, "leak");
+      REQUIRE(leaks.size() == 1);
+      CHECK(
+        leaks[0]
+        == parseJsonLiteral(
+          R"({
+          "type": "leak",
+          "severity": "error",
+          "key": ")"
+          + leaks[0]["key"].asString() + R"json(",
+          "message": "the map leaks: the void can be reached from light at (144 0 96)",
+          "node": "layer:0/entity:1",
+          "line": 96,
+          "origin": [144, 0, 96],
+          "tool": "qbsp",
+          "trail": {
+            "start": [144, 0, 96],
+            "end": [-272, 156, -20],
+            "turning_points": [[144, 32, 64], [272, 96, 64], [280, 156, 0]]
+          },
+          "nearest_brushes": ["layer:0/brush:3", "layer:0/brush:5", "layer:0/brush:0"],
+          "fixes": []
+        })json"));
+
+      // the leak issue replaces the compiler issues of the "Reached occupant" lines
+      for (const auto& issue : issuesOfType(json, "compiler"))
+      {
+        CHECK_THAT(issue["message"].asString(), !ContainsSubstring("Reached occupant"));
+      }
+    }
+
+    SECTION("--compile=vis and =light")
+    {
+      SECTION("run vis and light on a sealed map")
+      {
+        const auto fixture = CompileFixture{"compile_full"};
+        const auto json = fixture.json({"--compile=light"});
+        auto names = std::vector<std::string>{};
+        for (const auto& stage : json["stages"].asArray())
+        {
+          names.push_back(stage["name"].asString());
+        }
+        CHECK(
+          names
+          == std::vector<std::string>{
+            "load_diagnostics", "validators", "cli_checks", "qbsp", "vis", "light"});
+        CHECK(stageNamed(json, "vis")["status"] == Json{"ok"});
+        CHECK(stageNamed(json, "light")["status"] == Json{"issues"});
+        CHECK(fixture.env.readFile("tools/vis.args") == "-fast\ncompile_full.bsp\n");
+        CHECK(fixture.env.readFile("tools/light.args") == "compile_full.bsp\n");
+
+        // light's warnings are compiler issues mapped by classname and origin
+        auto lightIssues = std::vector<Json>{};
+        for (const auto& issue : issuesOfType(json, "compiler"))
+        {
+          if (issue["tool"] == Json{"light"})
+          {
+            lightIssues.push_back(issue);
+          }
+        }
+        REQUIRE(lightIssues.size() == 2);
+        CHECK(lightIssues[0]["node"] == Json{});
+        CHECK(
+          lightIssues[1]["message"] == Json{"unknown delay 7 on light at [144 0 96]"});
+        CHECK(lightIssues[1]["node"] == Json{"layer:0/entity:1"});
+        CHECK(lightIssues[1]["origin"] == parseJsonLiteral("[144, 0, 96]"));
+      }
+
+      SECTION("=vis does not run light")
+      {
+        const auto fixture = CompileFixture{"compile_full"};
+        const auto json = fixture.json({"--compile=vis"});
+        CHECK(stageNamed(json, "vis")["status"] == Json{"ok"});
+        CHECK(json["stages"].size() == 5);
+        CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/light.args")));
+      }
+
+      SECTION("are skipped with reason leak when qbsp leaks or fails")
+      {
+        const auto recording = std::string{GENERATE("compile_leak", "compile_fatal")};
+        CAPTURE(recording);
+        const auto fixture = CompileFixture{recording};
+        const auto json = fixture.json({"--compile=light"});
+        for (const auto name : {VisTool, LightTool})
+        {
+          CHECK(
+            stageNamed(json, name)
+            == parseJsonLiteral(
+              R"({"name": ")" + std::string{name}
+              + R"(", "status": "skipped", "reason": "leak", "ms": 0})"));
+        }
+        CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/vis.args")));
+        CHECK_FALSE(std::filesystem::exists(fixture.env.path("tools/light.args")));
+      }
+
+      SECTION("other values are usage errors")
+      {
+        checkError(CompileFixture{}.run({"--compile=full"}), "usage", 2);
+      }
+    }
+
     SECTION("timeouts")
     {
       SECTION("qbsp is stopped after the timeout in tbcli.json")
@@ -880,6 +1003,19 @@ TEST_CASE("verify")
         const auto json = fixture.json({"--compile", "--qbsp", arg(fixture.qbsp)});
         CHECK(stageNamed(json, "qbsp")["status"] == Json{"issues"});
       }
+
+      SECTION("--vis and --light override tbcli.json")
+      {
+        writeQbspPath(fixture.qbsp);
+        checkError(fixture.run({"--compile=light"}), "compiler_missing", 1);
+        const auto json = fixture.json(
+          {"--compile=light",
+           "--vis",
+           arg(fixture.env.path("tools/vis")),
+           "--light",
+           arg(fixture.env.path("tools/light"))});
+        CHECK(stageNamed(json, "light")["status"] == Json{"issues"});
+      }
     }
 
     SECTION("artifacts")
@@ -913,18 +1049,23 @@ TEST_CASE("verify")
             R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": false})"));
       }
 
+      SECTION("of a leaking map keep the pointfile, with leaked in the sidecar")
+      {
+        const auto leaking = CompileFixture{"compile_leak"};
+        const auto json =
+          leaking.json({"--compile", "--artifacts", arg(leaking.env.path("out"))});
+        CHECK(std::filesystem::is_regular_file(leaking.env.path("out/compile_leak.pts")));
+        CHECK(
+          parseJsonLiteral(leaking.env.readFile("out/compile_leak.bsp.tbcli.json"))
+          == parseJsonLiteral(
+            R"({"rev": ")" + json["rev"].asString() + R"(", "leaked": true})"));
+      }
+
       SECTION("--timeout and --artifacts require --compile")
       {
         checkError(fixture.run({"--timeout", "1"}), "usage", 2);
         checkError(fixture.run({"--artifacts", "out"}), "usage", 2);
       }
-    }
-
-    SECTION("--compile=vis and --compile=light are not supported yet")
-    {
-      const auto fixture = CompileFixture{};
-      checkError(fixture.run({"--compile=vis"}), "usage", 2);
-      checkError(fixture.run({"--compile=light"}), "usage", 2);
     }
 
     SECTION("other commands do not accept the compile options")

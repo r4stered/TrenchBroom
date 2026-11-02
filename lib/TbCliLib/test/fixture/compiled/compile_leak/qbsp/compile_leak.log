@@ -1,0 +1,88 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "keepprt" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\compile_leak.map
+Output file: ${WORKDIR}\compile_leak.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     3 entities
+     4 unique textures
+    19 texinfos
+    36 unique planes
+
+INFO: world extents calculated to 776 units
+     9 brushes
+    54 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture ground1_6
+WARNING: unable to find texture ceiling1_1
+WARNING: unable to find texture wall1_1
+Processing hull 0...
+    9 SOLID brushes
+    9 brushes total
+    54 visible sides
+INFO: calculating BSP for 9 brushes with 54 sides
+     9 brushes
+    54 visible faces
+    33 nodes
+    33 expensive split nodes
+    34 leaves
+    25 EMPTY leafs
+     9 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+    158 tree portals
+WARNING: Reached occupant "light" at (144 0 96), no filling performed.
+Leak file written to compile_leak.pts
+            4 portals written to compile_leak.leak.prt
+    158 tree portals
+    106 sides visible
+    53 makefaces
+    12 merged
+    44 subdivided
+    25 player-occupiable leaves
+    25 clusters of leaves
+    47 vis portals
+    25 EMPTY leafs
+     9 SOLID leafs
+    34 leafs total
+    11 max tree height
+     7 avg tree height
+     74 edges added by tjunctions
+     85 faces optimized through MWT
+    244 triangles computed from MWT
+     22 faces created via optimization of MWT triangles
+    229 edges
+    107 faces
+Processing hull 1...
+WARNING: Reached occupant "light" at (144 0 96), no filling performed.
+Processing hull 2...
+Writing compile_leak.bsp as Quake BSP bsp29
+Wrote compile_leak.bsp
+
+count   lump name    byte size 
+      1 models               64
+     45 planes              900
+    124 vertexes           1488
+     33 nodes               792
+     17 texinfos            680
+    107 faces              2140
+    267 clipnodes          2136
+     26 leafs               728
+    135 marksurfaces        270
+    230 edges               920
+    458 surfedges          1832
+      4 textures             20
+        lightdata             0
+        visdata               0
+        entdata             159
+
+0.013s seconds elapsed
+
+

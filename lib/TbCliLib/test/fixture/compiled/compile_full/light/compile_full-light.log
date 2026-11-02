@@ -1,0 +1,37 @@
+---- light / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+LoadBSPFile: 'compile_full.bsp'
+BSP is version Quake BSP bsp29
+INFO: using built-in palette.
+img::ConvertTextures: WARNING: invalid size data for 
+img::ConvertTextures: WARNING: Texture  duplicated
+img::ConvertTextures: WARNING: Texture  duplicated
+img::ConvertTextures: WARNING: Texture  duplicated
+Loading extended texinfo flags from compile_full.texinfo.json...
+Loading extended content flags from compile_full.content.json...
+WARNING: entity at () (worldspawn) has empty key/value "wad" ""
+WARNING: unknown delay 7 on light at [144 0 96]
+3 entities read, 1 are lights.
+
+--- Options Summary ---
+
+Embree_TraceInit: Embree version: 4.4.0
+Embree_TraceInit: 
+	0 sky faces
+	44 solid faces
+	0 filtered faces
+	0 shadow-casting skip faces
+SetupLights: 1 initial lights
+SetupLights: 1 after surface lights
+SetupLights: 1 after jittering
+Final count: 1 lights, 0 suns in use.
+0 surface light points in use.
+map uses color: false
+lightmap size (total): 0
+Lighting Completed.
+
+0 switchable light styles (32 max)
+Writing compile_full.bsp as Quake BSP bsp29
+0.015s seconds elapsed
+0 empty lightmaps
+
+

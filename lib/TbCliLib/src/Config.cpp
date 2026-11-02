@@ -25,6 +25,8 @@
 #include "cli/Json.h"
 #include "cli/Process.h"
 
+#include "kd/contracts.h"
+
 #include <fmt/format.h>
 #include <fmt/std.h>
 
@@ -234,12 +236,15 @@ void readCompilersConfig(
   }
   for (const auto& [key, value] : compilers.asObject())
   {
-    if (key != QbspTool)
+    if (!findCompilerTool(key))
     {
       throw fileConfigError(file, fmt::format("'compilers': unknown tool '{}'", key));
     }
   }
-  config.compilers.qbsp = readTool(compilers, QbspTool, file, base);
+  for (const auto& tool : CompilerTools)
+  {
+    config.compilers.*tool.config = readTool(compilers, tool.name, file, base);
+  }
 }
 
 /** The known issue type that tbcli.json names under the given key. */
@@ -470,9 +475,11 @@ Config loadConfig(const std::filesystem::path& mapPath, const ConfigOverrides& o
   {
     config.keyEntities = overrides.keyEntities;
   }
-  if (overrides.qbsp)
+  for (const auto& [name, path] : overrides.compilers)
   {
-    config.compilers.qbsp.path = resolveTool(cwd, *overrides.qbsp);
+    const auto* tool = findCompilerTool(name);
+    contract_assert(tool != nullptr);
+    (config.compilers.*tool->config).path = resolveTool(cwd, path);
   }
 
   // checked once the overrides are applied, so a flag can override a bad key

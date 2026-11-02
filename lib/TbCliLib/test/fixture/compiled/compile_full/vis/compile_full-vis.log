@@ -1,0 +1,23 @@
+---- vis / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "fast" was set to "1" (from command line)
+
+LoadBSPFile: 'compile_full.bsp'
+BSP is version Quake BSP bsp29
+INFO: using built-in palette.
+Loading extended texinfo flags from compile_full.texinfo.json...
+     7 leafs
+     7 clusters
+     6 portals
+Calculating Base Vis:
+Calculating Full Vis:
+Expanding clusters...
+average leafs visible: 6
+c_noclip: 0
+c_chains: 0
+visdatasize:7  compressed from 7
+Writing compile_full.bsp as Quake BSP bsp29
+0.00s elapsed
+
+

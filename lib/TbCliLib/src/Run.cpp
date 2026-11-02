@@ -75,7 +75,8 @@ commands:
                         with --fail-on. Missing materials are checked only
                         with a Quake directory, else the cli_checks stage
                         lists missing_material as unchecked. With --compile,
-                        also compile the map with qbsp and report its log
+                        also compile the map and report the compilers' logs
+                        and any leak
   ops [--json]          the JSON Schema of every op and the issue types
 
 node paths:
@@ -96,6 +97,9 @@ options:
                         overrides tbcli.json "describe.key_entities"
   --qbsp <path>         qbsp executable, overrides tbcli.json
                         "compilers.qbsp"; a bare name is looked up in PATH
+  --vis <path>          vis executable, overrides tbcli.json "compilers.vis"
+  --light <path>        light executable, overrides tbcli.json
+                        "compilers.light"
   --limit <n>           query, verify: return at most n matches or issues
                         (default: 200)
   --offset <n>          query, verify: skip the first n matches or issues
@@ -120,14 +124,18 @@ options:
                         path, anything else a query
   --fail-on <s>         verify: exit 4 if an issue that tbcli.json does not
                         suppress has at least severity s
-  --compile[=bsp]       verify: also run qbsp (with -keepprt, without
+  --compile[=bsp|vis|light]
+                        verify: also run qbsp (with -keepprt, without
                         -leaktest) on the verified bytes in a temporary
-                        directory, and turn its log into compiler issues; a
-                        failed run is a compile_fatal issue, not an exit code
+                        directory; =vis then runs vis -fast, =light runs vis
+                        -fast and light. Turns the logs into compiler issues
+                        and a leak into a leak issue; a leak or a failed qbsp
+                        skips vis and light, and a failed run is a
+                        compile_fatal issue, not an exit code
   --timeout <seconds>   verify --compile: stop each compiler after this long,
-                        overriding the timeouts in tbcli.json (default for
-                        qbsp: 300)
-  --artifacts <dir>     verify --compile: keep the .bsp, .pts, .prt and .log
+                        overriding the timeouts in tbcli.json (defaults: qbsp
+                        300, vis 300, light 600)
+  --artifacts <dir>     verify --compile: keep the .bsp, .pts, .prt and logs
                         in dir, replacing those of an earlier run, with a
                         sidecar <map>.bsp.tbcli.json holding {{rev, leaked}};
                         a failed run keeps no .bsp or .prt. Without it, they
@@ -309,6 +317,23 @@ const IssueTypeDef* parseIssueTypeOption(const std::string& value)
   return type;
 }
 
+CompileLevel parseCompileLevel(const std::string& value)
+{
+  if (value == "bsp")
+  {
+    return CompileLevel::Bsp;
+  }
+  if (value == "vis")
+  {
+    return CompileLevel::Vis;
+  }
+  if (value == "light")
+  {
+    return CompileLevel::Light;
+  }
+  throw usageError(fmt::format("--compile accepts bsp, vis or light, not '{}'", value));
+}
+
 /** A box given as six numbers `x1,y1,z1,x2,y2,z2`, separated by commas or spaces. */
 vm::bbox3d parseBox(const std::string_view name, const std::string& value)
 {
@@ -469,9 +494,11 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       result.configOverrides.keyEntities = splitList(value());
     }
-    else if (name == "--qbsp")
+    else if (findCompilerTool(name.substr(2)))
     {
-      result.configOverrides.qbsp = std::filesystem::path{value()};
+      // --qbsp, --vis and --light
+      result.configOverrides.compilers.insert_or_assign(
+        std::string{name.substr(2)}, std::filesystem::path{value()});
     }
     else if (name == "--limit")
     {
@@ -557,11 +584,7 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--compile")
     {
       // the value is optional, so --compile never takes the next argument
-      if (inlineValue && *inlineValue != "bsp")
-      {
-        throw usageError(
-          fmt::format("--compile accepts only bsp, not '{}'", *inlineValue));
-      }
+      result.compileOptions.level = parseCompileLevel(inlineValue.value_or("bsp"));
       result.compile = true;
     }
     else if (name == "--timeout")

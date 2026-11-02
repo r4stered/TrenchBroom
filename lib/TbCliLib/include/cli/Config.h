@@ -44,8 +44,11 @@ struct ConfigOverrides
   std::vector<std::filesystem::path> fgd;
   std::optional<std::filesystem::path> quakeDir;
   std::optional<std::vector<std::string>> keyEntities;
-  /** The qbsp executable, overriding `compilers.qbsp`. */
-  std::optional<std::filesystem::path> qbsp;
+  /**
+   * The executables of compilers by name, such as `qbsp`, each overriding the path in
+   * `compilers.<name>`.
+   */
+  std::map<std::string, std::filesystem::path, std::less<>> compilers;
 };
 
 /** A compiler entry of tbcli.json's `compilers`. */
@@ -67,6 +70,8 @@ struct ToolConfig
 struct CompilersConfig
 {
   ToolConfig qbsp;
+  ToolConfig vis;
+  ToolConfig light;
 };
 
 /**

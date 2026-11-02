@@ -160,7 +160,7 @@ TEST_CASE("Compile")
     auto env = CliTestEnvironment{};
     const auto bytes = *readFile(fixturePath("compiled/compile_warnings.map"));
     auto options = CompileOptions{};
-    options.compilers.qbsp.path = setUpFakeQbsp(env, "compile_warnings");
+    options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_warnings");
 
     SECTION("runs qbsp with -keepprt and without -leaktest on the given bytes")
     {
@@ -185,7 +185,7 @@ TEST_CASE("Compile")
 
     SECTION("reports a failed run")
     {
-      options.compilers.qbsp.path = setUpFakeQbsp(env, "compile_fatal");
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_fatal");
       const auto result = compile(bytes, "m", "rev", options);
       CHECK(result.runs[0].process.exitCode == 1);
       CHECK(result.runs[0].failed());
@@ -194,7 +194,8 @@ TEST_CASE("Compile")
 
     SECTION("uses the configured timeout unless one is given")
     {
-      options.compilers.qbsp.path = setUpFakeQbsp(env, "compile_warnings", 10000);
+      options.compilers.qbsp.path =
+        setUpFakeCompiler(env, QbspTool, "compile_warnings", 10000);
       options.compilers.qbsp.timeout = 200ms;
       auto result = compile(bytes, "m", "rev", options);
       CHECK(result.runs[0].process.timedOut);
@@ -210,7 +211,7 @@ TEST_CASE("Compile")
 
     SECTION("keeps only the log of a failed run")
     {
-      options.compilers.qbsp.path = setUpFakeQbsp(env, "compile_fatal");
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_fatal");
       options.artifacts = env.path("artifacts");
       // the artifacts of an earlier, successful run
       env.writeFile("artifacts/m.bsp", "bsp");
@@ -241,6 +242,113 @@ TEST_CASE("Compile")
         == parseJsonLiteral(R"({"rev": "abc123", "leaked": false})"));
     }
 
+    SECTION("reads the pointfile of a leaking map and skips vis and light")
+    {
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_leak");
+      options.compilers.vis.path = setUpFakeCompiler(env, VisTool, "compile_full");
+      options.compilers.light.path = setUpFakeCompiler(env, LightTool, "compile_full");
+      options.level = CompileLevel::Light;
+      options.artifacts = env.path("artifacts");
+
+      const auto result = compile(bytes, "m", "abc123", options);
+      CHECK(result.leaked);
+      CHECK(result.leakTrail.size() == 8);
+      CHECK(result.leakTrail.front() == vm::vec3d{144, 0, 96});
+      REQUIRE(result.runs.size() == 1);
+      CHECK_FALSE(result.runs[0].failed());
+      CHECK(result.skipped == std::vector<std::string>{"vis", "light"});
+      CHECK_FALSE(std::filesystem::exists(env.path("tools/vis.args")));
+
+      // the raw points are only in the artifacts
+      CHECK(
+        *readFile(env.path("artifacts/m.pts"))
+        == *readFile(fixturePath("compiled/compile_leak/qbsp/compile_leak.pts")));
+      CHECK(
+        parseJsonLiteral(env.readFile("artifacts/m.bsp.tbcli.json"))
+        == parseJsonLiteral(R"({"rev": "abc123", "leaked": true})"));
+    }
+
+    SECTION("skips vis and light if qbsp fails")
+    {
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_fatal");
+      options.compilers.vis.path = setUpFakeCompiler(env, VisTool, "compile_full");
+      options.level = CompileLevel::Vis;
+
+      const auto result = compile(bytes, "m", "rev", options);
+      CHECK_FALSE(result.leaked);
+      CHECK(result.runs.size() == 1);
+      CHECK(result.skipped == std::vector<std::string>{"vis"});
+    }
+
+    SECTION("runs vis -fast and light on the bsp of a sealed map")
+    {
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_full");
+      options.compilers.vis.path = setUpFakeCompiler(env, VisTool, "compile_full");
+      options.compilers.light.path = setUpFakeCompiler(env, LightTool, "compile_full");
+      options.artifacts = env.path("artifacts");
+
+      SECTION("=vis runs qbsp and vis")
+      {
+        options.level = CompileLevel::Vis;
+        const auto result = compile(bytes, "m", "rev", options);
+        REQUIRE(result.runs.size() == 2);
+        CHECK(result.runs[1].tool == "vis");
+        CHECK(result.runs[1].timeout == DefaultVisTimeout);
+        CHECK(result.runs[1].messages.empty());
+        CHECK(result.skipped.empty());
+        CHECK(env.readFile("tools/vis.args") == "-fast\nm.bsp\n");
+        CHECK_FALSE(std::filesystem::exists(env.path("tools/light.args")));
+        CHECK(std::filesystem::is_regular_file(env.path("artifacts/m-vis.log")));
+      }
+
+      SECTION("=light runs qbsp, vis and light")
+      {
+        options.level = CompileLevel::Light;
+        // the light log of an earlier run is replaced
+        env.writeFile("artifacts/m-light.log", "stale");
+
+        const auto result = compile(bytes, "m", "rev", options);
+        REQUIRE(result.runs.size() == 3);
+        CHECK(result.runs[0].tool == "qbsp");
+        CHECK(result.runs[1].tool == "vis");
+        CHECK(result.runs[2].tool == "light");
+        CHECK(result.runs[2].timeout == DefaultLightTimeout);
+        CHECK(env.readFile("tools/light.args") == "m.bsp\n");
+        CHECK_FALSE(result.leaked);
+
+        // light's log is <map>-light.log
+        const auto& light = result.runs[2].messages;
+        REQUIRE(light.size() == 2);
+        CHECK(
+          light[0].message
+          == R"(entity at () (worldspawn) has empty key/value "wad" "")");
+        CHECK(light[1].message == "unknown delay 7 on light at [144 0 96]");
+        CHECK(light[1].classname == "light");
+        CHECK(light[1].origin == vm::vec3d{144, 0, 96});
+
+        CHECK(std::filesystem::is_regular_file(env.path("artifacts/m-vis.log")));
+        CHECK(env.readFile("artifacts/m-light.log") != "stale");
+      }
+
+      SECTION("a failed vis keeps no bsp, but light still runs")
+      {
+        options.compilers.vis.path =
+          setUpFakeCompiler(env, VisTool, "compile_full", 10000);
+        options.compilers.vis.timeout = 200ms;
+        options.level = CompileLevel::Light;
+
+        const auto result = compile(bytes, "m", "rev", options);
+        REQUIRE(result.runs.size() == 3);
+        CHECK(result.runs[1].process.timedOut);
+        CHECK(result.runs[1].timeout == 200ms);
+        CHECK_FALSE(result.runs[2].failed());
+        CHECK(result.skipped.empty());
+        CHECK_FALSE(std::filesystem::exists(env.path("artifacts/m.bsp")));
+        CHECK_FALSE(std::filesystem::exists(env.path("artifacts/m.prt")));
+        CHECK(std::filesystem::is_regular_file(env.path("artifacts/m-light.log")));
+      }
+    }
+
     SECTION("throws compiler_missing")
     {
       const auto code = [&]() {
@@ -259,6 +367,17 @@ TEST_CASE("Compile")
       CHECK(code() == ErrorCode::CompilerMissing);
 
       options.compilers.qbsp.path = env.path("tools/missing");
+      CHECK(code() == ErrorCode::CompilerMissing);
+
+      // vis and light are needed only by the levels that run them, and are looked up
+      // before qbsp runs
+      options.compilers.qbsp.path = setUpFakeCompiler(env, QbspTool, "compile_warnings");
+      options.level = CompileLevel::Vis;
+      CHECK(code() == ErrorCode::CompilerMissing);
+      CHECK_FALSE(std::filesystem::exists(env.path("tools/qbsp.args")));
+
+      options.compilers.vis.path = setUpFakeCompiler(env, VisTool, "compile_full");
+      options.level = CompileLevel::Light;
       CHECK(code() == ErrorCode::CompilerMissing);
     }
   }

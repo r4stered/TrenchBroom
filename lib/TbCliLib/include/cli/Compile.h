@@ -25,6 +25,7 @@
 
 #include "vm/vec.h"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <optional>
@@ -38,8 +39,49 @@ namespace tb::cli
 /** The name of qbsp, which its issues carry as `tool` and its stage as `name`. */
 inline constexpr auto QbspTool = std::string_view{"qbsp"};
 
+/** The name of vis, which its issues carry as `tool` and its stage as `name`. */
+inline constexpr auto VisTool = std::string_view{"vis"};
+
+/** The name of light, which its issues carry as `tool` and its stage as `name`. */
+inline constexpr auto LightTool = std::string_view{"light"};
+
 /** The timeout of qbsp unless tbcli.json or --timeout sets one. */
 inline constexpr auto DefaultQbspTimeout = std::chrono::seconds{300};
+
+/** The timeout of vis unless tbcli.json or --timeout sets one. */
+inline constexpr auto DefaultVisTimeout = std::chrono::seconds{300};
+
+/** The timeout of light unless tbcli.json or --timeout sets one. */
+inline constexpr auto DefaultLightTimeout = std::chrono::seconds{600};
+
+/** A compiler that `--compile` runs. */
+struct CompilerTool
+{
+  /** The tool's name, which is its key in tbcli.json's `compilers` and its flag. */
+  std::string_view name;
+  /** The member of CompilersConfig that configures the tool. */
+  ToolConfig CompilersConfig::* config;
+  std::chrono::seconds defaultTimeout;
+  /** The flag the tool is given before its input, if any. */
+  std::string_view flag;
+  /** The input the tool is given, by what follows the map name. */
+  std::string_view input;
+  /** The log the tool writes, by what follows the map name. */
+  std::string_view log;
+};
+
+/**
+ * The compilers in the order they run: qbsp without `-leaktest` and with `-keepprt` on
+ * the map, then `vis -fast` and light without `-extra` on the bsp.
+ */
+inline constexpr auto CompilerTools = std::array<CompilerTool, 3>{{
+  {QbspTool, &CompilersConfig::qbsp, DefaultQbspTimeout, "-keepprt", ".map", ".log"},
+  {VisTool, &CompilersConfig::vis, DefaultVisTimeout, "-fast", ".bsp", "-vis.log"},
+  {LightTool, &CompilersConfig::light, DefaultLightTimeout, "", ".bsp", "-light.log"},
+}};
+
+/** The compiler with the given name, if there is one. */
+const CompilerTool* findCompilerTool(std::string_view name);
 
 /** A severity-marked line of a compiler's log. */
 struct CompilerMessage
@@ -95,8 +137,20 @@ struct ToolRun
   bool failed() const;
 };
 
+/** How far `--compile` goes: each level runs the tools of the levels before it, too. */
+enum class CompileLevel
+{
+  /** qbsp */
+  Bsp,
+  /** qbsp, then `vis -fast` */
+  Vis,
+  /** qbsp, `vis -fast`, then light */
+  Light,
+};
+
 struct CompileOptions
 {
+  CompileLevel level = CompileLevel::Bsp;
   /** The compilers from tbcli.json, with the command line overrides applied. */
   CompilersConfig compilers;
   /** Replaces the timeouts of every tool. */
@@ -107,26 +161,40 @@ struct CompileOptions
 
 struct CompileResult
 {
+  /** The tools that ran, in the order they ran. */
   std::vector<ToolRun> runs;
+  /**
+   * The tools of the requested level that did not run because qbsp leaked or failed, in
+   * the order they would have run.
+   */
+  std::vector<std::string> skipped;
   /** Whether qbsp wrote a pointfile, which it does only if the map leaks. */
   bool leaked = false;
+  /**
+   * The points of the pointfile, from the occupant to the void, if qbsp wrote one that
+   * could be read.
+   */
+  std::vector<vm::vec3d> leakTrail;
 };
 
 /**
  * Compiles the given map bytes in a new temporary directory, as `<mapName>.map`: runs
- * qbsp without `-leaktest` and with `-keepprt`, and parses the log the tool writes
- * (`<mapName>.log`), not what it prints.
+ * qbsp without `-leaktest` and with `-keepprt`, then, as the level asks, `vis -fast`
+ * and light without `-extra` on `<mapName>.bsp`. Parses the logs the tools write
+ * (`<mapName>.log`, `<mapName>-vis.log` and `<mapName>-light.log`), not what they
+ * print. The map leaks if qbsp writes a pointfile (`<mapName>.pts`); then, or if qbsp
+ * fails, vis and light are skipped.
  *
  * The temporary directory is deleted afterwards. If `options.artifacts` is set, the
- * artifacts (`.bsp`, `.pts`, `.prt` and `.log`) are first copied there, replacing
+ * artifacts (`.bsp`, `.pts`, `.prt` and the logs) are first copied there, replacing
  * those of an earlier run, together with a sidecar `<mapName>.bsp.tbcli.json` holding
- * `{rev, leaked}`. If a tool failed, its `.bsp` and `.prt` are not kept, since they may
+ * `{rev, leaked}`. If a tool failed, the `.bsp` and `.prt` are not kept, since they may
  * be partial.
  *
  * A tool that fails or runs too long is reported in its ToolRun, not thrown.
  *
- * @throw CliError `compiler_missing` if qbsp is not configured or not found, or
- * `write_failed` if the map or the artifacts cannot be written
+ * @throw CliError `compiler_missing` if a tool of the level is not configured or not
+ * found, or `write_failed` if the map or the artifacts cannot be written
  */
 CompileResult compile(
   std::string_view mapBytes,

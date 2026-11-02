@@ -165,11 +165,28 @@ TEST_CASE("Config")
 
       const auto cwd = std::filesystem::current_path();
       CHECK(
-        loadConfig(mapPath, ConfigOverrides{.qbsp = "bin/qbsp"}).compilers.qbsp.path
+        loadConfig(mapPath, ConfigOverrides{.compilers = {{"qbsp", "bin/qbsp"}}})
+          .compilers.qbsp.path
         == cwd / "bin/qbsp");
       CHECK(
-        loadConfig(mapPath, ConfigOverrides{.qbsp = "qbsp"}).compilers.qbsp.path
+        loadConfig(mapPath, ConfigOverrides{.compilers = {{"qbsp", "qbsp"}}})
+          .compilers.qbsp.path
         == "qbsp");
+
+      // vis and light are read like qbsp
+      env.writeFile(
+        "project/tbcli.json",
+        R"({"compilers": {"vis": "tools/vis", "light": {"path": "light", "timeout": 2}}})");
+      config = loadConfig(mapPath, {});
+      CHECK(config.compilers.vis.path == env.path("project/tools/vis"));
+      CHECK(config.compilers.vis.timeout == std::nullopt);
+      CHECK(config.compilers.light.path == "light");
+      CHECK(config.compilers.light.timeout == std::chrono::milliseconds{2000});
+
+      config = loadConfig(
+        mapPath, ConfigOverrides{.compilers = {{"vis", "bin/vis"}, {"light", "light"}}});
+      CHECK(config.compilers.vis.path == cwd / "bin/vis");
+      CHECK(config.compilers.light.path == "light");
     }
 
     SECTION("overrides replace keys and resolve against the working directory")
@@ -282,7 +299,6 @@ TEST_CASE("Config")
         const auto compilers = GENERATE(
           R"([])",
           R"({"bsp": "qbsp"})",
-          R"({"vis": "vis"})",
           R"({"qbsp": 1})",
           R"({"qbsp": {"path": 1}})",
           R"({"qbsp": {"timeout": "long"}})",

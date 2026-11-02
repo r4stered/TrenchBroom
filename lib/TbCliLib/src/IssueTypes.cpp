@@ -174,6 +174,7 @@ const std::vector<IssueTypeDef>& issueTypes()
     cliCheckType<EntityInsideSolidValidator>("entity_inside_solid", Error),
     cliCheckType<NoPlayerStartValidator>("no_player_start", Error, IssueScope::Map),
     cliCheckType<DegenerateBrushValidator>("degenerate_brush", Warning),
+    {"leak", Error, IssueSource::Compiler},
     {.id = "compiler",
      .severity = Warning,
      .source = IssueSource::Compiler,

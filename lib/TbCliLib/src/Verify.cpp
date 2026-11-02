@@ -24,6 +24,7 @@
 #include "cli/CliValidators.h"
 #include "cli/Config.h"
 #include "cli/GeometryJson.h"
+#include "cli/Leak.h"
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Query.h"
@@ -420,9 +421,57 @@ std::string failureMessage(const ToolRun& run)
     "{} exited with code {}", run.tool, run.process.exitCode.value_or(0));
 }
 
+/** How many brushes the `leak` issue lists. */
+constexpr auto LeakBrushCount = size_t{3};
+
 /**
- * Turns the messages of the compilers into `compiler` issues and every failed
- * compiler into a `compile_fatal` issue.
+ * The `leak` issue of a leaking compile, on the occupant entity that the first of
+ * qbsp's `Reached occupant` lines names.
+ */
+VerifyIssue leakIssue(
+  const CompileResult& compileResult,
+  mdl::WorldNode& worldNode,
+  const bool lossy,
+  KeyMaker& keys)
+{
+  const auto& leakType = *findIssueType("leak");
+  // qbsp always runs first
+  const auto& qbspMessages = compileResult.runs.front().messages;
+  const auto occupant = std::ranges::find_if(qbspMessages, isLeakOccupant);
+  auto* node = occupant != qbspMessages.end() ? nodeOf(worldNode, *occupant) : nullptr;
+  const auto message =
+    occupant != qbspMessages.end() && occupant->classname && occupant->origin
+      ? fmt::format(
+          "the map leaks: the void can be reached from {} at ({} {} {})",
+          *occupant->classname,
+          occupant->origin->x(),
+          occupant->origin->y(),
+          occupant->origin->z())
+      : std::string{"the map leaks"};
+
+  return VerifyIssue{
+    .type = &leakType,
+    .severity = leakType.severity,
+    .key = node ? keys.key(leakType.id, *node, QbspTool)
+                : keys.key(leakType.id, std::string{QbspTool}),
+    .message = message,
+    .node = node,
+    .line =
+      node && node->lineNumber() > 0 ? std::optional{node->lineNumber()} : std::nullopt,
+    .tool = std::string{QbspTool},
+    .unreliableMapping = lossy,
+    .leak =
+      LeakDetails{
+        .trail = simplifyTrail(compileResult.leakTrail),
+        .nearestBrushes =
+          brushesNearExit(worldNode, compileResult.leakTrail, LeakBrushCount),
+      },
+  };
+}
+
+/**
+ * Turns the messages of the compilers into `compiler` issues, a leak into a `leak`
+ * issue and every failed compiler into a `compile_fatal` issue.
  */
 void collectCompilerIssues(
   const CompileResult& compileResult,
@@ -437,8 +486,20 @@ void collectCompilerIssues(
 
   for (const auto& run : compileResult.runs)
   {
+    const auto leakReported = compileResult.leaked && run.tool == QbspTool;
+    if (leakReported)
+    {
+      issues.push_back(leakIssue(compileResult, worldNode, lossy, keys));
+    }
+
     for (const auto& message : run.messages)
     {
+      if (leakReported && isLeakOccupant(message))
+      {
+        // the leak issue reports these
+        continue;
+      }
+
       auto* node = nodeOf(worldNode, message);
       const auto detail =
         fmt::format("{}\n{}", run.tool, withoutLineNumbers(message.message));
@@ -588,11 +649,28 @@ bool hasUnsuppressedIssue(const std::vector<VerifyIssue>& issues, const P& predi
     issues, [&](const auto& issue) { return !issue.suppressed && predicate(issue); });
 }
 
+std::string_view statusOf(const VerifyStage& stage)
+{
+  if (stage.skipReason)
+  {
+    return "skipped";
+  }
+  if (stage.failed)
+  {
+    return "failed";
+  }
+  return stage.hasIssues ? "issues" : "ok";
+}
+
 Json stageToJson(const VerifyStage& stage)
 {
   auto result = Json::object();
   result.set("name", stage.name);
-  result.set("status", stage.failed ? "failed" : stage.hasIssues ? "issues" : "ok");
+  result.set("status", statusOf(stage));
+  if (stage.skipReason)
+  {
+    result.set("reason", *stage.skipReason);
+  }
   if (!stage.unchecked.empty())
   {
     auto unchecked = Json::array();
@@ -641,6 +719,42 @@ void setLocation(Json& result, const VerifyIssue& issue)
       }));
 }
 
+/**
+ * Sets `trail: {start, end, turning_points}`, or null without a trail, and
+ * `nearest_brushes`.
+ */
+void setLeakDetails(
+  Json& result,
+  const LeakDetails& leak,
+  const std::unordered_map<const mdl::Node*, std::string>& paths)
+{
+  if (leak.trail.empty())
+  {
+    result.set("trail", nullptr);
+  }
+  else
+  {
+    auto turningPoints = Json::array();
+    // the points between the endpoints
+    for (size_t i = 1; i + 1 < leak.trail.size(); ++i)
+    {
+      turningPoints.push(toJson(leak.trail[i]));
+    }
+    auto trail = Json::object();
+    trail.set("start", toJson(leak.trail.front()));
+    trail.set("end", toJson(leak.trail.back()));
+    trail.set("turning_points", std::move(turningPoints));
+    result.set("trail", std::move(trail));
+  }
+
+  auto brushes = Json::array();
+  for (const auto* brush : leak.nearestBrushes)
+  {
+    brushes.push(paths.at(brush));
+  }
+  result.set("nearest_brushes", std::move(brushes));
+}
+
 } // namespace
 
 Json issueToJson(
@@ -676,6 +790,10 @@ Json issueToJson(
   if (issue.unreliableMapping)
   {
     result.set("unreliable_mapping", true);
+  }
+  if (issue.leak)
+  {
+    setLeakDetails(result, *issue.leak, paths);
   }
 
   result.set("fixes", fixIdsJson(*issue.type));
@@ -778,6 +896,10 @@ IssueReport collectIssues(
            [&](const VerifyIssue& issue) { return issue.tool == run.tool; }),
          .ms = run.ms,
          .failed = run.failed()});
+    }
+    for (const auto& tool : compileResult->skipped)
+    {
+      result.stages.push_back({.name = tool, .skipReason = "leak"});
     }
   }
   return result;

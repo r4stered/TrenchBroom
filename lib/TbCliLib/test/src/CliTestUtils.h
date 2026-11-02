@@ -98,14 +98,19 @@ Json quakeConfig();
 void setUpMaterials(CliTestEnvironment& env);
 
 /**
- * Copies the fake compiler into `tools/` of the given environment as `qbsp`, set up to
- * replay the qbsp recording of the given map under fixture/compiled (such as
- * "compile_warnings"), and returns its path. It sleeps for the given time before
- * exiting. After a run, `tools/qbsp.args` holds its arguments, one per line,
- * `tools/qbsp.cwd` its working directory and `tools/qbsp.input` the map it was given.
+ * Copies the fake compiler into `tools/` of the given environment under the name of
+ * the given tool (`qbsp`, `vis` or `light`), set up to replay that tool's recording of
+ * the given map under fixture/compiled (such as "compile_warnings"), and returns its
+ * path. It sleeps for the given time before exiting. After a run, `tools/<tool>.args`
+ * holds its arguments, one per line, `tools/<tool>.cwd` its working directory and
+ * `tools/<tool>.input` the file it was given.
  */
-std::filesystem::path setUpFakeQbsp(
-  CliTestEnvironment& env, const std::string& recording, int sleepMs = 0);
+std::filesystem::path setUpFakeCompiler(
+  CliTestEnvironment& env,
+  std::string_view tool,
+  const std::string& recording,
+  int sleepMs = 0);
+
 
 /**
  * Loads a fixture map in-process with the Quake game config and FGD. The logger must

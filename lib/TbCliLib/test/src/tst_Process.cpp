@@ -19,6 +19,7 @@
 
 #include "CliTestUtils.h"
 #include "cli/CliError.h"
+#include "cli/Compile.h"
 #include "cli/Process.h"
 
 #include <chrono>
@@ -42,7 +43,7 @@ TEST_CASE("Process")
 
     SECTION("runs the executable in the working directory and returns its exit code")
     {
-      const auto qbsp = setUpFakeQbsp(env, "compile_fatal");
+      const auto qbsp = setUpFakeCompiler(env, QbspTool, "compile_fatal");
       const auto result = runProcess(qbsp, {"compile_fatal.map"}, workDir, 10s);
       CHECK(result.exitCode == 1);
       CHECK_FALSE(result.timedOut);
@@ -52,7 +53,7 @@ TEST_CASE("Process")
 
     SECTION("returns exit code 0")
     {
-      const auto qbsp = setUpFakeQbsp(env, "compile_warnings");
+      const auto qbsp = setUpFakeCompiler(env, QbspTool, "compile_warnings");
       const auto result = runProcess(qbsp, {"compile_fatal.map"}, workDir, 10s);
       CHECK(result.exitCode == 0);
       CHECK_FALSE(result.timedOut);
@@ -60,7 +61,7 @@ TEST_CASE("Process")
 
     SECTION("passes arguments unchanged")
     {
-      const auto qbsp = setUpFakeQbsp(env, "compile_warnings");
+      const auto qbsp = setUpFakeCompiler(env, QbspTool, "compile_warnings");
       const auto arguments = std::vector<std::string>{
         "-keepprt",
         "two words",
@@ -79,7 +80,7 @@ TEST_CASE("Process")
 
     SECTION("stops a process that runs longer than the timeout")
     {
-      const auto qbsp = setUpFakeQbsp(env, "compile_warnings", 10000);
+      const auto qbsp = setUpFakeCompiler(env, QbspTool, "compile_warnings", 10000);
       const auto start = std::chrono::steady_clock::now();
       const auto result = runProcess(qbsp, {"compile_fatal.map"}, workDir, 200ms);
       CHECK(result.timedOut);
@@ -105,7 +106,7 @@ TEST_CASE("Process")
   SECTION("findExecutable")
   {
     auto env = CliTestEnvironment{};
-    const auto qbsp = setUpFakeQbsp(env, "compile_warnings");
+    const auto qbsp = setUpFakeCompiler(env, QbspTool, "compile_warnings");
 
     CHECK(findExecutable(qbsp) == qbsp);
     CHECK(findExecutable(env.path("tools/missing")) == std::nullopt);

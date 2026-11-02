@@ -107,24 +107,27 @@ Json quakeConfig()
   return config;
 }
 
-std::filesystem::path setUpFakeQbsp(
-  CliTestEnvironment& env, const std::string& recording, const int sleepMs)
+std::filesystem::path setUpFakeCompiler(
+  CliTestEnvironment& env,
+  const std::string_view tool,
+  const std::string& recording,
+  const int sleepMs)
 {
   const auto fakeCompiler = std::filesystem::path{TB_CLI_FAKE_COMPILER};
-  auto fileName = std::filesystem::path{"qbsp"};
+  auto fileName = std::filesystem::path{tool};
   fileName += fakeCompiler.extension();
   const auto executable =
     env.copyFile(fakeCompiler, std::filesystem::path{"tools"} / fileName);
 
   auto replay = fmt::format(
     "recording {}\nname {}\n",
-    fixturePath(std::filesystem::path{"compiled"} / recording / "qbsp").string(),
+    fixturePath(std::filesystem::path{"compiled"} / recording / tool).string(),
     recording);
   if (sleepMs > 0)
   {
     replay += fmt::format("sleep_ms {}\n", sleepMs);
   }
-  env.writeFile("tools/qbsp.replay", replay);
+  env.writeFile(fmt::format("tools/{}.replay", tool), replay);
   return executable;
 }
 

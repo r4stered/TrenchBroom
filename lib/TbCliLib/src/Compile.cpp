@@ -22,8 +22,11 @@
 #include "cli/CliError.h"
 #include "cli/FileUtils.h"
 #include "cli/Json.h"
+#include "cli/Leak.h"
 #include "cli/ParseUtils.h"
 #include "cli/Timing.h"
+
+#include "kd/ranges/to.h"
 
 #include <fmt/format.h>
 #include <fmt/std.h>
@@ -50,12 +53,14 @@ const std::regex& linePattern()
   return pattern;
 }
 
-/** The artifacts that --artifacts keeps, by extension. */
-constexpr auto ArtifactExtensions = std::array<std::string_view, 4>{
+/** The artifacts that --artifacts keeps, by what follows the map name. */
+constexpr auto ArtifactExtensions = std::array<std::string_view, 6>{
   ".bsp",
   ".pts",
   ".prt",
   ".log",
+  "-vis.log",
+  "-light.log",
 };
 
 /** The artifacts that only a successful run leaves usable, by extension. */
@@ -184,36 +189,63 @@ void writeOrThrow(const std::filesystem::path& path, const std::string_view byte
   }
 }
 
-std::filesystem::path qbspExecutable(const CompilersConfig& compilers)
+/** A compiler that a compile runs, with its configuration. */
+struct Tool
 {
-  const auto& configured = compilers.qbsp.path;
+  const CompilerTool& compiler;
+  const ToolConfig& config;
+};
+
+/** The tools that the given level runs, in the order they run. */
+std::vector<Tool> toolsOf(const CompileOptions& options)
+{
+  const auto count = size_t(options.level) + 1;
+  return CompilerTools | std::views::take(count)
+         | std::views::transform([&](const CompilerTool& compiler) {
+             return Tool{compiler, options.compilers.*compiler.config};
+           })
+         | kdl::ranges::to<std::vector<Tool>>();
+}
+
+std::filesystem::path executableOf(const Tool& tool)
+{
+  const auto& name = tool.compiler.name;
+  const auto& configured = tool.config.path;
   if (!configured)
   {
     throw CliError{
       ErrorCode::CompilerMissing,
-      "qbsp is not configured: set compilers.qbsp in tbcli.json or pass --qbsp"};
+      fmt::format(
+        "{0} is not configured: set compilers.{0} in tbcli.json or pass --{0}", name)};
   }
   if (auto found = findExecutable(*configured))
   {
     return std::filesystem::absolute(*found);
   }
   throw CliError{
-    ErrorCode::CompilerMissing, fmt::format("qbsp not found at {}", *configured)};
+    ErrorCode::CompilerMissing, fmt::format("{} not found at {}", name, *configured)};
 }
 
 ToolRun runTool(
-  const std::string& tool,
+  const Tool& tool,
   const std::filesystem::path& executable,
-  const std::vector<std::string>& arguments,
   const std::filesystem::path& workDir,
-  const std::filesystem::path& logFile,
-  const std::chrono::milliseconds timeout)
+  const std::string& mapName,
+  const std::optional<std::chrono::milliseconds> timeoutOverride)
 {
-  auto result = ToolRun{tool, {}, timeout};
+  const auto& compiler = tool.compiler;
+  const auto input = mapName + std::string{compiler.input};
+  const auto arguments = compiler.flag.empty()
+                           ? std::vector<std::string>{input}
+                           : std::vector<std::string>{std::string{compiler.flag}, input};
+  const auto timeout =
+    timeoutOverride.value_or(tool.config.timeout.value_or(compiler.defaultTimeout));
+
+  auto result = ToolRun{std::string{compiler.name}, {}, timeout};
   const auto start = std::chrono::steady_clock::now();
   result.process = runProcess(executable, arguments, workDir, timeout);
   result.ms = msSince(start);
-  if (const auto log = readFile(workDir / logFile))
+  if (const auto log = readFile(workDir / (mapName + std::string{compiler.log})))
   {
     result.messages = parseCompilerLog(*log, workDir);
   }
@@ -319,6 +351,12 @@ std::vector<CompilerMessage> parseCompilerLog(
   return result;
 }
 
+const CompilerTool* findCompilerTool(const std::string_view name)
+{
+  const auto it = std::ranges::find(CompilerTools, name, &CompilerTool::name);
+  return it != CompilerTools.end() ? &*it : nullptr;
+}
+
 std::string withoutLineNumbers(const std::string& message)
 {
   return std::regex_replace(message, linePattern(), "");
@@ -335,24 +373,41 @@ CompileResult compile(
   const std::string& rev,
   const CompileOptions& options)
 {
-  const auto qbsp = qbspExecutable(options.compilers);
+  const auto tools = toolsOf(options);
+  // every tool is looked up before any runs, so that a missing one fails fast
+  const auto executables = tools | std::views::transform(executableOf)
+                           | kdl::ranges::to<std::vector<std::filesystem::path>>();
+
   const auto workDir = TemporaryDirectory{};
-  const auto mapFile = mapName + ".map";
-  writeOrThrow(workDir.path() / mapFile, mapBytes);
+  writeOrThrow(workDir.path() / (mapName + ".map"), mapBytes);
 
+  // qbsp runs first
   auto result = CompileResult{};
-  result.runs.push_back(runTool(
-    std::string{QbspTool},
-    qbsp,
-    {"-keepprt", mapFile},
-    workDir.path(),
-    mapName + ".log",
-    options.timeout.value_or(
-      options.compilers.qbsp.timeout.value_or(DefaultQbspTimeout))));
+  result.runs.push_back(
+    runTool(tools[0], executables[0], workDir.path(), mapName, options.timeout));
+  const auto qbspFailed = result.runs.front().failed();
 
+  const auto pointFile = workDir.path() / (mapName + ".pts");
   auto ec = std::error_code{};
-  result.leaked =
-    std::filesystem::is_regular_file(workDir.path() / (mapName + ".pts"), ec);
+  result.leaked = std::filesystem::is_regular_file(pointFile, ec);
+  if (const auto text = result.leaked ? readFile(pointFile) : std::nullopt)
+  {
+    result.leakTrail = parsePointFile(*text).value_or(std::vector<vm::vec3d>{});
+  }
+
+  // then vis and light, unless there is no usable bsp
+  for (size_t i = 1; i < tools.size(); ++i)
+  {
+    if (result.leaked || qbspFailed)
+    {
+      result.skipped.emplace_back(tools[i].compiler.name);
+    }
+    else
+    {
+      result.runs.push_back(
+        runTool(tools[i], executables[i], workDir.path(), mapName, options.timeout));
+    }
+  }
 
   if (options.artifacts)
   {

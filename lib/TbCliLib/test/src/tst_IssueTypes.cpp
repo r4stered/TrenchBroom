@@ -98,6 +98,7 @@ TEST_CASE("IssueTypes")
         {"entity_inside_solid", Error},
         {"no_player_start", Error},
         {"degenerate_brush", Warning},
+        {"leak", Error},
         {"compiler", Warning},
         {"compile_fatal", Error},
       });

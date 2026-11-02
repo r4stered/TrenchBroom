@@ -24,6 +24,8 @@
 #include "cli/IssueTypes.h"
 #include "cli/Json.h"
 
+#include "vm/vec.h"
+
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -33,6 +35,7 @@
 
 namespace tb::mdl
 {
+class BrushNode;
 class Map;
 class Node;
 class Validator;
@@ -43,6 +46,18 @@ namespace tb::cli
 
 struct LoadedMap;
 struct VerifyConfig;
+
+/** Where a leaking map's hole is, as the `leak` issue reports it. */
+struct LeakDetails
+{
+  /**
+   * The trail from the occupant entity to the void, reduced to its endpoints and
+   * turning points; empty if qbsp wrote no pointfile that could be read.
+   */
+  std::vector<vm::vec3d> trail;
+  /** The brushes nearest where the trail leaves the map, nearest first. */
+  std::vector<mdl::BrushNode*> nearestBrushes;
+};
 
 /** One finding of a verify stage. */
 struct VerifyIssue
@@ -71,6 +86,8 @@ struct VerifyIssue
    * compiler saw holds content that the loaded map lacks.
    */
   bool unreliableMapping = false;
+  /** Set for a `leak` issue, whose node is the occupant entity, if qbsp named one. */
+  std::optional<LeakDetails> leak;
   /** Whether a `verify.ignore` entry suppresses the issue. */
   bool suppressed = false;
 };
@@ -86,6 +103,8 @@ struct VerifyStage
   std::vector<const IssueTypeDef*> unchecked = {};
   /** Whether the stage's tool exited with a non-zero code or was stopped. */
   bool failed = false;
+  /** Set if the stage did not run, as the reason, such as `leak`. */
+  std::optional<std::string> skipReason = std::nullopt;
 };
 
 /** What the in-process verify stages found in a whole map. */
@@ -100,13 +119,16 @@ struct IssueReport
  * Runs the in-process verify stages on the whole map: load diagnostics, which turn
  * what the reader skipped into `load_error` issues, then every validator the map
  * registers, then the CLI checks. Given compile options, then compiles the map's bytes
- * and turns the compilers' logs into `compiler` issues and a failed compiler into a
- * `compile_fatal` issue. Applies the severities and suppressions of the given
- * configuration.
+ * and turns the compilers' logs into `compiler` issues, a leak into one `leak` issue
+ * and a failed compiler into a `compile_fatal` issue. Applies the severities and
+ * suppressions of the given configuration.
  *
  * A compiler message that names a line (`[line N]`) is put on the innermost node
  * containing that line; one that names a classname and origin is put on the first
  * entity of that class whose bounds contain the origin. Other messages have no node.
+ * The `leak` issue is put on the occupant entity that qbsp's `Reached occupant` lines
+ * name, and replaces the `compiler` issues of those lines. It lists the three brushes
+ * nearest where the leak trail leaves the map.
  *
  * @throw CliError if a validator is not in the issue-type table, or as `compile` does
  */
@@ -117,8 +139,8 @@ IssueReport collectIssues(
 
 /**
  * The issue record `{type, severity, key, message, node, line, origin? | bounds?,
- * tool?, unreliable_mapping?, fixes}`, with the node's path taken from the given
- * paths, which must contain it.
+ * tool?, unreliable_mapping?, trail?, nearest_brushes?, fixes}`, with the node's path
+ * taken from the given paths, which must contain it.
  */
 Json issueToJson(
   const VerifyIssue& issue,
