@@ -30,7 +30,9 @@
 #include <fmt/format.h>
 #include <fmt/std.h>
 
+#include <algorithm>
 #include <cmath>
+#include <initializer_list>
 
 namespace tb::cli
 {
@@ -43,6 +45,27 @@ CliError fileConfigError(
   const std::optional<size_t> line = std::nullopt)
 {
   return configError(fmt::format("{}: {}", file, message), line);
+}
+
+/**
+ * Checks that every key of the given object is one of the allowed keys.
+ *
+ * @throw CliError `config_error` naming the context, such as 'guide', otherwise
+ */
+void checkKeys(
+  const Json& object,
+  const std::initializer_list<std::string_view> allowed,
+  const std::string_view context,
+  const std::filesystem::path& file)
+{
+  for (const auto& member : object.asObject())
+  {
+    if (std::ranges::find(allowed, member.key) == allowed.end())
+    {
+      throw fileConfigError(
+        file, fmt::format("'{}': unknown key '{}'", context, member.key));
+    }
+  }
 }
 
 std::filesystem::path resolve(
@@ -188,14 +211,7 @@ ToolConfig readTool(
   {
     throw typeError();
   }
-  for (const auto& [entryKey, entryValue] : value.asObject())
-  {
-    if (entryKey != "path" && entryKey != "timeout")
-    {
-      throw fileConfigError(
-        file, fmt::format("'compilers.{}': unknown key '{}'", key, entryKey));
-    }
-  }
+  checkKeys(value, {"path", "timeout"}, fmt::format("compilers.{}", key), file);
 
   auto result = ToolConfig{};
   if (const auto& path = value["path"]; !path.isNull())
@@ -335,14 +351,7 @@ std::vector<IssueSuppression> readSuppressions(
     {
       throw typeError();
     }
-    for (const auto& [key, value] : entry.asObject())
-    {
-      if (key != "type" && key != "key" && key != "query")
-      {
-        throw fileConfigError(
-          file, fmt::format("'verify.ignore': unknown key '{}'", key));
-      }
-    }
+    checkKeys(entry, {"type", "key", "query"}, "verify.ignore", file);
 
     auto suppression = IssueSuppression{
       &readIssueType(entry["type"], "verify.ignore.type", file),
@@ -372,6 +381,50 @@ void readVerifyConfig(
   }
   config.verify.severity = readSeverities(verify, file);
   config.verify.ignore = readSuppressions(verify, file);
+}
+
+void readGuideConfig(
+  Config& config, const Json& object, const std::filesystem::path& file)
+{
+  const auto& guide = object["guide"];
+  if (guide.isNull())
+  {
+    return;
+  }
+  if (!guide.isObject())
+  {
+    throw fileConfigError(file, "'guide' must be an object");
+  }
+  checkKeys(guide, {"conventions"}, "guide", file);
+
+  const auto& conventions = guide["conventions"];
+  if (conventions.isNull())
+  {
+    return;
+  }
+  if (!conventions.isObject())
+  {
+    throw fileConfigError(file, "'guide.conventions' must be an object");
+  }
+
+  auto result = std::vector<Convention>{};
+  for (const auto& [name, value] : conventions.asObject())
+  {
+    if (value.isString())
+    {
+      result.push_back({name, value.asString()});
+    }
+    else if (value.isNumber())
+    {
+      result.push_back({name, formatNumber(value.asNumber())});
+    }
+    else
+    {
+      throw fileConfigError(
+        file, fmt::format("'guide.conventions.{}' must be a string or a number", name));
+    }
+  }
+  config.guide.conventions = std::move(result);
 }
 
 void readConfigFile(Config& config, const std::filesystem::path& file)
@@ -410,6 +463,7 @@ void readConfigFile(Config& config, const std::filesystem::path& file)
   readDescribeConfig(config, object, file);
   readCompilersConfig(config, object, file, base);
   readVerifyConfig(config, object, file);
+  readGuideConfig(config, object, file);
 }
 
 } // namespace

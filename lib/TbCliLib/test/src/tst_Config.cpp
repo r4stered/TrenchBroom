@@ -142,6 +142,18 @@ TEST_CASE("Config")
       CHECK(config.verify.ignore[2].query == R"(classname is "x")");
     }
 
+    SECTION("guide.conventions")
+    {
+      env.writeFile(
+        "project/tbcli.json",
+        R"({"guide": {"conventions": {"Player hull": "24 x 24 x 48", "Step height": 16}}})");
+
+      CHECK(
+        loadConfig(mapPath, {}).guide.conventions
+        == std::vector<Convention>{
+          {"Player hull", "24 x 24 x 48"}, {"Step height", "16"}});
+    }
+
     SECTION("compilers")
     {
       env.writeFile("project/tbcli.json", R"({"compilers": {"qbsp": "tools/qbsp"}})");
@@ -308,6 +320,19 @@ TEST_CASE("Config")
 
         env.writeFile(
           "project/tbcli.json", std::string{R"({"compilers": )"} + compilers + "}");
+        CHECK(errorCode() == ErrorCode::ConfigError);
+      }
+
+      SECTION("malformed guide section")
+      {
+        const auto guide = GENERATE(
+          R"([])",
+          R"({"conventions": []})",
+          R"({"conventions": {"Step height": true}})",
+          R"({"table": {}})");
+        CAPTURE(guide);
+
+        env.writeFile("project/tbcli.json", std::string{R"({"guide": )"} + guide + "}");
         CHECK(errorCode() == ErrorCode::ConfigError);
       }
 

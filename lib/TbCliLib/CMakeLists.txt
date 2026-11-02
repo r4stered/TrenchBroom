@@ -17,6 +17,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Fgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FileUtils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/GeometryJson.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/Guide.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/IssueTypes.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp

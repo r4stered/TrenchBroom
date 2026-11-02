@@ -31,6 +31,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Fgd.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_FileUtils.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_GeometryJson.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Guide.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueTracker.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_IssueTypes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp

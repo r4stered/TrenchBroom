@@ -95,6 +95,25 @@ struct VerifyConfig
   std::vector<IssueSuppression> ignore;
 };
 
+/** A row of the guide's conventions table, such as `{"Step height", "18"}`. */
+struct Convention
+{
+  std::string name;
+  std::string value;
+
+  friend bool operator==(const Convention& lhs, const Convention& rhs) = default;
+};
+
+/** The `guide` section of tbcli.json. */
+struct GuideConfig
+{
+  /**
+   * `guide.conventions`: an object of names and values, in file order, that replaces
+   * the guide's Quake 1 conventions table.
+   */
+  std::optional<std::vector<Convention>> conventions;
+};
+
 /**
  * The effective configuration for one map: tbcli.json found by walking up from the
  * map, with command line overrides applied. Paths are absolute; relative paths in
@@ -113,6 +132,7 @@ struct Config
   std::optional<std::vector<std::string>> keyEntities;
   CompilersConfig compilers;
   VerifyConfig verify;
+  GuideConfig guide;
 };
 
 /** A timeout given in seconds, rounded up to whole milliseconds. */

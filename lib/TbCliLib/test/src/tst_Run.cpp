@@ -18,6 +18,7 @@
  */
 
 #include "CliTestUtils.h"
+#include "cli/Guide.h"
 
 #include <string>
 #include <vector>
@@ -415,6 +416,83 @@ TEST_CASE("run")
          arg(quakeFgdPath())});
       CHECK(result.exitCode == 0);
       CHECK(maxY(result) == 96.0);
+    }
+  }
+
+  SECTION("guide")
+  {
+    SECTION("prints the guide as Markdown")
+    {
+      const auto result = runCli({"guide"});
+      CHECK(result.exitCode == 0);
+      CHECK_THAT(result.out, StartsWith("# tbcli guide\n"));
+      CHECK(result.out == guideText(std::nullopt));
+    }
+
+    SECTION("prints a topic")
+    {
+      const auto result = runCli({"guide", "targeting"});
+      CHECK(result.exitCode == 0);
+      CHECK_THAT(result.out, StartsWith("# Targeting\n"));
+    }
+
+    SECTION("an unknown topic is a usage error")
+    {
+      checkErrorEnvelope(runCli({"guide", "frobnicate"}), "usage", 2);
+    }
+
+    SECTION("--help names the topics that read tbcli.json")
+    {
+      CHECK_THAT(runCli({"--help"}).out, ContainsSubstring("guide conventions [<map>]"));
+    }
+
+    SECTION("only conventions takes a map")
+    {
+      checkErrorEnvelope(runCli({"guide", "verify", "x.map"}), "usage", 2);
+      checkErrorEnvelope(runCli({"guide", "conventions", "x.map", "y.map"}), "usage", 2);
+    }
+
+    SECTION("conventions come from the tbcli.json found from the map")
+    {
+      env.writeFile(
+        "project/tbcli.json",
+        R"({"guide": {"conventions": {"Player hull": "8 x 8 x 8"}}})");
+
+      const auto result =
+        runCli({"guide", "conventions", arg(env.path("project/maps/x.map"))});
+      CHECK(result.exitCode == 0);
+      CHECK_THAT(result.out, ContainsSubstring("| Player hull | 8 x 8 x 8 |"));
+      CHECK_THAT(result.out, !ContainsSubstring("Step height"));
+    }
+
+    SECTION("a malformed tbcli.json fails only the conventions topic")
+    {
+      env.writeFile("project/tbcli.json", R"({"guide": []})");
+      const auto map = arg(env.path("project/x.map"));
+      checkErrorEnvelope(runCli({"guide", "conventions", map}), "config_error", 1);
+    }
+
+    SECTION("--install writes the agent files")
+    {
+      const auto dir = env.path("skills/tbcli");
+      const auto result = runCli({"guide", "--install", arg(dir)});
+      CHECK(result.exitCode == 0);
+
+      const auto output = parseOutput(result);
+      CHECK(output["schema"] == Json{"tbcli.guide_install/1"});
+      CHECK(output["skill"] == Json{arg((dir / "SKILL.md").lexically_normal())});
+      CHECK_THAT(env.readFile("skills/tbcli/SKILL.md"), StartsWith("---\n"));
+    }
+
+    SECTION("--install takes no topic")
+    {
+      checkErrorEnvelope(
+        runCli({"guide", "verify", "--install", arg(env.path("skills"))}), "usage", 2);
+    }
+
+    SECTION("other commands refuse --install")
+    {
+      checkErrorEnvelope(runCli({"describe", "x.map", "--install", "dir"}), "usage", 2);
     }
   }
 }

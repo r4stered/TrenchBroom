@@ -26,6 +26,7 @@
 #include "cli/Describe.h"
 #include "cli/Fgd.h"
 #include "cli/FileUtils.h"
+#include "cli/Guide.h"
 #include "cli/Json.h"
 #include "cli/LoadMap.h"
 #include "cli/Ops.h"
@@ -37,6 +38,9 @@
 #include "cli/Verify.h"
 #include "version/Version.h"
 
+#include "kd/overload.h"
+#include "kd/string_utils.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
@@ -46,6 +50,7 @@
 #include <optional>
 #include <ranges>
 #include <string_view>
+#include <variant>
 
 namespace tb::cli
 {
@@ -86,6 +91,17 @@ commands:
                         contents change. A leaking map fails with map_leaks,
                         carrying the leak issue
   ops [--json]          the JSON Schema of every op and the issue types
+  guide [<topic>]       start here: how to work on maps with tbcli, as Markdown.
+                        Without a topic, the edit and verify loop, the rules and
+                        the topics:
+                        {}
+  guide {} [<map>]
+                        a topic that depends on the project, read from the
+                        tbcli.json found by walking up from the map, or else
+                        from the working directory
+  guide --install <dir> write into dir a SKILL.md and AGENTS.snippet.md, an
+                        optional snippet to paste into an agents file; both
+                        only point agents at tbcli guide
 
 node paths:
   layer:<n>/group:<n>/entity:<n>/brush:<n>/face:<n>, where each index counts
@@ -164,6 +180,7 @@ options:
   --room <id>           rooms: list only the room with this id, or its cells;
                         nothing if there is no such room
   --json                ops: print JSON (the default)
+  --install <dir>       guide: write the agent files into dir instead
   -h, --help            print this help
   --version             print the version
 
@@ -181,7 +198,15 @@ std::string usageText()
   {
     ops += fmt::format("  {}\n", def.name);
   }
-  return fmt::format(fmt::runtime(UsageTemplate), mutatingOptionsHelp(), ops);
+  auto configTopics = std::vector<std::string_view>{};
+  std::ranges::copy_if(
+    guideTopics(), std::back_inserter(configTopics), guideTopicReadsConfig);
+  return fmt::format(
+    fmt::runtime(UsageTemplate),
+    kdl::str_join(guideTopics(), ", "),
+    kdl::str_join(configTopics, "|"),
+    mutatingOptionsHelp(),
+    ops);
 }
 
 /** Which commands accept a command option. */
@@ -207,7 +232,7 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 32>{{
+constexpr auto CommandOptions = std::array<CommandOption, 33>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -235,6 +260,7 @@ constexpr auto CommandOptions = std::array<CommandOption, 32>{{
   {"--cells", "rooms"},
   {"--room", "rooms"},
   {"--json", "ops"},
+  {"--install", "guide"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
@@ -297,6 +323,8 @@ struct Arguments
   /** --split-ratio, --cells, --room and --from-artifacts */
   RoomsOptions roomsOptions;
   ApplyOptions applyOptions;
+  /** guide --install: the directory to write the agent files into */
+  std::optional<std::filesystem::path> guideInstall;
   /** The flags of an op's subcommand, as (name without dashes, value). */
   OpFlags opFlags;
   /** The options given that only some commands accept. */
@@ -569,6 +597,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
       // JSON is the default output; the flag is accepted for explicitness
       noValue();
     }
+    else if (name == "--install")
+    {
+      result.guideInstall = std::filesystem::path{value()};
+    }
     else if (name == "--expect-rev")
     {
       result.applyOptions.expectRev = value();
@@ -760,14 +792,26 @@ Json readBatch(const std::string& source, const std::string_view in)
   return std::move(batch).value();
 }
 
+/** Output that is printed as it is, whatever the output format, such as Markdown. */
+struct RawOutput
+{
+  std::string text;
+};
+
 /** What a command prints, and its exit code. */
 struct CommandResult
 {
-  Json output;
+  std::variant<Json, RawOutput> output;
   int exitCode = ExitCode::Ok;
 
   // NOLINTNEXTLINE(google-explicit-constructor): most commands only produce output
   CommandResult(Json output_)
+    : output{std::move(output_)}
+  {
+  }
+
+  // NOLINTNEXTLINE(google-explicit-constructor): like the Json constructor
+  CommandResult(RawOutput output_)
     : output{std::move(output_)}
   {
   }
@@ -783,6 +827,39 @@ Json runOps(const Arguments& arguments, const std::vector<Op>& ops, Logger& logg
 {
   auto [loadedMap, config] = loadMapArgument(arguments, logger);
   return apply(loadedMap, ops, arguments.applyOptions, config.verify);
+}
+
+CommandResult runGuide(const Arguments& arguments)
+{
+  const auto& positionals = arguments.positionals;
+  if (arguments.guideInstall)
+  {
+    checkArguments(arguments, "guide", {});
+    return installGuide(std::filesystem::absolute(*arguments.guideInstall));
+  }
+
+  // a topic that reads tbcli.json takes an optional map to look for it from
+  const auto readsConfig =
+    positionals.size() > 1 && guideTopicReadsConfig(positionals[1]);
+  checkArguments(arguments, "guide", {}, readsConfig ? 2 : 1);
+  if (positionals.size() == 1)
+  {
+    return RawOutput{guideText(std::nullopt)};
+  }
+
+  const auto& topic = positionals[1];
+  if (!readsConfig)
+  {
+    // reading the guide does not depend on a valid tbcli.json
+    return RawOutput{guideText(topic)};
+  }
+
+  // the map's file name is not used, so the working directory needs none
+  const auto searchFrom = positionals.size() > 2
+                            ? std::filesystem::path{positionals[2]}
+                            : std::filesystem::current_path() / ConfigFileName;
+  return RawOutput{
+    guideText(topic, loadConfig(searchFrom, arguments.configOverrides).guide)};
 }
 
 CommandResult runCommand(
@@ -870,6 +947,10 @@ CommandResult runCommand(
     checkArguments(arguments, command, {});
     return opsJson();
   }
+  if (command == "guide")
+  {
+    return runGuide(arguments);
+  }
   if (const auto* def = findOpDef(command))
   {
     checkArguments(arguments, command, {"a map file"});
@@ -924,7 +1005,11 @@ RunResult run(const std::vector<std::string>& args, const std::string_view in)
     }
 
     auto [output, exitCode] = runCommand(arguments, in, logger);
-    result.out = render(output, arguments.outputFormat);
+    result.out = std::visit(
+      kdl::overload(
+        [&](const Json& json) { return render(json, arguments.outputFormat); },
+        [](RawOutput& raw) { return std::move(raw.text); }),
+      output);
     result.exitCode = exitCode;
   }
   catch (const CliError& e)
