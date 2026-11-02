@@ -19,12 +19,14 @@
 
 #include "cli/Guide.h"
 
+#include "cli/BuiltRooms.h"
 #include "cli/CliError.h"
 #include "cli/FaceOps.h"
 #include "cli/FileUtils.h"
 #include "cli/Ops.h"
 #include "cli/Targets.h"
 
+#include "kd/contracts.h"
 #include "kd/string_utils.h"
 
 #include <fmt/format.h>
@@ -332,16 +334,282 @@ their centre, size, the `brushes` framing them and `gated_by`. It runs qbsp itse
 
 constexpr auto GenerateText = R"(# Generate
 
-This topic is not written yet. Until it is: lay out rooms and the corridors between
-them with `add_room` and `connect`, change them with `edit_room` and `edit_connection`
-rather than by editing their brushes, and read `tbcli <op> --help` for their arguments.
-)";
+Lay out new rooms and the corridors between them as built rooms, not as loose brushes.
+`add_room` builds a sealed room and `connect` a straight corridor between two rooms.
+Both are ordinary brushes in a `func_group` that keeps their parameters, so that tbcli
+can rebuild them when the parameters change. Read `tbcli <op> --help` for the arguments.
+
+## Lay out rooms and connections first
+
+- Lay out every room and connection before you add detail.
+- Place the first room with `min`, the minimum corner of its interior, and every other room with `place` next to a room that is built already: `{"<side>": "<room>", "gap": <n>}`, where the side is {relations}. The room then stands `gap` units from the other room's interior, centred on it along the other horizontal axis, with its floor at the same height.
+- `size` is the interior, the space a player moves through. Walls, floor and ceiling `wall` units thick ({wall}) go around it. Size rooms and corridors by `tbcli guide conventions`.
+- `connect` joins two rooms that stand side by side along x or y with their floors at the same height. The corridor's interior is `width` by `height` ({width} by {height}), on the rooms' floor, centred on the wall that they share and moved along it by `offset`. Its length is the gap minus both rooms' walls, so leave a gap larger than the two walls together. Two rooms have at most one connection.
+- Rooms are named with letters, digits and underscores; a connection is named by its
+  rooms, as in `A-B`.
+- Put entities, such as the player start and lights, inside the rooms.
+- Built faces have no material. Retexture them with `set_material`, for example with
+  the query `material == "__TB_empty"`.
+
+## Edit rooms through their parameters
+
+- Change a room with `edit_room` (`size`, `wall`, `place`) and a connection with
+  `edit_connection` (`width`, `height`, `offset`). tbcli rebuilds it and what depends on
+  it: rooms placed against it are placed again, and its connections are rebuilt and cut
+  into the walls again. Rebuilt brushes keep the materials of the brushes they replace.
+- Never edit the brushes of a room or connection: don't move, cut, clip, merge or add to
+  them. tbcli then refuses to rebuild or connect the room with `hand_edited`. Moving a
+  room's whole group and retexturing are fine.
+- `tbcli describe <map>` lists the built rooms under `built_rooms`, each with its `params` and a `status` of {statuses}. Connections are the groups named `connection:<A>-<B>`.
+- `force` rebuilds a hand-edited room or connection anyway and loses the hand edits.
+  `detach` turns one into plain brushes that tbcli no longer rebuilds.
+- A room that no longer stands where its placement puts it stays where it is, with the
+  warning `stale_placement`, and is listed under `stale_placements`.
+- Rooms in linked groups are one room with several instances. Edit it once and every
+  instance follows; `instances_affected` lists the linked copies that the edit updated.
+
+## Add detail with box ops
+
+- Add pillars, steps, platforms and trim with `create_box`, `create_brush` and
+  `create_shape`, inside the rooms or between them. They are brushes of their own,
+  outside the rooms, so the rooms stay rebuildable.
+- Rebuilding a room does not move its detail; move that with `translate`.
+- For an opening that `connect` cannot build, such as a window, `detach` the room and
+  cut it with `subtract`, as in the doorway in `tbcli guide examples`. The room is then
+  plain brushes for good, and a room that a connection joins to it cannot be rebuilt
+  until that connection is detached too.
+
+## Check every batch
+
+- Run `tbcli verify <map> --compile` after every batch. Done when `ok` is true and
+  there is no `leak` issue.
+- A refusal from `add_room`, `connect`, `edit_room` or `edit_connection`, such as {layout_errors}, is a layout error: change the sizes, gaps, offsets or placements until the layout fits. Don't work around it with boxes, which tbcli cannot rebuild and which easily leak.
+
+{examples})";
 
 constexpr auto ExamplesText = R"(# Examples
 
-There are no worked examples yet. Follow the loop in `tbcli guide`, and build batches
-from `tbcli ops --json`.
-)";
+Worked batches with the results tbcli returns. Each runs on the map it describes; the
+paths and coordinates are that map's. `<rev>` is the map's rev before the batch and
+`<new rev>` the rev the batch writes. Rehearse each batch with `--dry-run` first, as the
+loop in `tbcli guide` says.
+
+{examples})";
+
+/** The guide's examples, initialized on first use, not at static initialization. */
+const std::vector<GuideExample>& allExamples()
+{
+  static const auto examples = std::vector<GuideExample>{
+    {
+      "examples",
+      "retexture",
+      "1. Inspect, then retexture by query",
+      R"(The map has two rooms side by side along x, both from y -128 to 128, with their
+floors at z 0 and their ceilings at z 128: the west room, with the player start, from x
+-256 to 0, and the east room, with a light, from x 16 to 272. A doorway in the wall
+between them joins them. Change the floor's material: first see which materials the map
+uses, then count the faces that have the floor's.)",
+      {
+        {
+          "tbcli describe <map>",
+          R"({"textures": {"items": [{"name": "wall1_1", "count": 42},
+                       {"name": "ceiling1_1", "count": 6},
+                       {"name": "ground1_6", "count": 6}]}})",
+          true,
+        },
+        {
+          R"(tbcli query <map> 'material == "ground1_6"' --count-only)",
+          R"({"schema": "tbcli.query/1", "rev": "<rev>", "total": 6})",
+        },
+      },
+      R"(Set the material on the faces the query matches. `expect` makes the batch fail with
+`expect_mismatch`, writing nothing, if the query matches a different number of faces.)",
+      R"([{"op": "set_material",
+  "target": {"query": "material == \"ground1_6\"", "expect": 6},
+  "material": "ground1_2"}])",
+      R"({"schema": "tbcli.apply/1", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": [], "modified": ["layer:0/brush:0"], "removed": [],
+   "warnings": [], "issues_introduced": []}],
+ "bindings": {}})",
+      R"(`modified` names the floor brush, whose faces changed, as a path in the new rev.)",
+      {
+        {
+          R"(tbcli query <map> 'material == "ground1_2"' --count-only)",
+          R"({"schema": "tbcli.query/1", "rev": "<new rev>", "total": 6})",
+        },
+      },
+      {},
+    },
+    {
+      "examples",
+      "doorway",
+      "2. Add a sealed room joined to a room by a doorway",
+      R"(On the map of example 1, add a room east of the east room, built from plain
+brushes, and join the two by a doorway. For rooms that tbcli can rebuild, see `tbcli
+guide generate`. Find the map's extent, then the wall to build against.)",
+      {
+        {
+          "tbcli describe <map>",
+          R"({"bounds": {"min": [-272, -144, -16], "max": [288, 144, 144]}})",
+          true,
+        },
+        {
+          "tbcli query <map> 'type is brush' --within 256,-256,-256,512,256,256",
+          R"({"schema": "tbcli.query/1", "rev": "<rev>", "items": [
+  {"path": "layer:0/brush:3", "aabb": {"min": [272, -144, 0], "max": [288, 144, 128]},
+   "axial_box": true, "textures": ["wall1_1"], "entity": "world"}],
+ "total": 1, "truncated": false})",
+        },
+      },
+      R"(The east wall is 16 units thick, from x 272 to 288. The batch makes a box for the
+outside of the new room against it, from the floor's bottom to the ceiling's top, and
+hollows it into walls 16 units thick. It cuts a doorway 64 wide and 96 tall through
+both walls with a box that `subtract` takes away from the brushes of `layer:0` that it
+overlaps, and puts a light in the new room. The layer stands for the brushes that are
+in it when `subtract` runs, so the new walls are cut too.)",
+      R"([{"op": "create_box", "min": [288, -144, -16], "max": [560, 144, 144],
+  "material": "wall1_1", "as": "$room"},
+ {"op": "hollow", "target": "$room", "thickness": 16},
+ {"op": "create_box", "min": [272, -32, 0], "max": [304, 32, 96],
+  "material": "wall1_1", "as": "$door"},
+ {"op": "subtract", "cutters": "$door", "from": "layer:0"},
+ {"op": "create_point_entity", "classname": "light", "origin": [416, 0, 96]}])",
+      R"({"schema": "tbcli.apply/1", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": [], "modified": [], "removed": [], "warnings": [],
+   "issues_introduced": []},
+  {"ok": true,
+   "created": ["layer:0/brush:8", "layer:0/brush:9", "layer:0/brush:10",
+               "layer:0/brush:11", "layer:0/brush:12"],
+   "modified": [], "removed": [], "warnings": [], "issues_introduced": []},
+  {"ok": true, "created": [], "modified": [], "removed": [], "warnings": [],
+   "issues_introduced": []},
+  {"ok": true,
+   "created": ["layer:0/brush:13", "layer:0/brush:14", "layer:0/brush:15",
+               "layer:0/brush:16", "layer:0/brush:17", "layer:0/brush:18",
+               "layer:0/brush:19"],
+   "modified": [], "removed": ["layer:0/brush:3"], "warnings": [],
+   "issues_introduced": []},
+  {"ok": true, "created": ["layer:0/entity:2"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []}],
+ "bindings": {}})",
+      R"(`created` lists only what is still there after the batch: not the box that `hollow`
+replaced, the door, or the new west wall that `subtract` cut. The bindings are gone with
+the boxes. `removed` lists the east wall that `subtract` cut, as a path in the old rev.)",
+      {
+        {
+          "tbcli verify <map> --compile",
+          R"({"rev": "<new rev>", "ok": true, "by_severity": {"error": 0}})",
+          true,
+        },
+      },
+      R"(`ok` is true and there is no `leak` issue: the new room is sealed. qbsp's warnings
+about textures it cannot find are `compiler` issues of severity warning.)",
+    },
+    {
+      "examples",
+      "leak",
+      "3. Fix a leak",
+      R"(The map is that of example 1, except that the east wall of the east room stops short
+of the north wall. Compile the map and read the leak.)",
+      {
+        {
+          "tbcli verify <map> --compile --type leak",
+          R"({"ok": false, "issues": {"items": [
+  {"type": "leak", "severity": "error", "node": "layer:0/entity:1",
+   "origin": [144, 0, 96],
+   "trail": {"start": [144, 0, 96], "end": [-272, 156, -20],
+             "turning_points": [[144, 32, 64], [272, 96, 64], [280, 156, 0]]},
+   "nearest_brushes": ["layer:0/brush:3", "layer:0/brush:5", "layer:0/brush:0"]}]}})",
+          true,
+        },
+        {
+          "tbcli query <map> 'type is brush' --intersects 264,48,8,296,160,120",
+          R"({"schema": "tbcli.query/1", "rev": "<rev>", "items": [
+  {"path": "layer:0/brush:3", "aabb": {"min": [272, -144, 0], "max": [288, 64, 128]},
+   "axial_box": true, "textures": ["wall1_1"], "entity": "world"},
+  {"path": "layer:0/brush:5", "aabb": {"min": [-256, 128, 0], "max": [272, 144, 128]},
+   "axial_box": true, "textures": ["wall1_1"], "entity": "world"}],
+ "total": 2, "truncated": false})",
+        },
+      },
+      R"(The way out runs from the light past (272, 96) and leaves the map at (280, 156). The
+query looks at the walls around those points, the first two of `nearest_brushes`: the
+east wall ends at y 64, and the north wall at x 272. The hole is the corner between
+them, from x 272 to 288 and from y 64 to 144. Close it with a world brush.)",
+      R"([{"op": "create_box", "min": [272, 64, 0], "max": [288, 144, 128],
+  "material": "wall1_1"}])",
+      R"({"schema": "tbcli.apply/1", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": ["layer:0/brush:9"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []}],
+ "bindings": {}})",
+      R"(`issues_introduced` is empty, but only `verify --compile` tells whether the map is
+sealed now.)",
+      {
+        {
+          "tbcli verify <map> --compile",
+          R"({"rev": "<new rev>", "ok": true, "by_severity": {"error": 0}})",
+          true,
+        },
+      },
+      R"(`ok` is true and there is no `leak` issue. If the map still leaked, the new `leak`
+issue would show the next hole.)",
+    },
+    {
+      "generate",
+      "rooms",
+      "Example: two rooms and a corridor",
+      R"(On an empty map, lay out room A at the origin and room B east of it, put the player
+start in A and a light in B, and join the rooms.)",
+      {},
+      R"(B is placed 128 units east of A's interior. Both walls are 16 units thick, so the
+corridor is 96 units long. It is 96 units tall, since B is only 96 units tall.)",
+      R"([{"op": "add_room", "name": "A", "min": [0, 0, 0], "size": [256, 256, 128]},
+ {"op": "add_room", "name": "B", "size": [192, 320, 96],
+  "place": {"east_of": "A", "gap": 128}},
+ {"op": "create_point_entity", "classname": "info_player_start",
+  "origin": [128, 128, 24]},
+ {"op": "create_point_entity", "classname": "light", "origin": [480, 128, 64]},
+ {"op": "connect", "from": "A", "to": "B", "height": 96}])",
+      R"({"schema": "tbcli.apply/1", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": ["layer:0/group:0"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []},
+  {"ok": true, "created": ["layer:0/group:1"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []},
+  {"ok": true, "created": ["layer:0/entity:0"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []},
+  {"ok": true, "created": ["layer:0/entity:1"], "modified": [], "removed": [],
+   "warnings": [], "issues_introduced": []},
+  {"ok": true, "created": ["layer:0/group:2"],
+   "modified": ["layer:0/group:0/entity:0", "layer:0/group:1/entity:0"],
+   "removed": [], "warnings": [], "issues_introduced": []}],
+ "bindings": {}})",
+      R"(Each room is a group `built_room:<name>` around its carrier, and the corridor is the
+group `connection:A-B`. `connect` modified both rooms' carriers, whose walls it cut.)",
+      {
+        {
+          "tbcli describe <map>",
+          R"({"built_rooms": {"items": [
+  {"name": "A", "params": {"size": [256, 256, 128], "wall": 16},
+   "status": "rebuildable", "group": "layer:0/group:0"},
+  {"name": "B",
+   "params": {"size": [192, 320, 96], "wall": 16,
+              "place": {"east_of": "A", "gap": 128}},
+   "status": "rebuildable", "group": "layer:0/group:1"}],
+ "total": 2}})",
+          true,
+        },
+        {
+          "tbcli verify <map> --compile",
+          R"({"rev": "<new rev>", "ok": true, "by_severity": {"error": 0}})",
+          true,
+        },
+      },
+      R"(To make B wider, `edit_room` B with a new `size`: tbcli rebuilds B and the corridor,
+and cuts A's wall again.)",
+    },
+  };
+  return examples;
+}
 
 constexpr auto SkillText = R"(---
 name: tbcli
@@ -500,6 +768,97 @@ std::string targeting(const GuideConfig&)
     });
 }
 
+std::string renderCommand(const GuideCommand& command)
+{
+  return fmt::format(
+    "`{}` returns{}:\n\n```json\n{}\n```\n",
+    command.command,
+    command.excerpt ? ", among other fields" : "",
+    command.output);
+}
+
+std::string renderExample(const GuideExample& example)
+{
+  auto result = fmt::format("## {}\n\n{}\n", example.title, example.intro);
+  for (const auto& command : example.inspect)
+  {
+    result += "\n" + renderCommand(command);
+  }
+  result += fmt::format(
+    "\n{}\n\n```json\n{}\n```\n\n"
+    "`tbcli apply <map> batch.json --expect-rev <rev>` returns:\n\n```json\n{}\n```\n\n"
+    "{}\n",
+    example.plan,
+    example.batch,
+    example.result,
+    example.review);
+  for (const auto& command : example.check)
+  {
+    result += "\n" + renderCommand(command);
+  }
+  if (!example.outro.empty())
+  {
+    result += fmt::format("\n{}\n", example.outro);
+  }
+  return result;
+}
+
+/** The examples that the given topic shows, as Markdown sections. */
+std::string renderExamples(const std::string_view topic)
+{
+  auto sections = std::vector<std::string>{};
+  for (const auto& example : allExamples())
+  {
+    if (example.topic == topic)
+    {
+      sections.push_back(renderExample(example));
+    }
+  }
+  return kdl::str_join(sections, "\n");
+}
+
+/** The default value of an op's argument, as JSON. */
+std::string defaultValueOf(const std::string_view opName, const std::string_view argName)
+{
+  const auto* def = findOpDef(opName);
+  contract_assert(def != nullptr);
+  const auto arg = std::ranges::find(def->args, argName, &ArgDef::name);
+  contract_assert(arg != def->args.end() && arg->defaultValue);
+  return arg->defaultValue->dump();
+}
+
+std::string generate(const GuideConfig&)
+{
+  const auto relations = relationNames();
+  return fillPlaceholders(
+    GenerateText,
+    {
+      {"{wall}", defaultValueOf("add_room", "wall")},
+      {"{width}", defaultValueOf("connect", "width")},
+      {"{height}", defaultValueOf("connect", "height")},
+      {"{relations}", proseList({relations.begin(), relations.end()}, "or")},
+      {"{statuses}",
+       proseList(
+         {toString(RoomStatus::Rebuildable), toString(RoomStatus::HandEdited)}, "or")},
+      {"{layout_errors}",
+       proseList(
+         {
+           toString(ErrorCode::LayoutOverlap),
+           toString(ErrorCode::LayoutCorridorDoesNotFit),
+           toString(ErrorCode::LayoutFloorMismatch),
+           toString(ErrorCode::LayoutCorridorTooTall),
+         },
+         "or")},
+      // last, since the examples' text is not searched for placeholders
+      {"{examples}", renderExamples("generate")},
+    });
+}
+
+std::string examples(const GuideConfig&)
+{
+  return fillPlaceholders(ExamplesText, {{"{examples}", renderExamples("examples")}});
+}
+
 struct GuideTopic
 {
   std::string_view name;
@@ -524,12 +883,8 @@ constexpr auto Topics = std::array<GuideTopic, 5>{{
    "stages, issues, keys, suppression, quick-fixes, compiling, leaks and the rooms "
    "graph",
    [](const GuideConfig&) { return std::string{VerifyText}; }},
-  {"generate",
-   "laying out rooms and corridors as built rooms",
-   [](const GuideConfig&) { return std::string{GenerateText}; }},
-  {"examples",
-   "worked batches with their results",
-   [](const GuideConfig&) { return std::string{ExamplesText}; }},
+  {"generate", "laying out rooms and corridors as built rooms", generate},
+  {"examples", "worked batches with their results", examples},
 }};
 
 constexpr auto TopicNames = []() {
@@ -571,6 +926,11 @@ std::string overview()
 std::span<const std::string_view> guideTopics()
 {
   return TopicNames;
+}
+
+std::span<const GuideExample> guideExamples()
+{
+  return allExamples();
 }
 
 bool guideTopicReadsConfig(const std::string_view topic)

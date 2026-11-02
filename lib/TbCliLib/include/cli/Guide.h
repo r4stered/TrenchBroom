@@ -27,12 +27,64 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace tb::cli
 {
 
 /** The topics `tbcli guide <topic>` loads, in the order the guide's index lists them. */
 std::span<const std::string_view> guideTopics();
+
+/** A command of a worked example and what it prints. */
+struct GuideCommand
+{
+  /** The command line, with `<map>` for the map and `<rev>` for its rev. */
+  std::string_view command;
+  /**
+   * The JSON the command prints, with "<rev>" for the map's rev before the example's
+   * batch and "<new rev>" for its rev after it.
+   */
+  std::string_view output;
+  /** Whether the output shows only some of what the command prints. */
+  bool excerpt = false;
+};
+
+/**
+ * A worked example of the guide: commands that inspect the map, an `apply` batch, its
+ * result, and commands that check the outcome. The tests run every example and compare
+ * what tbcli prints, so that the guide cannot drift from what tbcli does.
+ */
+struct GuideExample
+{
+  /** The guide topic that shows the example. */
+  std::string_view topic;
+  /** A short name that identifies the example. */
+  std::string_view name;
+  /** The heading of the example's section. */
+  std::string_view title;
+  /** Markdown: the map and what the example changes. */
+  std::string_view intro;
+  /** Commands that read the map before the batch. */
+  std::vector<GuideCommand> inspect;
+  /** Markdown that explains the batch. */
+  std::string_view plan;
+  /** The batch, a JSON array of ops. */
+  std::string_view batch;
+  /**
+   * What `tbcli apply <map> batch.json --expect-rev <rev>` prints, with "<new rev>"
+   * for the rev it writes.
+   */
+  std::string_view result;
+  /** Markdown that explains the result. */
+  std::string_view review;
+  /** Commands that check the map after the batch. */
+  std::vector<GuideCommand> check;
+  /** Markdown after the checks; may be empty. */
+  std::string_view outro;
+};
+
+/** Every worked example of the guide, in the order the guide shows them. */
+std::span<const GuideExample> guideExamples();
 
 /** Whether the given guide topic reads tbcli.json. */
 bool guideTopicReadsConfig(std::string_view topic);

@@ -19,14 +19,20 @@
 
 #include "CliTestUtils.h"
 #include "cli/CliError.h"
+#include "cli/Compile.h"
+#include "cli/FileUtils.h"
 #include "cli/Guide.h"
 #include "cli/IssueTypes.h"
 #include "cli/Ops.h"
 
+#include "kd/string_utils.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
+#include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
@@ -61,6 +67,131 @@ size_t lineCount(const std::string& text)
   return size_t(std::ranges::count(text, '\n'));
 }
 
+/** What a guide example needs to run. */
+struct ExampleSetup
+{
+  std::string_view name;
+  /** The fixture map that the example starts from, or empty for an empty map. */
+  std::string_view map;
+  /** The qbsp recording that the example's inspect commands replay, if any. */
+  std::string_view inspectRecording;
+  /**
+   * The qbsp recording that the example's check commands replay, if any. The recording
+   * was made from compiled/<recording>.map, which must be the map the batch writes.
+   */
+  std::string_view checkRecording;
+};
+
+constexpr auto ExampleSetups = std::array{
+  ExampleSetup{"retexture", "compiled/rooms_prt1.map", "", ""},
+  ExampleSetup{"doorway", "compiled/rooms_prt1.map", "", "guide_doorway"},
+  ExampleSetup{"leak", "compiled/compile_leak.map", "compile_leak", "guide_leak_fixed"},
+  ExampleSetup{"rooms", "", "", "connected_rooms"},
+};
+
+/** The words of a command line, where single quotes group words, as in a shell. */
+std::vector<std::string> splitCommand(const std::string_view command)
+{
+  auto result = std::vector<std::string>{};
+  auto word = std::optional<std::string>{};
+  auto quoted = false;
+  for (const auto c : command)
+  {
+    if (c == '\'')
+    {
+      quoted = !quoted;
+      word = word.value_or("");
+    }
+    else if (c == ' ' && !quoted)
+    {
+      if (word)
+      {
+        result.push_back(*word);
+        word.reset();
+      }
+    }
+    else
+    {
+      word = word.value_or("") + c;
+    }
+  }
+  REQUIRE(!quoted);
+  if (word)
+  {
+    result.push_back(*word);
+  }
+  return result;
+}
+
+/**
+ * Whether the actual JSON has everything the expected JSON has: an object may have more
+ * members than expected, but an array must have as many elements.
+ */
+bool containsJson(const Json& actual, const Json& expected)
+{
+  if (expected.isObject())
+  {
+    return actual.isObject()
+           && std::ranges::all_of(expected.asObject(), [&](const auto& member) {
+                const auto* value = actual.find(member.key);
+                return value && containsJson(*value, member.value);
+              });
+  }
+  if (expected.isArray())
+  {
+    return actual.isArray() && actual.size() == expected.size()
+           && std::ranges::all_of(
+             std::views::iota(size_t(0), expected.size()),
+             [&](const auto i) { return containsJson(actual[i], expected[i]); });
+  }
+  return actual == expected;
+}
+
+/** The JSON text of an example with its rev placeholders replaced. */
+Json withRevs(
+  const std::string_view text, const std::string& rev, const std::string& newRev)
+{
+  return parseJsonLiteral(
+    kdl::str_replace_every(
+      kdl::str_replace_every(std::string{text}, "\"<rev>\"", fmt::format("\"{}\"", rev)),
+      "\"<new rev>\"",
+      fmt::format("\"{}\"", newRev)));
+}
+
+/** Lets verify --compile replay the given qbsp recording. */
+void useQbspRecording(CliTestEnvironment& env, const std::string_view recording)
+{
+  auto compilers = Json::object();
+  compilers.set(
+    std::string{QbspTool}, arg(setUpFakeCompiler(env, QbspTool, std::string{recording})));
+  auto config = quakeConfig();
+  config.set("compilers", std::move(compilers));
+  env.writeConfig({}, config);
+}
+
+/** Runs a command of an example on the map and checks that it prints what it shows. */
+void checkCommand(
+  const GuideCommand& command,
+  const std::string& map,
+  const std::string& rev,
+  const std::string& newRev)
+{
+  CAPTURE(command.command);
+
+  auto args = splitCommand(command.command);
+  REQUIRE(args.front() == "tbcli");
+  args.erase(args.begin());
+  for (auto& word : args)
+  {
+    word = word == "<map>" ? map : word == "<rev>" ? rev : word;
+  }
+
+  const auto actual = runJson(args);
+  const auto expected = withRevs(command.output, rev, newRev);
+  CAPTURE(actual, expected);
+  CHECK((command.excerpt ? containsJson(actual, expected) : actual == expected));
+}
+
 } // namespace
 
 TEST_CASE("Guide")
@@ -71,6 +202,68 @@ TEST_CASE("Guide")
       std::vector<std::string_view>{guideTopics().begin(), guideTopics().end()}
       == std::vector<std::string_view>{
         "conventions", "targeting", "verify", "generate", "examples"});
+  }
+
+  SECTION("guideExamples")
+  {
+    // every setup belongs to an example
+    for (const auto& setup : ExampleSetups)
+    {
+      CAPTURE(setup.name);
+      CHECK(
+        std::ranges::find(guideExamples(), setup.name, &GuideExample::name)
+        != guideExamples().end());
+    }
+
+    const auto example = GENERATE(from_range(guideExamples()));
+    CAPTURE(example.name);
+    CHECK(std::ranges::find(guideTopics(), example.topic) != guideTopics().end());
+
+    // the topic shows the example
+    const auto text = guideText(example.topic);
+    CHECK_THAT(text, ContainsSubstring(fmt::format("## {}\n", example.title)));
+    CHECK_THAT(text, ContainsSubstring(std::string{example.batch}));
+    CHECK_THAT(text, ContainsSubstring(std::string{example.result}));
+
+    // the example runs and tbcli prints what it shows
+    const auto setup =
+      std::ranges::find(ExampleSetups, example.name, &ExampleSetup::name);
+    REQUIRE(setup != ExampleSetups.end());
+
+    auto env = CliTestEnvironment{};
+    env.writeConfig({}, quakeConfig());
+    const auto map = arg(
+      setup->map.empty() ? env.writeFile("example.map", EmptyMap)
+                         : env.copyFixture(setup->map, "example.map"));
+    const auto rev = revOf(map);
+
+    if (!setup->inspectRecording.empty())
+    {
+      useQbspRecording(env, setup->inspectRecording);
+    }
+    for (const auto& command : example.inspect)
+    {
+      checkCommand(command, map, rev, "");
+    }
+
+    const auto result = runJson({"apply", map, "-", "--expect-rev", rev}, example.batch);
+    const auto newRev = result["rev"].asString();
+    CHECK(newRev != rev);
+    CHECK(result == withRevs(example.result, rev, newRev));
+
+    if (!setup->checkRecording.empty())
+    {
+      const auto recorded =
+        *readFile(fixturePath(fmt::format("compiled/{}.map", setup->checkRecording)));
+      CHECK(
+        withoutVolatileLines(env.readFile("example.map"))
+        == withoutVolatileLines(recorded));
+      useQbspRecording(env, setup->checkRecording);
+    }
+    for (const auto& command : example.check)
+    {
+      checkCommand(command, map, rev, newRev);
+    }
   }
 
   SECTION("guideTopicReadsConfig")

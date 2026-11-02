@@ -38,8 +38,16 @@
 #                         Generator line; tst_BuiltRooms regenerates it and compares;
 #                         recorded with -keepprt, as verify runs qbsp
 #   connected_rooms.map   built_rooms.map with the two rooms joined by tbcli connect;
-#                         tst_BuiltRooms regenerates it and compares; recorded with
-#                         -keepprt, as verify runs qbsp
+#                         tst_BuiltRooms and the guide's generate example regenerate
+#                         it and compare; recorded with -keepprt, as verify runs qbsp
+#   guide_doorway.map     rooms_prt1.map with a third room joined to it by a doorway,
+#                         as the guide's doorway example makes it, without the
+#                         Generator line; tst_Guide runs the example and compares;
+#                         recorded with -keepprt, as verify runs qbsp
+#   guide_leak_fixed.map  compile_leak.map with its hole closed, as the guide's leak
+#                         example closes it, without the Generator line; tst_Guide runs
+#                         the example and compares; recorded with -keepprt, as verify
+#                         runs qbsp
 #
 # Usage: ERICW_TOOLS_DIR=<dir> lib/TbCliLib/test/fixture/compiled/record.sh
 
@@ -62,6 +70,8 @@ mdl="$(git -C "$here" rev-parse --show-toplevel)/lib/TbMdlLib/test/fixture/mdl/C
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_openings.map" "$here/rooms_openings"
 "$record" --qbsp-args "-keepprt" "$here/built_rooms.map" "$here/built_rooms"
 "$record" --qbsp-args "-keepprt" "$here/connected_rooms.map" "$here/connected_rooms"
+"$record" --qbsp-args "-keepprt" "$here/guide_doorway.map" "$here/guide_doorway"
+"$record" --qbsp-args "-keepprt" "$here/guide_leak_fixed.map" "$here/guide_leak_fixed"
 # recorded under the name that the test build copies the map to
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

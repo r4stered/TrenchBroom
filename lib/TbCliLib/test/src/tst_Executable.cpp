@@ -21,8 +21,6 @@
 #include "cli/FileUtils.h"
 #include "cli/Process.h"
 
-#include "kd/string_utils.h"
-
 #include <chrono>
 #include <filesystem>
 #include <string>
@@ -36,26 +34,6 @@ namespace tb::cli
 {
 using namespace std::chrono_literals;
 using namespace Catch::Matchers;
-
-namespace
-{
-
-/** The map text without the lines that differ between saves of the same map. */
-std::string withoutVolatileLines(const std::string& text)
-{
-  auto lines = std::vector<std::string>{};
-  for (const auto& line : kdl::str_split(text, "\n"))
-  {
-    if (
-      !line.starts_with("// Generator:") && !line.starts_with("\"_tb_linked_group_id\""))
-    {
-      lines.push_back(line);
-    }
-  }
-  return kdl::str_join(lines, "\n");
-}
-
-} // namespace
 
 // The other tests call tbcli in-process, but the built executable is linked
 // differently, and its static initialization can differ: it once saved group properties
@@ -92,26 +70,9 @@ TEST_CASE("tbcli executable")
 
   SECTION("regenerates compiled/connected_rooms.map")
   {
-    const auto map = env.writeFile("rooms.map", R"(// Game: Quake
-// Format: Valve
-// entity 0
-{
-"mapversion" "220"
-"classname" "worldspawn"
-"wad" ""
-}
-)");
-    // the batch that tst_BuiltRooms makes compiled/connected_rooms.map with
-    const auto batch = env.writeFile(
-      "batch.json",
-      R"([{"op": "add_room", "name": "A", "min": [0, 0, 0], "size": [256, 256, 128]},
-          {"op": "add_room", "name": "B", "size": [192, 320, 96],
-           "place": {"east_of": "A", "gap": 128}},
-          {"op": "create_point_entity", "classname": "info_player_start",
-           "origin": [128, 128, 24]},
-          {"op": "create_point_entity", "classname": "light",
-           "origin": [480, 128, 64]},
-          {"op": "connect", "from": "A", "to": "B", "height": 96}])");
+    const auto map = env.writeFile("rooms.map", EmptyMap);
+    // the guide's generate example, which makes compiled/connected_rooms.map
+    const auto batch = env.writeFile("batch.json", guideExampleBatch("rooms"));
 
     const auto result = runTbcli({"apply", arg(map), arg(batch)});
     REQUIRE(result.exitCode == 0);

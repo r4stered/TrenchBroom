@@ -22,8 +22,6 @@
 #include "cli/Compile.h"
 #include "cli/FileUtils.h"
 
-#include "kd/string_utils.h"
-
 #include <fmt/format.h>
 
 #include <string>
@@ -41,31 +39,6 @@ using namespace Catch::Matchers;
 
 namespace
 {
-
-constexpr auto EmptyMap = std::string_view{R"(// Game: Quake
-// Format: Valve
-// entity 0
-{
-"mapversion" "220"
-"classname" "worldspawn"
-"wad" ""
-}
-)"};
-
-/** The map text without the lines that differ between saves of the same map. */
-std::string withoutVolatileLines(const std::string& text)
-{
-  auto lines = std::vector<std::string>{};
-  for (const auto& line : kdl::str_split(text, "\n"))
-  {
-    if (
-      !line.starts_with("// Generator:") && !line.starts_with("\"_tb_linked_group_id\""))
-    {
-      lines.push_back(line);
-    }
-  }
-  return kdl::str_join(lines, "\n");
-}
 
 /** An empty map in a temp dir with a tbcli.json. */
 struct RoomFixture
@@ -192,8 +165,8 @@ constexpr auto RoomCNorthOfB = std::string_view{
   R"({"op": "add_room", "name": "C", "size": [128, 128, 64],
       "place": {"north_of": "B", "gap": 64}})"};
 
-/** The batch that compiled/built_rooms.map was made by, followed by the given ops. */
-std::string builtRoomsBatch(const std::string_view moreOps = {})
+/** The batch that compiled/built_rooms.map was made by. */
+std::string builtRoomsBatch()
 {
   return fmt::format(
     R"([{},
@@ -202,9 +175,8 @@ std::string builtRoomsBatch(const std::string_view moreOps = {})
       {{"op": "create_point_entity", "classname": "info_player_start",
        "origin": [128, 128, 24]}},
       {{"op": "create_point_entity", "classname": "light",
-       "origin": [480, 128, 64]}}{}])",
-    RoomA,
-    moreOps);
+       "origin": [480, 128, 64]}}])",
+    RoomA);
 }
 
 /** A, and a linked copy of its group 1024 units north. */
@@ -914,10 +886,9 @@ TEST_CASE("connect")
 
   SECTION("two rooms and a connection compile sealed")
   {
-    // compiled/connected_rooms.map was made by this batch; its qbsp recording has no
-    // leak
-    fixture.applyJson(
-      builtRoomsBatch(R"(, {"op": "connect", "from": "A", "to": "B", "height": 96})"));
+    // compiled/connected_rooms.map was made by the guide's generate example; its qbsp
+    // recording has no leak
+    fixture.applyJson(guideExampleBatch("rooms"));
     fixture.checkCompilesSealed("connected_rooms");
   }
 

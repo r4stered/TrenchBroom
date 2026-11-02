@@ -152,6 +152,23 @@ void checkError(
   int exitCode,
   std::optional<size_t> opIndex = std::nullopt);
 
+/** A Quake map in the Valve format that has nothing but the worldspawn entity. */
+inline constexpr auto EmptyMap = std::string_view{R"(// Game: Quake
+// Format: Valve
+// entity 0
+{
+"mapversion" "220"
+"classname" "worldspawn"
+"wad" ""
+}
+)"};
+
+/** The map text without the lines that differ between saves of the same map. */
+std::string withoutVolatileLines(const std::string& text);
+
+/** The batch of the guide's worked example with the given name. */
+std::string_view guideExampleBatch(std::string_view name);
+
 /** A batch entry that creates a box in the default layer. */
 inline constexpr auto CreateBoxOp = std::string_view{
   R"({"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "floor"})"};

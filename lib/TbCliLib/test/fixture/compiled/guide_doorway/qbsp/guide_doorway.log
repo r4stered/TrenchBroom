@@ -1,0 +1,102 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "keepprt" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\guide_doorway.map
+Output file: ${WORKDIR}\guide_doorway.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     4 entities
+     4 unique textures
+    19 texinfos
+    40 unique planes
+
+INFO: world extents calculated to 1320 units
+     20 brushes
+    120 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture ground1_6
+WARNING: unable to find texture ceiling1_1
+WARNING: unable to find texture wall1_1
+Processing hull 0...
+    20 SOLID brushes
+    20 brushes total
+    120 visible sides
+INFO: calculating BSP for 20 brushes with 120 sides
+     20 brushes
+    120 visible faces
+    65 nodes
+    65 expensive split nodes
+    66 leaves
+    46 EMPTY leafs
+    20 SOLID leafs
+    66 leafs total
+    12 max tree height
+     7 avg tree height
+    298 tree portals
+    36 outside leaves
+    0 detail filled leafs
+    20 brushes
+    32 visible faces
+    88 non-visible faces
+    85 nodes
+    57 non-visible nodes
+    85 expensive split nodes
+    86 leaves
+    57 EMPTY leafs
+    29 SOLID leafs
+    86 leafs total
+    12 max tree height
+     8 avg tree height
+    368 tree portals
+    48 outside leaves
+    0 detail filled leafs
+    368 tree portals
+    96 sides visible
+    48 makefaces
+    13 merged
+    20 subdivided
+    61 nodes pruned
+    9 player-occupiable leaves
+    9 clusters of leaves
+    8 vis portals
+    16 SOLID leafs
+     9 EMPTY leafs
+    25 leafs total
+    12 max tree height
+     7 avg tree height
+     52 edges added by tjunctions
+     55 faces optimized through MWT
+    162 triangles computed from MWT
+     11 faces created via optimization of MWT triangles
+    147 edges
+     66 faces
+Processing hull 1...
+Processing hull 2...
+Writing guide_doorway.bsp as Quake BSP bsp29
+Wrote guide_doorway.bsp
+
+count   lump name    byte size 
+      1 models               64
+     33 planes              660
+     83 vertexes            996
+     24 nodes               576
+      8 texinfos            320
+     66 faces              1320
+     48 clipnodes           384
+     10 leafs               280
+     92 marksurfaces        184
+    148 edges               592
+    294 surfedges          1176
+      4 textures             20
+        lightdata             0
+        visdata               0
+        entdata             203
+
+0.019s seconds elapsed
+
+

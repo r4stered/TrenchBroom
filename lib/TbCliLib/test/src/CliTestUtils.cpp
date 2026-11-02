@@ -21,6 +21,9 @@
 
 #include "TestEnvironment.h"
 #include "cli/Config.h"
+#include "cli/Guide.h"
+
+#include "kd/string_utils.h"
 
 #include <fmt/format.h>
 
@@ -217,6 +220,28 @@ void checkError(
   {
     CHECK(json["error"].find("op_index") == nullptr);
   }
+}
+
+std::string withoutVolatileLines(const std::string& text)
+{
+  auto lines = std::vector<std::string>{};
+  for (const auto& line : kdl::str_split(text, "\n"))
+  {
+    if (
+      !line.starts_with("// Generator:") && !line.starts_with("\"_tb_linked_group_id\""))
+    {
+      lines.push_back(line);
+    }
+  }
+  return kdl::str_join(lines, "\n");
+}
+
+std::string_view guideExampleBatch(const std::string_view name)
+{
+  const auto examples = guideExamples();
+  const auto example = std::ranges::find(examples, name, &GuideExample::name);
+  REQUIRE(example != examples.end());
+  return example->batch;
 }
 
 EditFixture::EditFixture(const std::filesystem::path& fixture)
