@@ -22,12 +22,15 @@
 #include "kd/string_utils.h"
 
 #include <algorithm>
+#include <array>
 #include <ranges>
 
 namespace tb::cli
 {
 namespace
 {
+
+constexpr auto AxisNames = std::array<std::string_view, 3>{"x", "y", "z"};
 
 bool isDigit(const char c)
 {
@@ -122,6 +125,18 @@ std::optional<std::vector<double>> parseNumberList(const std::string_view str)
     }
   }
   return result;
+}
+
+std::span<const std::string_view> axisNames()
+{
+  return AxisNames;
+}
+
+std::optional<vm::axis::type> parseAxis(const std::string_view name)
+{
+  const auto it = std::ranges::find(AxisNames, name);
+  return it != AxisNames.end() ? std::optional{vm::axis::type(it - AxisNames.begin())}
+                               : std::nullopt;
 }
 
 } // namespace tb::cli

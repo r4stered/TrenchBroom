@@ -23,6 +23,7 @@
 #include "cli/CliError.h"
 #include "cli/GeometryJson.h"
 #include "cli/Ops.h"
+#include "cli/ParseUtils.h"
 #include "mdl/EditorContext.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
@@ -39,12 +40,8 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <array>
 #include <functional>
 #include <iterator>
-#include <optional>
-#include <span>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -199,21 +196,7 @@ void transformTargets(
   }
 }
 
-constexpr auto AxisNames = std::array<std::string_view, 3>{"x", "y", "z"};
-
 } // namespace
-
-std::span<const std::string_view> axisNames()
-{
-  return AxisNames;
-}
-
-std::optional<vm::axis::type> parseAxis(const std::string_view name)
-{
-  const auto it = std::ranges::find(AxisNames, name);
-  return it != AxisNames.end() ? std::optional{vm::axis::type(it - AxisNames.begin())}
-                               : std::nullopt;
-}
 
 void translate(OpContext& context)
 {

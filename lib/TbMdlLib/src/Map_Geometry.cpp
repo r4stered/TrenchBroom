@@ -696,6 +696,22 @@ bool csgSubtract(Map& map)
   selectTouchingNodes(map, false);
 
   const auto minuendNodes = std::vector<BrushNode*>{map.selection().brushes};
+  if (!csgSubtract(map, minuendNodes, subtrahendNodes, false))
+  {
+    transaction.cancel();
+    return false;
+  }
+  return transaction.commit();
+}
+
+bool csgSubtract(
+  Map& map,
+  const std::vector<BrushNode*>& minuendNodes,
+  const std::vector<BrushNode*>& subtrahendNodes,
+  const bool keepSubtrahends)
+{
+  auto transaction = Transaction{map, "CSG Subtract"};
+
   const auto subtrahends = subtrahendNodes
                            | std::views::transform([](const auto* subtrahendNode) {
                                return &subtrahendNode->brush();
@@ -704,7 +720,9 @@ bool csgSubtract(Map& map)
 
   auto toAdd = kdl::flat_map<Node*, std::vector<Node*>>{};
   auto toRemove =
-    std::vector<Node*>{std::begin(subtrahendNodes), std::end(subtrahendNodes)};
+    keepSubtrahends
+      ? std::vector<Node*>{}
+      : std::vector<Node*>{std::begin(subtrahendNodes), std::end(subtrahendNodes)};
 
   return minuendNodes | std::views::transform([&](auto* minuendNode) {
            const auto& minuend = minuendNode->brush();
@@ -797,6 +815,11 @@ bool csgIntersect(Map& map)
 
 bool csgHollow(Map& map)
 {
+  return csgHollow(map, double(map.grid().actualSize()));
+}
+
+bool csgHollow(Map& map, const double thickness)
+{
   const auto brushNodes = map.selection().brushes;
   if (brushNodes.empty())
   {
@@ -812,7 +835,7 @@ bool csgHollow(Map& map)
     const auto& originalBrush = brushNode->brush();
 
     auto shrunkenBrush = originalBrush;
-    shrunkenBrush.expand(map.worldBounds(), -double(map.grid().actualSize()), true)
+    shrunkenBrush.expand(map.worldBounds(), -thickness, true)
       | kdl::and_then([&]() {
           didHollowAnything = true;
 

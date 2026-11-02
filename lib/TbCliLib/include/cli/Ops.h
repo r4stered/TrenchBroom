@@ -89,6 +89,13 @@ enum class ArgType
    * or a list of directions; written as a comma-separated list as a flag
    */
   FaceSelector,
+  /**
+   * four or more points `[[x, y, z], ...]`, written as their numbers separated by
+   * commas as a flag
+   */
+  Points,
+  /** a kind of shape: `"cylinder"`, `"cone"` or `"arch"` */
+  ShapeKind,
 };
 
 /** One argument of an op. */
@@ -188,6 +195,14 @@ bool isBoolFlag(const OpDef& def, std::string_view flag);
 
 /** Whether the given flag of the op's subcommand gives one of its arguments. */
 bool definesFlag(const OpDef& def, std::string_view flag);
+
+/**
+ * Checks that an op's Number argument is greater than 0.
+ *
+ * @throw CliError `invalid_argument` if it is not
+ */
+void checkPositiveArg(
+  std::string_view opName, std::string_view argName, const Json& args);
 
 /** Every op, in the order `ops --json` and the help list them. */
 const std::vector<OpDef>& opDefs();

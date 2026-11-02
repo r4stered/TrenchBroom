@@ -1275,6 +1275,44 @@ TEST_CASE("Map_Geometry")
       CHECK(remainderNode2->logicalBounds() == expectedBBox2);
     }
 
+    SECTION("Subtract from the given minuends only")
+    {
+      auto& map = fixture.create();
+      const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+
+      auto* minuendNode = new BrushNode{
+        builder.createCuboid(
+          vm::bbox3d{vm::vec3d{0, 0, 0}, vm::vec3d{64, 64, 64}}, "material")
+        | kdl::value()};
+      auto* touchingNode = new BrushNode{
+        builder.createCuboid(
+          vm::bbox3d{vm::vec3d{-64, 0, 0}, vm::vec3d{16, 64, 64}}, "material")
+        | kdl::value()};
+      auto* subtrahendNode = new BrushNode{
+        builder.createCuboid(
+          vm::bbox3d{vm::vec3d{0, 0, 0}, vm::vec3d{32, 64, 64}}, "material")
+        | kdl::value()};
+
+      auto* layerNode = map.editorContext().currentLayer();
+      addNodes(map, {{layerNode, {minuendNode, touchingNode, subtrahendNode}}});
+
+      const auto keepSubtrahends = GENERATE(true, false);
+      CAPTURE(keepSubtrahends);
+
+      CHECK(csgSubtract(map, {minuendNode}, {subtrahendNode}, keepSubtrahends));
+
+      // the touching brush is left alone, and the minuend is replaced by its remainder
+      CHECK(touchingNode->parent() == layerNode);
+      CHECK(minuendNode->parent() == nullptr);
+      CHECK((subtrahendNode->parent() == layerNode) == keepSubtrahends);
+
+      REQUIRE(map.selection().brushes.size() == 1u);
+      CHECK(
+        map.selection().brushes.front()->logicalBounds()
+        == vm::bbox3d{vm::vec3d{32, 0, 0}, vm::vec3d{64, 64, 64}});
+      CHECK(layerNode->childCount() == (keepSubtrahends ? 3u : 2u));
+    }
+
     SECTION("Undo restores selection")
     {
       auto& map = fixture.create();
@@ -1410,6 +1448,17 @@ TEST_CASE("Map_Geometry")
       CHECK(!csgHollow(map));
       CHECK(map.editorContext().currentLayer()->childCount() == 2);
       CHECK(!map.modified());
+    }
+
+    SECTION("Hollow with a given thickness instead of the grid size")
+    {
+      selectAllNodes(map);
+      CHECK(csgHollow(map, 4.0));
+
+      // Both cubes are thick enough for walls of 4 units, so each is hollowed into 6
+      // brushes.
+      CHECK(map.editorContext().currentLayer()->childCount() == 12);
+      CHECK(map.selection().brushes.size() == 12u);
     }
   }
 

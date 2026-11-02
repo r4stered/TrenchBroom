@@ -20,23 +20,11 @@
 
 #pragma once
 
-#include "vm/util.h"
-
-#include <optional>
-#include <span>
-#include <string_view>
-
 namespace tb::cli
 {
 
 class Json;
 struct OpContext;
-
-/** The names of the axes that rotate and flip take: `x`, `y` and `z`. */
-std::span<const std::string_view> axisNames();
-
-/** The axis with the given name, if it is one of axisNames(). */
-std::optional<vm::axis::type> parseAxis(std::string_view name);
 
 /*
  * The transform ops: translate, rotate, scale and flip. Each moves its targets as the

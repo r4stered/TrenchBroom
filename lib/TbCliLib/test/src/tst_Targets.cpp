@@ -201,6 +201,42 @@ TEST_CASE("Targets")
     auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
     CHECK(nodeAndDescendants(*brush) == std::vector<mdl::Node*>{brush});
   }
+
+  SECTION("appendOnce")
+  {
+    auto* layer = resolveNodePath(worldNode, "layer:0").node;
+    auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
+    auto nodes = std::vector<mdl::Node*>{brush};
+    appendOnce(nodes, layer);
+    appendOnce(nodes, brush);
+    CHECK(nodes == std::vector<mdl::Node*>{brush, layer});
+  }
+
+  SECTION("ancestorsOf")
+  {
+    auto* layer = resolveNodePath(worldNode, "layer:0").node;
+    auto* group = resolveNodePath(worldNode, "layer:0/group:0").node;
+    auto* groupBrush = resolveNodePath(worldNode, "layer:0/group:0/brush:0").node;
+    auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
+    CHECK(
+      ancestorsOf({groupBrush, brush, group})
+      == std::vector<mdl::Node*>{group, layer, &worldNode});
+  }
+
+  SECTION("appendRemovedNodes")
+  {
+    auto* layer = resolveNodePath(worldNode, "layer:0").node;
+    auto* group = resolveNodePath(worldNode, "layer:0/group:0").node;
+    mdl::removeNodes(map, {group});
+
+    auto removed = std::vector<mdl::Node*>{group};
+    appendRemovedNodes({group, layer, &worldNode}, worldNode, removed);
+    CHECK(removed == std::vector<mdl::Node*>{group});
+
+    auto* groupBrush = group->children().front();
+    appendRemovedNodes({groupBrush, layer}, worldNode, removed);
+    CHECK(removed == std::vector<mdl::Node*>{group, groupBrush});
+  }
 }
 
 TEST_CASE("TargetResolver")

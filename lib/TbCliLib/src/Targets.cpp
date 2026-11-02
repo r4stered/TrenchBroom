@@ -235,6 +235,41 @@ std::vector<mdl::Node*> nodeAndDescendants(mdl::Node& node)
   return result;
 }
 
+void appendOnce(std::vector<mdl::Node*>& nodes, mdl::Node* node)
+{
+  if (std::ranges::find(nodes, node) == nodes.end())
+  {
+    nodes.push_back(node);
+  }
+}
+
+std::vector<mdl::Node*> ancestorsOf(const std::vector<mdl::Node*>& nodes)
+{
+  auto result = std::vector<mdl::Node*>{};
+  for (auto* node : nodes)
+  {
+    for (auto* parent = node->parent(); parent; parent = parent->parent())
+    {
+      appendOnce(result, parent);
+    }
+  }
+  return result;
+}
+
+void appendRemovedNodes(
+  const std::vector<mdl::Node*>& nodes,
+  const mdl::WorldNode& worldNode,
+  std::vector<mdl::Node*>& removed)
+{
+  for (auto* node : nodes)
+  {
+    if (!isInMap(*node, worldNode))
+    {
+      appendOnce(removed, node);
+    }
+  }
+}
+
 bool isTarget(const Json& value)
 {
   if (value.isArray())

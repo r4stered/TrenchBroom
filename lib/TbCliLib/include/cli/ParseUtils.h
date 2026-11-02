@@ -19,8 +19,11 @@
 
 #pragma once
 
+#include "vm/util.h"
+
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -47,5 +50,11 @@ std::optional<double> parseDecimal(std::string_view str);
  * or both, or nothing if any element is not a decimal number (see parseDecimal).
  */
 std::optional<std::vector<double>> parseNumberList(std::string_view str);
+
+/** The names of the axes that ops take: `x`, `y` and `z`. */
+std::span<const std::string_view> axisNames();
+
+/** The axis with the given name, if it is one of axisNames(). */
+std::optional<vm::axis::type> parseAxis(std::string_view name);
 
 } // namespace tb::cli

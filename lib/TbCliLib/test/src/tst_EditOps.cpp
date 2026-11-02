@@ -19,8 +19,12 @@
 
 #include "CliTestUtils.h"
 
+#include "vm/vec.h"
+
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -181,6 +185,162 @@ TEST_CASE("create_box")
     CHECK_THAT(result.out, ContainsSubstring("(default: layer:0)"));
     CHECK_THAT(result.out, ContainsSubstring("--as <$name>"));
     CHECK_THAT(result.out, ContainsSubstring("--dry-run"));
+  }
+}
+
+TEST_CASE("create_brush")
+{
+  auto fixture = EditFixture{};
+  const auto& map = fixture.map;
+
+  SECTION("creates the convex hull of the vertices at exactly their coordinates")
+  {
+    const auto json = runJson(
+      {"create_brush",
+       map,
+       "--vertices",
+       "0,0,0, 32.5,0,0, 0,32,0, 0,0,16.25, 4,4,4",
+       "--material",
+       "wedge",
+       "--as",
+       "$wedge"});
+    CHECK(json["ops"][0]["created"] == parseJsonLiteral(R"(["layer:0/brush:2"])"));
+    CHECK(json["bindings"] == parseJsonLiteral(R"({"$wedge": "layer:0/brush:2"})"));
+
+    const auto brush = runJson({"show", map, "layer:0/brush:2"})["node"];
+    // the point inside the hull is left out, and nothing is snapped
+    CHECK(brush["vertices"].size() == 4);
+    CHECK(
+      brush["aabb"]
+      == parseJsonLiteral(R"({"min": [0, 0, 0], "max": [32.5, 32, 16.25]})"));
+    CHECK(brush["textures"] == parseJsonLiteral(R"(["wedge"])"));
+  }
+
+  SECTION("creates the brush in a brush entity")
+  {
+    const auto json = parseOutput(fixture.apply(R"([{
+      "op": "create_brush", "material": "door", "parent": "layer:0/entity:1",
+      "vertices": [[16, 16, 0], [32, 16, 0], [16, 32, 0], [16, 16, 8]]
+    }])"));
+    CHECK(
+      json["ops"][0]["created"] == parseJsonLiteral(R"(["layer:0/entity:1/brush:1"])"));
+  }
+
+  SECTION("refuses vertices that span no volume")
+  {
+    const auto result = fixture.apply(R"([{
+      "op": "create_brush", "material": "a",
+      "vertices": [[0, 0, 0], [32, 0, 0], [0, 32, 0], [32, 32, 0]]
+    }])");
+    checkError(result, "op_failed", 1, 0);
+    CHECK(fixture.unchanged());
+  }
+
+  SECTION("refuses fewer than four vertices and an empty material")
+  {
+    checkError(
+      fixture.apply(R"([{
+        "op": "create_brush", "material": "a",
+        "vertices": [[0, 0, 0], [32, 0, 0], [0, 32, 0]]
+      }])"),
+      "invalid_argument",
+      2,
+      0);
+    checkError(
+      fixture.apply(R"([{
+        "op": "create_brush", "material": "",
+        "vertices": [[0, 0, 0], [32, 0, 0], [0, 32, 0], [0, 0, 32]]
+      }])"),
+      "invalid_argument",
+      2,
+      0);
+  }
+}
+
+TEST_CASE("create_shape")
+{
+  auto fixture = EditFixture{};
+  const auto& map = fixture.map;
+
+  /** A batch of one create_shape op, with the given arguments replacing the defaults. */
+  const auto shapeBatch = [](const std::string& kind, const std::string& args = "{}") {
+    auto op = parseJsonLiteral(
+      fmt::format(
+        R"({{"op": "create_shape", "kind": "{}", "bbox": {{"min": [0, 0, 0], "max": [64, 64, 128]}}, "sides": 8, "axis": "z", "material": "pillar"}})",
+        kind));
+    const auto replacements = parseJsonLiteral(args);
+    for (const auto& [key, value] : replacements.asObject())
+    {
+      op.set(key, value);
+    }
+    auto batch = Json::array();
+    batch.push(std::move(op));
+    return batch.dump();
+  };
+
+  SECTION("creates a cylinder or a cone that fills the bbox")
+  {
+    const auto [kind, faceCount] = GENERATE(
+      std::tuple{std::string{"cylinder"}, size_t{10}},
+      std::tuple{std::string{"cone"}, size_t{9}});
+    CAPTURE(kind);
+
+    const auto json = parseOutput(fixture.apply(shapeBatch(kind)));
+    CHECK(json["ops"][0]["created"] == parseJsonLiteral(R"(["layer:0/brush:2"])"));
+
+    const auto brush = runJson({"show", map, "layer:0/brush:2"})["node"];
+    CHECK(
+      brush["aabb"] == parseJsonLiteral(R"({"min": [0, 0, 0], "max": [64, 64, 128]})"));
+    CHECK(brush["faces"].size() == faceCount);
+    CHECK(brush["textures"] == parseJsonLiteral(R"(["pillar"])"));
+  }
+
+  SECTION("creates an arch of several brushes and binds them as a list")
+  {
+    const auto json = parseOutput(fixture.apply(R"([{
+      "op": "create_shape", "kind": "arch", "bbox": {"min": [0, 0, 0], "max": [128, 16, 64]},
+      "sides": 8, "axis": "y", "thickness": 8, "material": "stone", "as": "$arch"
+    }])"));
+    const auto& created = json["ops"][0]["created"];
+    CHECK(created.size() > 1);
+    CHECK(json["bindings"]["$arch"] == created);
+
+    // the arch rises from the bottom of the bbox and fills it
+    auto min = vm::vec3d{std::numeric_limits<double>::max()};
+    auto max = vm::vec3d{std::numeric_limits<double>::lowest()};
+    for (const auto& path : created.asArray())
+    {
+      const auto aabb = runJson({"show", map, path.asString()})["node"]["aabb"];
+      for (size_t i = 0; i < 3; ++i)
+      {
+        min[i] = std::min(min[i], aabb["min"][i].asNumber());
+        max[i] = std::max(max[i], aabb["max"][i].asNumber());
+      }
+    }
+    CHECK(min == vm::vec3d{0, 0, 0});
+    CHECK(max == vm::vec3d{128, 16, 64});
+  }
+
+  SECTION("refuses malformed arguments")
+  {
+    const auto args = GENERATE(
+      R"({"kind": "sphere"})",
+      R"({"sides": 2})",
+      R"({"sides": 8.5})",
+      R"({"sides": 97})",
+      R"({"thickness": 8})",
+      R"({"material": ""})",
+      R"({"bbox": {"min": [0, 0, 0], "max": [64, 0, 128]}})");
+    CAPTURE(args);
+
+    checkError(fixture.apply(shapeBatch("cylinder", args)), "invalid_argument", 2, 0);
+    CHECK(fixture.unchanged());
+  }
+
+  SECTION("refuses an arch thickness that is not greater than 0")
+  {
+    checkError(
+      fixture.apply(shapeBatch("arch", R"({"thickness": 0})")), "invalid_argument", 2, 0);
   }
 }
 

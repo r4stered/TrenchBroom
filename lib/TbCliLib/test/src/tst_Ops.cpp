@@ -42,7 +42,7 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 18);
+    REQUIRE(json["ops"].size() == 25);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
     const auto opNamed = [&](const std::string_view name) -> const Json& {
       const auto& ops = json["ops"].asArray();
@@ -101,6 +101,16 @@ TEST_CASE("ops command")
       == parseJsonLiteral(R"(["layer", "group", "brush_entity"])"));
     CHECK(createBox["properties"]["as"]["pattern"].isString());
 
+    const auto& createBrush = opNamed("create_brush")["schema"]["properties"];
+    CHECK(createBrush["vertices"]["minItems"] == Json{4});
+    CHECK(createBrush["vertices"]["items"]["minItems"] == Json{3});
+    CHECK(
+      opNamed("create_shape")["schema"]["properties"]["kind"]["enum"]
+      == parseJsonLiteral(R"(["cylinder", "cone", "arch"])"));
+    CHECK(
+      opNamed("subtract")["schema"]["properties"]["from"]["x-expands-to-brushes"]
+      == Json{true});
+
     const auto& fix = opNamed("fix");
     CHECK(fix["name"] == Json{"fix"});
     CHECK(
@@ -110,8 +120,8 @@ TEST_CASE("ops command")
       == parseJsonLiteral(
         R"(["world", "layer", "group", "point_entity", "brush_entity", "brush", "patch", "face"])"));
 
-    const auto& createPointEntity = json["ops"][1]["schema"]["properties"];
-    CHECK(json["ops"][1]["name"] == Json{"create_point_entity"});
+    const auto& createPointEntity =
+      opNamed("create_point_entity")["schema"]["properties"];
     CHECK(createPointEntity["properties"] == parseJsonLiteral(R"({
       "type": "object",
       "additionalProperties": {"type": "string"},
@@ -123,13 +133,13 @@ TEST_CASE("ops command")
         "default": false
       })"));
 
-    const auto& createBrushEntity = json["ops"][2]["schema"]["properties"];
+    const auto& createBrushEntity =
+      opNamed("create_brush_entity")["schema"]["properties"];
     CHECK(
       createBrushEntity["brushes"]["x-node-kinds"] == parseJsonLiteral(R"(["brush"])"));
     CHECK(createBrushEntity["brushes"]["x-expands-to-brushes"] == Json{true});
 
-    const auto& setSpawnflag = json["ops"][7];
-    CHECK(setSpawnflag["name"] == Json{"set_spawnflag"});
+    const auto& setSpawnflag = opNamed("set_spawnflag");
     CHECK(setSpawnflag["schema"]["properties"]["flag"]["oneOf"] == parseJsonLiteral(R"([
         {"type": "string", "minLength": 1},
         {"type": "integer", "minimum": 1, "maximum": 1073741824}
@@ -315,6 +325,36 @@ TEST_CASE("Ops")
       CHECK_THROWS_AS(
         parseOpFlags(setSpawnflag, {{"target", "world"}, {"flag", "1"}, {"on", "yes"}}),
         CliError);
+    }
+
+    SECTION("points and shape kind flags")
+    {
+      const auto& createBrush = *findOpDef("create_brush");
+      CHECK(
+        parseOpFlags(
+          createBrush, {{"vertices", "0,0,0, 8,0,0, 0,8,0, 0,0,8.5"}, {"material", "a"}})
+          .args["vertices"]
+        == parseJsonLiteral("[[0, 0, 0], [8, 0, 0], [0, 8, 0], [0, 0, 8.5]]"));
+      // not a multiple of three numbers, and fewer than four points
+      CHECK_THROWS_AS(
+        parseOpFlags(
+          createBrush, {{"vertices", "0,0,0,8,0,0,0,8,0,0,0"}, {"material", "a"}}),
+        CliError);
+      CHECK_THROWS_AS(
+        parseOpFlags(createBrush, {{"vertices", "0,0,0,8,0,0,0,8,0"}, {"material", "a"}}),
+        CliError);
+
+      const auto& createShape = *findOpDef("create_shape");
+      const auto shapeFlags = [](const std::string& kind) {
+        return OpFlags{
+          {"kind", kind},
+          {"bbox", "0,0,0,64,64,64"},
+          {"sides", "8"},
+          {"axis", "z"},
+          {"material", "a"}};
+      };
+      CHECK(parseOpFlags(createShape, shapeFlags("cone")).args["kind"] == Json{"cone"});
+      CHECK_THROWS_AS(parseOpFlags(createShape, shapeFlags("sphere")), CliError);
     }
   }
 

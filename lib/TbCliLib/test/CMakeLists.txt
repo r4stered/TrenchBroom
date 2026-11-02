@@ -7,6 +7,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliValidators.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Config.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CsgOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Describe.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EditOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_EntityJson.cpp

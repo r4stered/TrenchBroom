@@ -110,6 +110,21 @@ bool isInMap(const mdl::Node& node, const mdl::WorldNode& worldNode);
 /** The given node and everything below it, depth first, in file order. */
 std::vector<mdl::Node*> nodeAndDescendants(mdl::Node& node);
 
+/** Appends the node unless the nodes contain it already. */
+void appendOnce(std::vector<mdl::Node*>& nodes, mdl::Node* node);
+
+/** The given nodes' ancestors, each once. */
+std::vector<mdl::Node*> ancestorsOf(const std::vector<mdl::Node*>& nodes);
+
+/**
+ * Appends those of the given nodes that are no longer in the map to `removed`, each
+ * once: the nodes an op replaced, or their former ancestors that it left empty.
+ */
+void appendRemovedNodes(
+  const std::vector<mdl::Node*>& nodes,
+  const mdl::WorldNode& worldNode,
+  std::vector<mdl::Node*>& removed);
+
 /** The binding names that the given target refers to. */
 std::vector<std::string> bindingReferences(const Json& target);
 

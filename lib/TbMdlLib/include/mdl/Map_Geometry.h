@@ -33,6 +33,7 @@
 
 namespace tb::mdl
 {
+class BrushNode;
 class Map;
 
 bool transformSelection(
@@ -74,8 +75,28 @@ bool snapVertices(Map& map, double snapTo);
 
 bool csgConvexMerge(Map& map);
 bool csgSubtract(Map& map);
+
+/**
+ * Subtracts the subtrahends from each of the minuends and replaces the minuends with the
+ * fragments that remain, which are selected afterwards. The subtrahends are removed
+ * unless `keepSubtrahends` is set.
+ */
+bool csgSubtract(
+  Map& map,
+  const std::vector<BrushNode*>& minuendNodes,
+  const std::vector<BrushNode*>& subtrahendNodes,
+  bool keepSubtrahends);
+
 bool csgIntersect(Map& map);
+
+/** Hollows the selected brushes with walls as thick as the grid size. */
 bool csgHollow(Map& map);
+
+/**
+ * Hollows the selected brushes with walls of the given thickness. Brushes too small to be
+ * hollowed are left as they are; fails if no brush can be hollowed.
+ */
+bool csgHollow(Map& map, double thickness);
 
 bool extrudeBrushes(
   Map& map, const std::vector<vm::polygon3d>& faces, const vm::vec3d& delta);

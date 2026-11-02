@@ -20,6 +20,7 @@
 #include "cli/Ops.h"
 
 #include "cli/CliError.h"
+#include "cli/CsgOps.h"
 #include "cli/EditOps.h"
 #include "cli/FaceOps.h"
 #include "cli/IssueTypes.h"
@@ -102,6 +103,20 @@ bool isNumber(const Json& value)
 bool isAxis(const Json& value)
 {
   return value.isString() && parseAxis(value.asString()).has_value();
+}
+
+/** The fewest points that span a volume. */
+constexpr auto MinPoints = size_t{4};
+
+bool isPoints(const Json& value)
+{
+  return value.isArray() && value.size() >= MinPoints
+         && std::ranges::all_of(value.asArray(), isVec3);
+}
+
+bool isShapeKind(const Json& value)
+{
+  return value.isString() && parseShapeKind(value.asString()).has_value();
 }
 
 bool isBox(const Json& value)
@@ -214,6 +229,20 @@ Json enumSchema(const auto& values)
 Json axisSchema()
 {
   return enumSchema(axisNames());
+}
+
+Json pointsSchema()
+{
+  auto result = Json::object();
+  result.set("type", "array");
+  result.set("items", vec3Schema());
+  result.set("minItems", MinPoints);
+  return result;
+}
+
+Json shapeKindSchema()
+{
+  return enumSchema(shapeKindNames());
 }
 
 Json boxSchema()
@@ -460,6 +489,28 @@ std::optional<Json> boxFromFlag(const std::string& value)
   return objectOrFromFlag(value, boxFromNumbersFlag);
 }
 
+/** Points written as their numbers `x1,y1,z1,x2,y2,z2,...`. */
+std::optional<Json> pointsFromFlag(const std::string& value)
+{
+  const auto numbers = parseNumberList(value);
+  if (!numbers || numbers->size() % 3 != 0)
+  {
+    return std::nullopt;
+  }
+
+  auto result = Json::array();
+  for (size_t i = 0; i < numbers->size(); i += 3)
+  {
+    auto point = Json::array();
+    for (size_t j = 0; j < 3; ++j)
+    {
+      point.push((*numbers)[i + j]);
+    }
+    result.push(std::move(point));
+  }
+  return result;
+}
+
 /** A number, or `{"add": n}` written as JSON. */
 std::optional<Json> numberOrAddFromFlag(const std::string& value)
 {
@@ -496,6 +547,20 @@ std::optional<Json> faceSelectorFromFlag(const std::string& value)
   return result;
 }
 
+/** The shape kinds as help text gives them, as in `<cylinder|cone|arch>`. */
+const auto ShapeKindPlaceholder =
+  fmt::format("<{}>", kdl::str_join(shapeKindNames(), "|"));
+
+/** The shape kinds as error messages give them, as in `"cylinder" or "cone"`. */
+const auto ShapeKindExpected = [] {
+  auto quoted = std::vector<std::string>{};
+  for (const auto& name : shapeKindNames())
+  {
+    quoted.push_back(fmt::format("\"{}\"", name));
+  }
+  return kdl::str_join(quoted, ", ", " or ", " or ");
+}();
+
 /** How the arguments of one type are written, checked and described. */
 struct ArgTypeTraits
 {
@@ -510,7 +575,7 @@ struct ArgTypeTraits
   std::optional<Json> (*fromFlag)(const std::string& value);
 };
 
-const auto ArgTypes = std::array<ArgTypeTraits, 14>{{
+const auto ArgTypes = std::array<ArgTypeTraits, 16>{{
   {ArgType::Vec3,
    "<x,y,z>",
    "three numbers [x, y, z] (x,y,z as a flag)",
@@ -578,6 +643,18 @@ const auto ArgTypes = std::array<ArgTypeTraits, 14>{{
    isFaceSelector,
    faceSelectorSchema,
    faceSelectorFromFlag},
+  {ArgType::Points,
+   "<x1,y1,z1,x2,y2,z2,...>",
+   "four or more points [[x, y, z], ...] (x1,y1,z1,x2,y2,z2,... as a flag)",
+   isPoints,
+   pointsSchema,
+   pointsFromFlag},
+  {ArgType::ShapeKind,
+   ShapeKindPlaceholder,
+   ShapeKindExpected,
+   isShapeKind,
+   shapeKindSchema,
+   stringFromFlag},
 }};
 
 const ArgTypeTraits& traits(const ArgType type)
@@ -794,6 +871,21 @@ ArgDef facesArg()
     "normals are within 0.5 degrees of the given directions; not with face paths"};
 }
 
+/** The optional NodePath argument `parent` of the ops that create brushes. */
+ArgDef brushParentArg(const std::string_view description)
+{
+  return ArgDef{
+    "parent",
+    ArgType::NodePath,
+    std::string{description},
+    false,
+    Json{"layer:0"},
+    {{TargetKind::Layer, TargetKind::Group, TargetKind::BrushEntity}}};
+}
+
+/** What CSG ops accept: brushes, and containers for the brushes inside them. */
+const auto CsgTargetRules = TargetRules{{TargetKind::Brush}, true};
+
 /** What property ops accept: the world and entities, but not brushes. */
 const auto PropertyTargetRules =
   TargetRules{{TargetKind::World, TargetKind::PointEntity, TargetKind::BrushEntity}};
@@ -809,16 +901,65 @@ std::vector<OpDef> makeOpDefs()
         ArgDef{"min", ArgType::Vec3, "the minimum corner, in absolute units", true},
         ArgDef{"max", ArgType::Vec3, "the maximum corner, in absolute units", true},
         ArgDef{"material", ArgType::String, "the material of every face", true},
-        ArgDef{
-          "parent",
-          ArgType::NodePath,
-          "the layer, group or brush entity to create the box in",
-          false,
-          Json{"layer:0"},
-          {{TargetKind::Layer, TargetKind::Group, TargetKind::BrushEntity}}},
+        brushParentArg("the layer, group or brush entity to create the box in"),
         ArgDef{"as", ArgType::Binding, "binds the created brush to this name"},
       },
       createBox,
+    },
+    OpDef{
+      "create_brush",
+      "Creates a brush that is the convex hull of the given vertices, at exactly their "
+      "coordinates, with one material on every face. Vertices inside the hull are "
+      "left out.",
+      {
+        ArgDef{
+          "vertices",
+          ArgType::Points,
+          "the points to take the convex hull of, in absolute units; they must span a "
+          "volume",
+          true},
+        ArgDef{"material", ArgType::String, "the material of every face", true},
+        brushParentArg("the layer, group or brush entity to create the brush in"),
+        ArgDef{"as", ArgType::Binding, "binds the created brush to this name"},
+      },
+      createBrush,
+      checkCreateBrushArgs,
+    },
+    OpDef{
+      "create_shape",
+      "Creates a shape that fills a bbox, as the editor's shape tool does: a cylinder "
+      "or cone brush around an axis, or an arch of several brushes that rises from the "
+      "bottom of the bbox. Circles are edge-aligned with the given number of sides.",
+      {
+        ArgDef{"kind", ArgType::ShapeKind, "the shape", true},
+        ArgDef{
+          "bbox", ArgType::Box, "the bounds the shape fills, in absolute units", true},
+        ArgDef{
+          "sides",
+          ArgType::Number,
+          "the number of sides of the full circle, a whole number from 3 to 96; an "
+          "arch is the upper half of it",
+          true},
+        ArgDef{
+          "axis",
+          ArgType::Axis,
+          "the axis of a cylinder or cone, or the direction an arch's tunnel runs in; an "
+          "arch rises along the more vertical of the other two axes",
+          true},
+        ArgDef{"material", ArgType::String, "the material of every face", true},
+        ArgDef{
+          "thickness",
+          ArgType::Number,
+          "the thickness of an arch's band (default: 16); only for arches"},
+        brushParentArg("the layer, group or brush entity to create the shape in"),
+        ArgDef{
+          "as",
+          ArgType::Binding,
+          "binds the created brushes to this name, as a list if there are several, "
+          "as for most arches"},
+      },
+      createShape,
+      checkCreateShapeArgs,
     },
     OpDef{
       "create_point_entity",
@@ -1067,6 +1208,72 @@ std::vector<OpDef> makeOpDefs()
       resetUv,
     },
     OpDef{
+      "hollow",
+      "Hollows brushes: replaces each with walls of the given thickness around its "
+      "inside. Unlike the editor, the thickness does not depend on a grid.",
+      {
+        targetArg("the brushes to hollow", CsgTargetRules),
+        ArgDef{
+          "thickness",
+          ArgType::Number,
+          "the thickness of the walls, in units; greater than 0",
+          false,
+          Json{16}},
+      },
+      hollow,
+      checkHollowArgs,
+    },
+    OpDef{
+      "subtract",
+      "Subtracts the cutters from the brushes of from that they overlap, replacing each "
+      "with the fragments that remain, and deletes the cutters unless keep_cutters is "
+      "set. Warns nothing_cut, and changes nothing, if no cutter overlaps a brush of "
+      "from. A query for cutters or from needs a batch.",
+      {
+        ArgDef{
+          "cutters",
+          ArgType::Target,
+          "the brushes to cut with",
+          true,
+          std::nullopt,
+          CsgTargetRules},
+        ArgDef{
+          "from",
+          ArgType::Target,
+          "the brushes to cut; brushes that no cutter overlaps, and the cutters "
+          "themselves, are left as they are",
+          true,
+          std::nullopt,
+          CsgTargetRules},
+        ArgDef{
+          "keep_cutters",
+          ArgType::Bool,
+          "keep the cutters instead of deleting them",
+          false,
+          Json{false}},
+      },
+      subtract,
+    },
+    OpDef{
+      "merge",
+      "Replaces two or more brushes with their convex hull, in the group, layer or "
+      "entity of the first. The hull's faces take the materials of the best matching "
+      "faces.",
+      {
+        targetArg("the brushes to merge", CsgTargetRules),
+      },
+      merge,
+    },
+    OpDef{
+      "intersect",
+      "Replaces two or more brushes with the space they all share, in the group or "
+      "layer that holds them. Fails if they share no volume.",
+      {
+        targetArg("the brushes to intersect", CsgTargetRules),
+      },
+      intersect,
+    },
+    OpDef{
       "delete",
       "Deletes groups, entities, brushes and patches. An entity or group left empty "
       "is deleted with them.",
@@ -1114,6 +1321,22 @@ std::vector<OpDef> makeOpDefs()
       fixIssues,
       checkFixArgs,
     },
+    OpDef{
+      "snap_vertices",
+      "Moves every vertex of brushes to the nearest multiple of the grid, for example "
+      "to clean up off-grid vertices that CSG left. Materials stay aligned to the faces. "
+      "Brushes whose vertices move are modified.",
+      {
+        targetArg("the brushes whose vertices to snap", CsgTargetRules),
+        ArgDef{
+          "grid",
+          ArgType::Number,
+          "the grid size to snap to, in units; greater than 0",
+          true},
+      },
+      snapVertices,
+      checkSnapVerticesArgs,
+    },
   };
 }
 
@@ -1135,6 +1358,20 @@ void checkBindingReferences(const Op& op, const std::set<std::string>& bindings)
 }
 
 } // namespace
+
+void checkPositiveArg(
+  const std::string_view opName, const std::string_view argName, const Json& args)
+{
+  if (!(args[argName].asNumber() > 0))
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{}: \"{}\" must be greater than 0, not {}",
+        opName,
+        argName,
+        args[argName].dump()));
+  }
+}
 
 const NodeOrFace& OpContext::node(const std::string_view name) const
 {

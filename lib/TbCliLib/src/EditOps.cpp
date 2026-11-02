@@ -19,6 +19,7 @@
 
 #include "cli/EditOps.h"
 
+#include "base/Result.h"
 #include "cli/CliError.h"
 #include "cli/CliValidators.h"
 #include "cli/GeometryJson.h"
@@ -29,6 +30,7 @@
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
+#include "mdl/CircleShape.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
@@ -51,6 +53,7 @@
 #include "kd/contracts.h"
 #include "kd/flat_map.h"
 #include "kd/ranges/to.h"
+#include "kd/result.h"
 #include "kd/string_compare.h"
 #include "kd/string_utils.h"
 #include "kd/vector_utils.h"
@@ -62,12 +65,15 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <functional>
 #include <initializer_list>
 #include <iterator>
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -78,44 +84,6 @@ namespace tb::cli
 {
 namespace
 {
-
-/** Appends the node unless the nodes contain it already. */
-void appendOnce(std::vector<mdl::Node*>& nodes, mdl::Node* node)
-{
-  if (std::ranges::find(nodes, node) == nodes.end())
-  {
-    nodes.push_back(node);
-  }
-}
-
-/** The given nodes' ancestors, each once. */
-std::vector<mdl::Node*> ancestorsOf(const std::vector<mdl::Node*>& nodes)
-{
-  auto result = std::vector<mdl::Node*>{};
-  for (auto* node : nodes)
-  {
-    for (auto* parent = node->parent(); parent; parent = parent->parent())
-    {
-      appendOnce(result, parent);
-    }
-  }
-  return result;
-}
-
-/** Appends those of the given ancestors that are no longer in the map to `removed`. */
-void appendRemovedAncestors(
-  const std::vector<mdl::Node*>& ancestors,
-  const mdl::WorldNode& worldNode,
-  std::vector<mdl::Node*>& removed)
-{
-  for (auto* ancestor : ancestors)
-  {
-    if (!isInMap(*ancestor, worldNode))
-    {
-      appendOnce(removed, ancestor);
-    }
-  }
-}
 
 /**
  * Records that brushes moved out of the given former ancestors: the brushes and the
@@ -139,7 +107,7 @@ void recordMoveOutcome(
       appendOnce(outcome.modified, ancestor);
     }
   }
-  appendRemovedAncestors(formerAncestors, worldNode, outcome.removed);
+  appendRemovedNodes(formerAncestors, worldNode, outcome.removed);
 }
 
 /**
@@ -512,7 +480,122 @@ void recordFixOutcome(
       appendOnce(outcome.modified, child);
     }
   }
-  appendRemovedAncestors(scope.ancestors, worldNode, outcome.removed);
+  appendRemovedNodes(scope.ancestors, worldNode, outcome.removed);
+}
+
+/** The builder that the editor's brush tools use, with the game's default UV. */
+mdl::BrushBuilder brushBuilderOf(const mdl::Map& map)
+{
+  const auto& faceAttribsConfig = map.gameInfo().gameConfig.faceAttribsConfig;
+  return mdl::BrushBuilder{
+    map.worldNode().mapFormat(),
+    map.worldBounds(),
+    faceAttribsConfig.defaultUvAttributes,
+    faceAttribsConfig.defaultSurfaceAttributes};
+}
+
+/** A built brush as a list of one, as addBrushes takes it. */
+Result<std::vector<mdl::Brush>> asList(Result<mdl::Brush> brush)
+{
+  return std::move(brush)
+         | kdl::transform([](auto b) { return std::vector{std::move(b)}; });
+}
+
+/**
+ * Adds the brushes that a create op built to its `parent` and reports them as created.
+ * Warns `missing_material` if the map's materials can be checked and a face's material
+ * is not among them.
+ *
+ * @throw CliError `op_failed` if the brushes could not be built or added
+ */
+void addBrushes(OpContext& context, Result<std::vector<mdl::Brush>> brushes)
+{
+  const auto opName = context.opName;
+  if (!brushes)
+  {
+    throw CliError{
+      ErrorCode::OpFailed,
+      fmt::format(
+        "{}: cannot create the brush: {}", opName, std::get<Error>(brushes.error()).msg)};
+  }
+
+  auto& map = context.map;
+  auto brushNodes = std::vector<std::unique_ptr<mdl::BrushNode>>{};
+  auto nodes = std::vector<mdl::Node*>{};
+  for (auto& brush : brushes.value())
+  {
+    brushNodes.push_back(std::make_unique<mdl::BrushNode>(std::move(brush)));
+    nodes.push_back(brushNodes.back().get());
+  }
+  if (mdl::addNodes(map, {{context.node("parent").node, nodes}}).empty())
+  {
+    throw CliError{
+      ErrorCode::OpFailed, fmt::format("{}: cannot add the brush to the map", opName)};
+  }
+
+  auto missingMaterial = false;
+  for (auto& brushNode : brushNodes)
+  {
+    missingMaterial = missingMaterial
+                      || std::ranges::any_of(
+                        brushNode->brush().faces(),
+                        [&](const auto& face) { return isMaterialMissing(map, face); });
+    context.outcome.created.push_back(brushNode.release());
+  }
+  if (missingMaterial)
+  {
+    context.outcome.warnings.emplace_back("missing_material");
+  }
+}
+
+/**
+ * Checks the `material` argument of a create op.
+ *
+ * @throw CliError `invalid_argument` if it is empty
+ */
+void checkMaterialArg(const std::string_view opName, const Json& args)
+{
+  if (args["material"].asString().empty())
+  {
+    throw invalidArgument(fmt::format("{}: \"material\" must not be empty", opName));
+  }
+}
+
+/** The names of the shape kinds, in the order of ShapeKind. */
+constexpr auto ShapeKindNames =
+  std::array<std::string_view, 3>{"cylinder", "cone", "arch"};
+
+/** The range of a shape's sides, as in the editor's shape tool. */
+constexpr auto MinShapeSides = 3;
+constexpr auto MaxShapeSides = 96;
+
+/** The thickness of an arch's band unless one is given, as in the editor's shape tool. */
+constexpr auto DefaultArchThickness = 16.0;
+
+/** The brushes of the shape that create_shape's arguments describe. */
+Result<std::vector<mdl::Brush>> buildShape(const mdl::Map& map, const Json& args)
+{
+  const auto bounds = bboxFromJson(args["bbox"]);
+  const auto circleShape = mdl::CircleShape{
+    mdl::EdgeAlignedCircle{static_cast<size_t>(args["sides"].asNumber())}};
+  const auto axis = *parseAxis(args["axis"].asString());
+  const auto& material = args["material"].asString();
+  const auto builder = brushBuilderOf(map);
+
+  switch (*parseShapeKind(args["kind"].asString()))
+  {
+  case ShapeKind::Cylinder:
+    return asList(builder.createCylinder(bounds, circleShape, axis, material));
+  case ShapeKind::Cone:
+    return asList(builder.createCone(bounds, circleShape, axis, material));
+  default: // ShapeKind::Arch
+    return builder.createArch(
+      bounds,
+      args.find("thickness") ? args["thickness"].asNumber() : DefaultArchThickness,
+      circleShape,
+      axis,
+      material);
+  }
 }
 
 } // namespace
@@ -534,43 +617,91 @@ void createBox(OpContext& context)
     }
   }
 
-  const auto& material = args["material"].asString();
-  if (material.empty())
+  checkMaterialArg("create_box", args);
+
+  addBrushes(
+    context,
+    asList(brushBuilderOf(context.map)
+             .createCuboid(vm::bbox3d{min, max}, args["material"].asString())));
+}
+
+void createBrush(OpContext& context)
+{
+  const auto points = context.args["vertices"].asArray()
+                      | std::views::transform(vec3FromJson)
+                      | kdl::ranges::to<std::vector>();
+  addBrushes(
+    context,
+    asList(brushBuilderOf(context.map)
+             .createBrush(points, context.args["material"].asString())));
+}
+
+void checkCreateBrushArgs(const Json& args)
+{
+  checkMaterialArg("create_brush", args);
+}
+
+std::span<const std::string_view> shapeKindNames()
+{
+  return ShapeKindNames;
+}
+
+std::optional<ShapeKind> parseShapeKind(const std::string_view name)
+{
+  const auto it = std::ranges::find(ShapeKindNames, name);
+  return it != ShapeKindNames.end()
+           ? std::optional{static_cast<ShapeKind>(it - ShapeKindNames.begin())}
+           : std::nullopt;
+}
+
+void createShape(OpContext& context)
+{
+  auto brushes = buildShape(context.map, context.args);
+  if (brushes && brushes.value().empty())
   {
-    throw invalidArgument("create_box: \"material\" must not be empty");
-  }
-
-  const auto& parent = context.node("parent");
-
-  auto& map = context.map;
-  const auto& faceAttribsConfig = map.gameInfo().gameConfig.faceAttribsConfig;
-  const auto builder = mdl::BrushBuilder{
-    map.worldNode().mapFormat(),
-    map.worldBounds(),
-    faceAttribsConfig.defaultUvAttributes,
-    faceAttribsConfig.defaultSurfaceAttributes};
-
-  auto brush = builder.createCuboid(vm::bbox3d{min, max}, material);
-  if (!brush)
-  {
+    // the editor's arch skips the pieces that the bbox leaves no room for
     throw CliError{
-      ErrorCode::OpFailed,
-      fmt::format(
-        "create_box: cannot create the box: {}", std::get<Error>(brush.error()).msg)};
+      ErrorCode::OpFailed, "create_shape: the bbox is too small for the shape"};
+  }
+  addBrushes(context, std::move(brushes));
+}
+
+void checkCreateShapeArgs(const Json& args)
+{
+  const auto bounds = bboxFromJson(args["bbox"]);
+  for (size_t i = 0; i < 3; ++i)
+  {
+    if (!(bounds.min[i] < bounds.max[i]))
+    {
+      throw invalidArgument(
+        fmt::format(
+          "create_shape: the bbox's min must be less than its max on every axis, not {}",
+          args["bbox"].dump()));
+    }
   }
 
-  auto brushNode = std::make_unique<mdl::BrushNode>(std::move(brush).value());
-  if (mdl::addNodes(map, {{parent.node, {brushNode.get()}}}).empty())
+  const auto sides = args["sides"].asNumber();
+  if (std::trunc(sides) != sides || sides < MinShapeSides || sides > MaxShapeSides)
   {
-    throw CliError{ErrorCode::OpFailed, "create_box: cannot add the box to the map"};
+    throw invalidArgument(
+      fmt::format(
+        "create_shape: \"sides\" must be a whole number from {} to {}, not {}",
+        MinShapeSides,
+        MaxShapeSides,
+        args["sides"].dump()));
   }
-  if (std::ranges::any_of(brushNode->brush().faces(), [&](const auto& face) {
-        return isMaterialMissing(map, face);
-      }))
+
+  if (args.find("thickness"))
   {
-    context.outcome.warnings.emplace_back("missing_material");
+    if (*parseShapeKind(args["kind"].asString()) != ShapeKind::Arch)
+    {
+      throw invalidArgument(
+        "create_shape: \"thickness\" is only for arches, the thickness of their band");
+    }
+    checkPositiveArg("create_shape", "thickness", args);
   }
-  context.outcome.created.push_back(brushNode.release());
+
+  checkMaterialArg("create_shape", args);
 }
 
 void createPointEntity(OpContext& context)
@@ -813,7 +944,7 @@ void deleteNode(OpContext& context)
   // Removing the last child of an entity or group also removes the emptied parent.
   auto& removed = context.outcome.removed;
   removed = targets;
-  appendRemovedAncestors(ancestors, worldNode, removed);
+  appendRemovedNodes(ancestors, worldNode, removed);
 }
 
 void checkFixArgs(const Json& args)

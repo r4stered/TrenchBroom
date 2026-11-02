@@ -18,15 +18,10 @@
  */
 
 #include "CliTestUtils.h"
-#include "cli/TransformOps.h"
-
-#include "vm/util.h"
 
 #include <fmt/format.h>
 
-#include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -57,24 +52,6 @@ Json aabbOf(const std::string& map, const std::string& path)
 // maps/simple.map: layer:0 holds brush:0 (-64 -64 -16 to 64 64 0), brush:1 (-64 -64 0
 // to -48 64 128), entity:0 (info_player_start at 0 80 24), entity:1 (func_door, 16 -16 0
 // to 48 16 96) and entity:2 (light at 100.1234 0 64)
-
-TEST_CASE("TransformOps")
-{
-  SECTION("axisNames")
-  {
-    CHECK(
-      std::vector<std::string_view>(axisNames().begin(), axisNames().end())
-      == std::vector<std::string_view>{"x", "y", "z"});
-  }
-
-  SECTION("parseAxis")
-  {
-    CHECK(parseAxis("x") == vm::axis::x);
-    CHECK(parseAxis("z") == vm::axis::z);
-    CHECK(parseAxis("X") == std::nullopt);
-    CHECK(parseAxis("+z") == std::nullopt);
-  }
-}
 
 TEST_CASE("translate")
 {

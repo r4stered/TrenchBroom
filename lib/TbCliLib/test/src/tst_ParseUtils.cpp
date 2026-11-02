@@ -19,8 +19,11 @@
 
 #include "cli/ParseUtils.h"
 
+#include "vm/util.h"
+
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -99,6 +102,21 @@ TEST_CASE("ParseUtils")
     CHECK(parseNumberList("") == Numbers{});
     CHECK(parseNumberList("1,x,3") == std::nullopt);
     CHECK(parseNumberList("1;2") == std::nullopt);
+  }
+
+  SECTION("axisNames")
+  {
+    CHECK(
+      std::vector<std::string_view>(axisNames().begin(), axisNames().end())
+      == std::vector<std::string_view>{"x", "y", "z"});
+  }
+
+  SECTION("parseAxis")
+  {
+    CHECK(parseAxis("x") == vm::axis::x);
+    CHECK(parseAxis("z") == vm::axis::z);
+    CHECK(parseAxis("X") == std::nullopt);
+    CHECK(parseAxis("+z") == std::nullopt);
   }
 }
 

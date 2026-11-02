@@ -19,6 +19,10 @@
 
 #pragma once
 
+#include <optional>
+#include <span>
+#include <string_view>
+
 namespace tb::cli
 {
 
@@ -36,6 +40,57 @@ struct OpContext;
  * and the material is not among them.
  */
 void createBox(OpContext& context);
+
+/**
+ * `create_brush {vertices, material, parent}`: the convex hull of the vertices as a
+ * brush in a layer, group or brush entity, at exactly the given coordinates. Warns
+ * `missing_material` as create_box does.
+ *
+ * @throw CliError `op_failed` if the vertices span no volume
+ */
+void createBrush(OpContext& context);
+
+/**
+ * Checks the arguments of `create_brush`.
+ *
+ * @throw CliError `invalid_argument` if the material is empty
+ */
+void checkCreateBrushArgs(const Json& args);
+
+/** The kinds of shape that `create_shape` creates. */
+enum class ShapeKind
+{
+  Cylinder,
+  Cone,
+  Arch,
+};
+
+/** The names of the shape kinds: `cylinder`, `cone` and `arch`. */
+std::span<const std::string_view> shapeKindNames();
+
+/** The shape kind with the given name, if it is one of shapeKindNames(). */
+std::optional<ShapeKind> parseShapeKind(std::string_view name);
+
+/**
+ * `create_shape {kind, bbox, sides, axis, material, thickness?, parent}`: a cylinder or
+ * cone brush, or an arch of several brushes, filling the bbox as the editor's shape tool
+ * does, with an edge-aligned circle of the given number of sides around the axis. An
+ * arch is the upper half of a hollow cylinder whose band is `thickness` thick (default
+ * 16); it rises along the more vertical of the two other axes. Warns `missing_material`
+ * as create_box does.
+ *
+ * @throw CliError `op_failed` if the bbox is too small for the shape
+ */
+void createShape(OpContext& context);
+
+/**
+ * Checks the arguments of `create_shape`.
+ *
+ * @throw CliError `invalid_argument` if the bbox is empty on an axis, sides is not a
+ * whole number from 3 to 96, thickness is given for a shape other than an arch or is not
+ * greater than 0, or the material is empty
+ */
+void checkCreateShapeArgs(const Json& args);
 
 /**
  * `create_point_entity {classname, origin, properties, allow_undefined, parent}`: a point

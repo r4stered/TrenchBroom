@@ -6,6 +6,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliError.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CliValidators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Config.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/CsgOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Describe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityJson.cpp
