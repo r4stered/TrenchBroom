@@ -21,6 +21,10 @@
 
 #include "cli/Json.h"
 
+#include <fmt/format.h>
+
+#include <utility>
+
 namespace tb::cli
 {
 
@@ -155,6 +159,16 @@ CliError usageError(const std::string& message)
 CliError invalidArgument(const std::string& message)
 {
   return CliError{ErrorCode::InvalidArgument, message};
+}
+
+CliError opFailed(
+  const std::string_view opName,
+  const std::string_view message,
+  std::optional<std::string> node,
+  const std::optional<size_t> line)
+{
+  return CliError{
+    ErrorCode::OpFailed, fmt::format("{}: {}", opName, message), std::move(node), line};
 }
 
 CliError configError(const std::string& message, const std::optional<size_t> line)

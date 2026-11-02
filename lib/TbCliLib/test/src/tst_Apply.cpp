@@ -686,6 +686,32 @@ TEST_CASE("apply")
     }
   }
 
+  SECTION("a later op reaches the linked copies that replaced its target")
+  {
+    auto linked = EditFixture{"maps/structure.map"};
+    const auto json = parseOutput(linked.apply(R"([
+      {"op": "create_box", "min": [0, 200, 40], "max": [8, 208, 48], "material": "knob",
+       "parent": "layer:0/group:1", "as": "$knob"},
+      {"op": "set_property", "target": "layer:0/group:2/entity:0", "key": "light",
+       "value": "300"},
+      {"op": "translate", "target": "$knob", "delta": [0, 0, 8]},
+      {"op": "set_property", "target": "layer:0/group:1/entity:0", "key": "wait",
+       "value": "2"}
+    ])"));
+    CHECK(
+      json["bindings"] == parseJsonLiteral(R"({"$knob": "layer:0/group:1/brush:1"})"));
+    CHECK(
+      json["ops"][3]["modified"]
+      == parseJsonLiteral(R"(["layer:0/group:1/entity:0", "layer:0/group:2/entity:0"])"));
+
+    const auto light = runJson({"show", linked.map, "layer:0/group:2/entity:0"})["node"];
+    CHECK(light["properties"]["light"] == Json{"300"});
+    CHECK(light["properties"]["wait"] == Json{"2"});
+    CHECK(
+      runJson({"show", linked.map, "layer:0/group:2/brush:1"})["node"]["aabb"]
+      == parseJsonLiteral(R"({"min": [256, 200, 48], "max": [264, 208, 56]})"));
+  }
+
   SECTION("issues_introduced")
   {
     // a box with non-integer vertices

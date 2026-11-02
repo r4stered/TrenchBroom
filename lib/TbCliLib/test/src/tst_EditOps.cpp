@@ -398,17 +398,6 @@ TEST_CASE("delete")
   }
 }
 
-namespace
-{
-
-/** The node at the given path, as show reports it. */
-Json showNode(const std::string& map, const std::string& path)
-{
-  return runJson({"show", map, path})["node"];
-}
-
-} // namespace
-
 TEST_CASE("create_point_entity")
 {
   auto fixture = EditFixture{};
@@ -809,9 +798,12 @@ TEST_CASE("set_property")
        "light",
        "--value",
        "250"});
-    // TODO: ticket 13 adds the linked copies to modified (instances_affected)
     CHECK(
-      json["ops"][0]["modified"] == parseJsonLiteral(R"(["layer:0/group:0/entity:0"])"));
+      json["ops"][0]["modified"]
+      == parseJsonLiteral(R"(["layer:0/group:0/entity:0", "layer:0/group:1/entity:0"])"));
+    CHECK(
+      json["ops"][0]["instances_affected"]
+      == parseJsonLiteral(R"(["layer:0/group:0", "layer:0/group:1"])"));
     CHECK(
       showNode(linked.map, "layer:0/group:1/entity:0")["properties"]["light"]
       == Json{"250"});

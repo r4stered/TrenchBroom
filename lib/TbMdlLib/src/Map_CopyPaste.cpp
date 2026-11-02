@@ -221,9 +221,9 @@ void copyAndSetLinkIds(
   }
 }
 
-bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
+std::vector<Node*> addPastedNodes(Map& map, const std::vector<Node*>& nodes, Node& parent)
 {
-  const auto nodesToAdd = extractNodesToPaste(nodes, parentForNodes(map));
+  const auto nodesToAdd = extractNodesToPaste(nodes, parent);
   fixRedundantPersistentIds(nodesToAdd, allPersistentGroupIds(map.worldNode()));
   fixRecursiveLinkedGroups(nodesToAdd, map.logger());
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
@@ -234,14 +234,17 @@ bool pasteNodes(Map& map, const std::vector<Node*>& nodes)
   if (addedNodes.empty())
   {
     transaction.cancel();
-    return false;
+    return {};
   }
 
   deselectAll(map);
   selectNodes(map, collectSelectableNodes(addedNodes, map.editorContext()));
-  transaction.commit();
+  if (!transaction.commit())
+  {
+    return {};
+  }
 
-  return true;
+  return addedNodes;
 }
 
 bool pasteBrushFaces(Map& map, const std::vector<BrushFace>& faces)
@@ -287,7 +290,9 @@ PasteType paste(Map& map, const std::string& str)
            parserStatus,
            map.taskManager())
          | kdl::transform([&](auto nodes) {
-             return pasteNodes(map, nodes) ? PasteType::Node : PasteType::Failed;
+             return !addPastedNodes(map, nodes, parentForNodes(map)).empty()
+                      ? PasteType::Node
+                      : PasteType::Failed;
            })
          | kdl::or_else([&](const auto& nodeError) {
              // Try parsing as brush faces
@@ -309,6 +314,26 @@ PasteType paste(Map& map, const std::string& str)
                       });
            })
          | kdl::value();
+}
+
+Result<std::vector<Node*>> pasteNodes(
+  Map& map, const std::string& str, Node& parent, ParserStatus& status)
+{
+  return NodeReader::read(
+           str,
+           map.worldNode().mapFormat(),
+           map.worldBounds(),
+           map.worldNode().entityPropertyConfig(),
+           status,
+           map.taskManager())
+         | kdl::and_then([&](auto nodes) -> Result<std::vector<Node*>> {
+             auto addedNodes = addPastedNodes(map, nodes, parent);
+             if (addedNodes.empty())
+             {
+               return Error{"Could not add the pasted nodes"};
+             }
+             return addedNodes;
+           });
 }
 
 } // namespace tb::mdl

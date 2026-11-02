@@ -27,6 +27,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tb::mdl
@@ -40,6 +41,17 @@ namespace tb::cli
 {
 
 class Json;
+struct OpOutcome;
+
+/**
+ * A node that the map library replaced with an identical copy, as it does with the
+ * contents of linked groups when it updates them.
+ */
+struct NodeReplacement
+{
+  mdl::Node* replaced = nullptr;
+  mdl::Node* copy = nullptr;
+};
 
 /** The kinds of node an op argument can accept, as `ops --json` names them. */
 enum class TargetKind
@@ -75,6 +87,11 @@ struct TargetRules
    * for brush and face ops.
    */
   bool expandsToBrushes = false;
+  /**
+   * Whether locked nodes are refused unless locked nodes may be edited. Only `lock`
+   * accepts locked nodes, so that locking a locked layer changes nothing.
+   */
+  bool refusesLocked = true;
 };
 
 /**
@@ -125,6 +142,17 @@ void appendRemovedNodes(
   const mdl::WorldNode& worldNode,
   std::vector<mdl::Node*>& removed);
 
+/**
+ * Records that brushes moved out of the given former ancestors: the brushes and the
+ * entities that lost some of them as modified, and the ancestors that the move left
+ * empty as removed.
+ */
+void recordMoveOutcome(
+  const std::vector<mdl::Node*>& moved,
+  const std::vector<mdl::Node*>& formerAncestors,
+  const mdl::WorldNode& worldNode,
+  OpOutcome& outcome);
+
 /** The binding names that the given target refers to. */
 std::vector<std::string> bindingReferences(const Json& target);
 
@@ -154,6 +182,7 @@ private:
   bool m_allowLocked;
   std::unordered_map<const mdl::Node*, std::string> m_inputPaths;
   std::map<std::string, std::vector<mdl::Node*>, std::less<>> m_bindings;
+  std::unordered_map<const mdl::Node*, mdl::Node*> m_copies;
 
 public:
   /**
@@ -180,14 +209,28 @@ public:
   void bind(const std::string& name, std::vector<mdl::Node*> nodes);
 
   /**
+   * Records that the map library replaced nodes with identical copies, as it does with
+   * the contents of linked groups when it updates them, so that targets naming the
+   * replaced nodes reach their copies, and the copies have the input paths of the nodes
+   * they replaced.
+   *
+   */
+  void replace(const std::vector<NodeReplacement>& replacements);
+
+  /** The node that stands for the given one now: its latest copy, if it was replaced. */
+  mdl::Node* current(mdl::Node* node) const;
+
+  /**
    * The nodes and faces a resolved target addresses now, each once and in order.
-   * Bindings are replaced by the nodes bound to them, and if the rules say so, layers,
+   * Replaced nodes are followed to their copies (see replace), bindings are replaced by
+   * the nodes bound to them, and if the rules say so, layers,
    * groups and brush entities are replaced by the brushes inside them.
    *
    * @param label names the argument in error messages, as in `delete: target`
    * @throw CliError `target_deleted` if a node is no longer in the map,
    * `wrong_node_kind` if the rules do not accept a node or a node expands to no
-   * brushes, or `locked` if a node is locked and locked nodes are not allowed
+   * brushes, or `locked` if a node is locked, the rules refuse locked nodes and locked
+   * nodes are not allowed
    */
   std::vector<NodeOrFace> nodes(
     const ResolvedTarget& target, const TargetRules& rules, std::string_view label) const;

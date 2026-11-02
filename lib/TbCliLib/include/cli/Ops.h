@@ -122,6 +122,14 @@ struct OpOutcome
   /** Removed nodes; reported by their paths in the input rev. */
   std::vector<mdl::Node*> removed;
   std::vector<std::string> warnings;
+  /**
+   * The linked groups whose contents changed when an edit inside one of them reached its
+   * linked copies: the edited group and its copies.
+   */
+  std::vector<mdl::Node*> instancesAffected;
+  /** The nodes that the map library replaced with copies when it updated linked groups.
+   */
+  std::vector<NodeReplacement> replaced;
 };
 
 /** What an op runs with. */
@@ -167,6 +175,11 @@ struct OpDef
    * Throws CliError `invalid_argument` if they are malformed.
    */
   std::function<void(const Json& args)> checkArgs = nullptr;
+  /**
+   * Whether the op's binding names a list even if the op creates one node, as `import`
+   * binds the top-level nodes of a fragment.
+   */
+  bool bindsList = false;
 };
 
 /** The flags of an op's subcommand, as `(name, value)` with the leading dashes removed.

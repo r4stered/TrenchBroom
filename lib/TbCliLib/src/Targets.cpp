@@ -21,6 +21,7 @@
 
 #include "cli/CliError.h"
 #include "cli/Json.h"
+#include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Query.h"
 #include "mdl/BrushNode.h"
@@ -279,6 +280,26 @@ bool isTarget(const Json& value)
   return isPathOrBinding(value) || isQueryTarget(value);
 }
 
+void recordMoveOutcome(
+  const std::vector<mdl::Node*>& moved,
+  const std::vector<mdl::Node*>& formerAncestors,
+  const mdl::WorldNode& worldNode,
+  OpOutcome& outcome)
+{
+  for (auto* node : moved)
+  {
+    appendOnce(outcome.modified, node);
+  }
+  for (auto* ancestor : formerAncestors)
+  {
+    if (isInMap(*ancestor, worldNode) && kindOf(*ancestor) == NodeKind::Entity)
+    {
+      appendOnce(outcome.modified, ancestor);
+    }
+  }
+  appendRemovedNodes(formerAncestors, worldNode, outcome.removed);
+}
+
 std::vector<std::string> bindingReferences(const Json& target)
 {
   auto result = std::vector<std::string>{};
@@ -368,6 +389,27 @@ void TargetResolver::bind(const std::string& name, std::vector<mdl::Node*> nodes
   m_bindings[name] = std::move(nodes);
 }
 
+void TargetResolver::replace(const std::vector<NodeReplacement>& replacements)
+{
+  for (const auto& [replaced, copy] : replacements)
+  {
+    m_copies[replaced] = copy;
+    if (const auto path = inputPath(*replaced))
+    {
+      m_inputPaths.emplace(copy, *path);
+    }
+  }
+}
+
+mdl::Node* TargetResolver::current(mdl::Node* node) const
+{
+  for (auto it = m_copies.find(node); it != m_copies.end(); it = m_copies.find(node))
+  {
+    node = it->second;
+  }
+  return node;
+}
+
 std::vector<NodeOrFace> TargetResolver::nodes(
   const ResolvedTarget& target,
   const TargetRules& rules,
@@ -394,7 +436,7 @@ std::vector<NodeOrFace> TargetResolver::nodes(
     auto elementNodes = std::vector<NodeOrFace>{};
     if (element.node)
     {
-      elementNodes.push_back(*element.node);
+      elementNodes.push_back({current(element.node->node), element.node->faceIndex});
     }
     else
     {
@@ -402,7 +444,7 @@ std::vector<NodeOrFace> TargetResolver::nodes(
       contract_assert(it != m_bindings.end());
       for (auto* node : it->second)
       {
-        elementNodes.push_back({node, std::nullopt});
+        elementNodes.push_back({current(node), std::nullopt});
       }
     }
 
@@ -450,7 +492,7 @@ std::vector<NodeOrFace> TargetResolver::nodes(
               toString(rules.kinds)),
             name(nodeOrFace)};
         }
-        if (!m_allowLocked && each.node->locked())
+        if (rules.refusesLocked && !m_allowLocked && each.node->locked())
         {
           throw CliError{
             ErrorCode::Locked,

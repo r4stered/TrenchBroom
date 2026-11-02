@@ -255,6 +255,17 @@ std::vector<VerifyIssue> IssueTracker::introduced(const OpOutcome& outcome)
   auto& impl = *m_impl;
   auto& worldNode = impl.map.worldNode();
 
+  // a copy that replaced a node in a linked group had the node's issues before
+  for (const auto& [replaced, copy] : outcome.replaced)
+  {
+    if (const auto it = impl.records.find(replaced); it != impl.records.end())
+    {
+      auto record = it->second;
+      record.parent = copy->parent();
+      impl.records.insert_or_assign(copy, std::move(record));
+    }
+  }
+
   // the nodes whose issues are checked and reported, and those of them that are new
   auto changed = NodeList{};
   auto created = NodeList{};

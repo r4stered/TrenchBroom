@@ -21,6 +21,7 @@
 #include "base/Logger.h"
 #include "cli/CliError.h"
 #include "cli/LoadMap.h"
+#include "cli/Ops.h"
 #include "cli/Targets.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Map.h"
@@ -237,6 +238,20 @@ TEST_CASE("Targets")
     appendRemovedNodes({groupBrush, layer}, worldNode, removed);
     CHECK(removed == std::vector<mdl::Node*>{group, groupBrush});
   }
+
+  SECTION("recordMoveOutcome")
+  {
+    auto* layer = resolveNodePath(worldNode, "layer:0").node;
+    auto* entity = resolveNodePath(worldNode, "layer:0/entity:0").node;
+    auto* brush = entity->children().front();
+    const auto ancestors = ancestorsOf({brush});
+    REQUIRE(mdl::reparentNodes(map, {{layer, {brush}}}));
+
+    auto outcome = OpOutcome{};
+    recordMoveOutcome({brush}, ancestors, worldNode, outcome);
+    CHECK(outcome.modified == std::vector<mdl::Node*>{brush});
+    CHECK(outcome.removed == std::vector<mdl::Node*>{entity});
+  }
 }
 
 TEST_CASE("TargetResolver")
@@ -311,6 +326,38 @@ TEST_CASE("TargetResolver")
     CHECK(
       paths(targets.nodes(resolved, anyKind, "op: target"))
       == std::vector<std::string>{"layer:0/group:0/brush:0", "layer:0/group:0/brush:1"});
+  }
+
+  SECTION("replace")
+  {
+    auto targets = TargetResolver{map, false};
+    const auto resolved = targets.resolve(Json{"layer:0/brush:0"});
+
+    auto* layer = resolveNodePath(worldNode, "layer:0").node;
+    auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
+    auto* copy = brush->clone(map.worldBounds());
+    mdl::addNodes(map, {{layer, {copy}}});
+    mdl::removeNodes(map, {brush});
+    targets.replace({{brush, copy}});
+
+    const auto nodes = targets.nodes(resolved, anyKind, "op: target");
+    REQUIRE(nodes.size() == 1);
+    CHECK(nodes.front().node == copy);
+    CHECK(targets.inputPath(*copy) == "layer:0/brush:0");
+  }
+
+  SECTION("current")
+  {
+    auto targets = TargetResolver{map, false};
+    auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
+    const auto copy = std::unique_ptr<mdl::Node>{brush->clone(map.worldBounds())};
+    const auto copyOfCopy = std::unique_ptr<mdl::Node>{brush->clone(map.worldBounds())};
+    CHECK(targets.current(brush) == brush);
+
+    targets.replace({{brush, copy.get()}});
+    targets.replace({{copy.get(), copyOfCopy.get()}});
+    CHECK(targets.current(brush) == copyOfCopy.get());
+    CHECK(targets.current(copyOfCopy.get()) == copyOfCopy.get());
   }
 
   SECTION("nodes")
@@ -388,6 +435,15 @@ TEST_CASE("TargetResolver")
       CHECK(
         paths(TargetResolver{map, true}.nodes(resolved, brushRules, "op: target"))
         == std::vector<std::string>{"layer:1/brush:0"});
+    }
+
+    SECTION("a locked node is accepted if the rules do not refuse locked nodes")
+    {
+      const auto resolved = TargetResolver{map, false}.resolve(Json{"layer:1"});
+      const auto rules = TargetRules{{TargetKind::Layer}, false, false};
+      CHECK(
+        paths(TargetResolver{map, false}.nodes(resolved, rules, "op: target"))
+        == std::vector<std::string>{"layer:1"});
     }
   }
 }

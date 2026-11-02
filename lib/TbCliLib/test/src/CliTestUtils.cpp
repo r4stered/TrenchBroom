@@ -158,6 +158,11 @@ Json runJson(const std::vector<std::string>& args, const std::string_view in)
   return parseOutput(result);
 }
 
+Json showNode(const std::string& map, const std::string& path)
+{
+  return runJson({"show", map, path})["node"];
+}
+
 std::string revOf(const std::string& map)
 {
   return runJson({"describe", map})["rev"].asString();

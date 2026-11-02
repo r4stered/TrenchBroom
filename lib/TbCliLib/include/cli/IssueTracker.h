@@ -60,7 +60,8 @@ public:
    * them that were not on those nodes before the op. Every issue on a created node is
    * new. An issue on a modified node is new unless the node had an issue of the same type
    * on the same face or property before; keys cannot tell, since editing a node changes
-   * the keys of all its issues.
+   * the keys of all its issues. A copy that replaced a node when a linked group was
+   * updated counts as that node.
    *
    * Some issues depend on other nodes, so these are checked as well: point entities
    * whose origins lie where a changed or removed brush is or was, since whether an entity

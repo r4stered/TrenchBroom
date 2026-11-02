@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestParserStatus.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
 #include "mdl/CatchConfig.h"
@@ -730,6 +731,47 @@ common/caulk
           CHECK(pastedBrushNode2->linkId() == originalBrushLinkId);
         }
       }
+    }
+  }
+
+  SECTION("pasteNodes")
+  {
+    const auto data = std::string{R"(
+{
+"classname" "light"
+"origin" "0 0 0"
+}
+{
+"classname" "info_null"
+"origin" "8 0 0"
+})"};
+
+    auto& map = fixture.create();
+    auto* brushNode = createBrushNode(map);
+    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    selectNodes(map, {brushNode});
+    auto* groupNode = groupSelectedNodes(map, "test");
+    deselectAll(map);
+
+    SECTION("pastes into the given parent and returns the pasted nodes")
+    {
+      auto status = TestParserStatus{};
+      const auto pasted = pasteNodes(map, data, *groupNode, status);
+      REQUIRE(pasted.is_success());
+
+      const auto& nodes = pasted.value();
+      REQUIRE(nodes.size() == 2u);
+      CHECK(nodes[0]->parent() == groupNode);
+      CHECK(nodes[1]->parent() == groupNode);
+      CHECK(static_cast<EntityNode*>(nodes[0])->entity().classname() == "light");
+      CHECK(static_cast<EntityNode*>(nodes[1])->entity().classname() == "info_null");
+    }
+
+    SECTION("fails if the string holds no nodes")
+    {
+      auto status = TestParserStatus{};
+      CHECK(pasteNodes(map, "not a map", *groupNode, status).is_error());
+      CHECK(groupNode->childCount() == 1u);
     }
   }
 }

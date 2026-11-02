@@ -25,6 +25,7 @@
 #include "cli/FaceOps.h"
 #include "cli/IssueTypes.h"
 #include "cli/ParseUtils.h"
+#include "cli/StructureOps.h"
 #include "cli/TransformOps.h"
 
 #include "kd/contracts.h"
@@ -739,6 +740,10 @@ Json argSchema(const ArgDef& arg)
     }
     result.set("x-node-kinds", std::move(kinds));
     result.set("x-expands-to-brushes", arg.rules.expandsToBrushes);
+    if (!arg.rules.refusesLocked)
+    {
+      result.set("x-accepts-locked", true);
+    }
   }
   return result;
 }
@@ -885,6 +890,18 @@ ArgDef brushParentArg(const std::string_view description)
 
 /** What CSG ops accept: brushes, and containers for the brushes inside them. */
 const auto CsgTargetRules = TargetRules{{TargetKind::Brush}, true};
+
+/** What duplicate, group and move_to_layer accept: whatever can be moved on its own. */
+const auto MovableTargetRules = TargetRules{
+  {TargetKind::Group,
+   TargetKind::PointEntity,
+   TargetKind::BrushEntity,
+   TargetKind::Brush,
+   TargetKind::Patch}};
+
+const auto GroupTargetRules = TargetRules{{TargetKind::Group}};
+
+const auto LayerTargetRules = TargetRules{{TargetKind::Layer}};
 
 /** What property ops accept: the world and entities, but not brushes. */
 const auto PropertyTargetRules =
@@ -1291,6 +1308,192 @@ std::vector<OpDef> makeOpDefs()
             TargetKind::Patch}}},
       },
       deleteNode,
+    },
+    OpDef{
+      "duplicate",
+      "Copies groups, entities, brushes and patches and moves the copies by an offset. "
+      "A brush of a brush entity is copied with a new entity around it, as in the "
+      "editor. Materials stay aligned to the moved faces.",
+      {
+        targetArg("the nodes to copy", MovableTargetRules),
+        ArgDef{
+          "offset", ArgType::Vec3, "the distance to move the copies, in units", true},
+        ArgDef{
+          "as",
+          ArgType::Binding,
+          "binds the copies to this name, as a list if there are several"},
+      },
+      duplicate,
+    },
+    OpDef{
+      "group",
+      "Groups nodes: creates a named group in the group or layer of the first target "
+      "and moves the targets into it. A brush of a brush entity brings its entity "
+      "along, as in the editor.",
+      {
+        targetArg("the nodes to group", MovableTargetRules),
+        ArgDef{"name", ArgType::String, "the group's name", true},
+        ArgDef{"as", ArgType::Binding, "binds the group to this name"},
+      },
+      group,
+      [](const Json& args) { checkNameArg("group", args); },
+    },
+    OpDef{
+      "ungroup",
+      "Moves the contents of groups into the groups' parents and deletes the groups. A "
+      "linked group is separated from its linked copies first.",
+      {
+        targetArg("the groups to dissolve", GroupTargetRules),
+      },
+      ungroup,
+    },
+    OpDef{
+      "rename_group",
+      "Renames groups.",
+      {
+        targetArg("the groups to rename", GroupTargetRules),
+        ArgDef{"name", ArgType::String, "the new name", true},
+      },
+      renameGroup,
+      [](const Json& args) { checkNameArg("rename_group", args); },
+    },
+    OpDef{
+      "create_layer",
+      "Creates a layer below the other layers.",
+      {
+        ArgDef{"name", ArgType::String, "the layer's name", true},
+        ArgDef{"as", ArgType::Binding, "binds the layer to this name"},
+      },
+      createLayer,
+      [](const Json& args) { checkNameArg("create_layer", args); },
+    },
+    OpDef{
+      "rename_layer",
+      "Renames a layer. The default layer cannot be renamed, as its name is not saved.",
+      {
+        ArgDef{
+          "target",
+          ArgType::NodePath,
+          "the layer to rename",
+          true,
+          std::nullopt,
+          LayerTargetRules},
+        ArgDef{"name", ArgType::String, "the new name", true},
+      },
+      renameLayer,
+      [](const Json& args) { checkNameArg("rename_layer", args); },
+    },
+    OpDef{
+      "move_to_layer",
+      "Moves groups, entities, brushes and patches to a layer. A brush of a brush "
+      "entity moves with its entity, as in the editor. Nodes inside groups cannot "
+      "change layers on their own; move the group instead.",
+      {
+        targetArg("the nodes to move", MovableTargetRules),
+        ArgDef{
+          "layer",
+          ArgType::NodePath,
+          "the layer to move them to",
+          true,
+          std::nullopt,
+          LayerTargetRules},
+      },
+      moveToLayer,
+    },
+    OpDef{
+      "set_layer_omit_from_export",
+      "Sets whether layers are left out when the map is exported.",
+      {
+        targetArg("the layers", LayerTargetRules),
+        ArgDef{"omit", ArgType::Bool, "whether to leave the layers out", true},
+      },
+      setLayerOmitFromExport,
+    },
+    OpDef{
+      "move_to_entity",
+      "Moves brushes into a brush entity. An entity left without brushes is deleted.",
+      {
+        targetArg("the brushes to move", CsgTargetRules),
+        ArgDef{
+          "entity",
+          ArgType::NodePath,
+          "the brush entity to move them into",
+          true,
+          std::nullopt,
+          {{TargetKind::BrushEntity}}},
+      },
+      moveToEntity,
+    },
+    OpDef{
+      "lock",
+      "Locks layers, so that ops refuse to edit what is in them unless --allow-locked "
+      "is given. Only layer locks are saved in the map. Layers that are locked already "
+      "stay as they are. There is no unlock op; --allow-locked is the only way past a "
+      "lock.",
+      {
+        targetArg("the layers to lock", TargetRules{{TargetKind::Layer}, false, false}),
+      },
+      lock,
+    },
+    OpDef{
+      "linked_duplicate",
+      "Creates a linked copy of each group, moved by an offset. Edits inside one "
+      "linked group reach all its linked copies, as in the editor; the copies' changed "
+      "nodes are listed under modified and the groups under instances_affected.",
+      {
+        targetArg("the groups to copy", GroupTargetRules),
+        ArgDef{
+          "offset", ArgType::Vec3, "the distance to move the copies, in units", true},
+        ArgDef{
+          "as",
+          ArgType::Binding,
+          "binds the copies to this name, as a list if there are several"},
+      },
+      linkedDuplicate,
+    },
+    OpDef{
+      "separate_linked",
+      "Separates linked groups from the other groups of their link set, so that edits "
+      "no longer reach between them. Targets of the same link set stay linked to each "
+      "other.",
+      {
+        targetArg("the linked groups to separate", GroupTargetRules),
+      },
+      separateLinked,
+    },
+    OpDef{
+      "import",
+      "Pastes the groups, entities and brushes of a Valve 220 map fragment into a layer "
+      "or group, as the editor pastes, and moves them by an offset. Worldspawn brushes "
+      "are pasted as world brushes; the worldspawn's properties and layers are left "
+      "out. Brushes in the Standard format are converted, as the editor does. Give "
+      "exactly one of file and text. Fails if the fragment does not parse exactly.",
+      {
+        ArgDef{
+          "file",
+          ArgType::String,
+          "the file that holds the fragment, relative to the working directory"},
+        ArgDef{"text", ArgType::String, "the fragment"},
+        ArgDef{
+          "offset",
+          ArgType::Vec3,
+          "the distance to move the pasted nodes, in units (default: none)"},
+        ArgDef{
+          "parent",
+          ArgType::NodePath,
+          "the layer or group to paste into",
+          false,
+          Json{"layer:0"},
+          {{TargetKind::Layer, TargetKind::Group}}},
+        ArgDef{
+          "as",
+          ArgType::Binding,
+          "binds the pasted top-level nodes to this name, as a list even if there is "
+          "one"},
+      },
+      importFragment,
+      checkImportArgs,
+      true,
     },
     OpDef{
       "fix",

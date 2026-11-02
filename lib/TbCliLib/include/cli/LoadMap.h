@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include "base/ParserStatus.h"
+
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -57,6 +59,31 @@ struct LoadProblem
   std::string message;
   /** The line the reader reported it at, if it reported one. */
   std::optional<size_t> line;
+};
+
+/**
+ * Logs what the map reader reports about the given text and records its warnings and
+ * errors, each of which means that the reader skipped or changed some of the text's
+ * content.
+ *
+ * This relies on the reader warning only about content it drops or changes, which holds
+ * for every warning in MapReader, StandardMapParser and WorldReader today. A purely
+ * informational warning added there would make every map that triggers it lossy.
+ */
+class ProblemCollectingParserStatus : public ParserStatus
+{
+private:
+  Logger& m_logger;
+  std::string_view m_bytes;
+  std::vector<LoadProblem>& m_problems;
+
+public:
+  ProblemCollectingParserStatus(
+    Logger& logger, std::string_view bytes, std::vector<LoadProblem>& problems);
+
+private:
+  void doProgress(double progress) override;
+  void doLog(LogLevel level, const std::string& str) override;
 };
 
 /**

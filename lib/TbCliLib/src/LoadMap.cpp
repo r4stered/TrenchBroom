@@ -112,44 +112,6 @@ LoadProblem toLoadProblem(const std::string& message, const std::string_view byt
   return {message, std::nullopt};
 }
 
-/**
- * Logs what the map reader reports and records its warnings and errors, each of which
- * means that the reader skipped or changed some of the file's content.
- *
- * This relies on the reader warning only about content it drops or changes, which holds
- * for every warning in MapReader, StandardMapParser and WorldReader today. A purely
- * informational warning added there would make every map that triggers it lossy.
- */
-class ProblemCollectingParserStatus : public ParserStatus
-{
-private:
-  Logger& m_logger;
-  std::string_view m_bytes;
-  std::vector<LoadProblem>& m_problems;
-
-public:
-  ProblemCollectingParserStatus(
-    Logger& logger, const std::string_view bytes, std::vector<LoadProblem>& problems)
-    : ParserStatus{logger, ""}
-    , m_logger{logger}
-    , m_bytes{bytes}
-    , m_problems{problems}
-  {
-  }
-
-private:
-  void doProgress(double) override {}
-
-  void doLog(const LogLevel level, const std::string& str) override
-  {
-    if (level == LogLevel::Warn || level == LogLevel::Error)
-    {
-      m_problems.push_back(toLoadProblem(str, m_bytes));
-    }
-    m_logger.log(level, str);
-  }
-};
-
 std::string errorMessage(const auto& result)
 {
   return std::visit([](const auto& e) { return e.msg; }, result.error());
@@ -312,6 +274,26 @@ CliError notValve220(const mdl::MapFormat format)
 }
 
 } // namespace
+
+ProblemCollectingParserStatus::ProblemCollectingParserStatus(
+  Logger& logger, const std::string_view bytes, std::vector<LoadProblem>& problems)
+  : ParserStatus{logger, ""}
+  , m_logger{logger}
+  , m_bytes{bytes}
+  , m_problems{problems}
+{
+}
+
+void ProblemCollectingParserStatus::doProgress(double) {}
+
+void ProblemCollectingParserStatus::doLog(const LogLevel level, const std::string& str)
+{
+  if (level == LogLevel::Warn || level == LogLevel::Error)
+  {
+    m_problems.push_back(toLoadProblem(str, m_bytes));
+  }
+  m_logger.log(level, str);
+}
 
 LoadedMap::LoadedMap() = default;
 LoadedMap::LoadedMap(LoadedMap&&) noexcept = default;

@@ -123,6 +123,25 @@ TEST_CASE("IssueTracker")
       CHECK(issues[0].key.size() == 12);
     }
 
+    SECTION("a copy that replaced a node had the node's issues before")
+    {
+      auto loadedMap = loadFixtureMap("maps/simple.map", logger);
+      auto& map = *loadedMap.map;
+      auto* box = addBox(map, {{0.5, 0, 0}, {16, 16, 16}});
+      auto tracker = IssueTracker{loadedMap, config};
+      auto unaware = IssueTracker{loadedMap, config};
+
+      auto* copy = box->clone(map.worldBounds());
+      REQUIRE(!mdl::addNodes(map, {{map.worldNode().defaultLayer(), {copy}}}).empty());
+      mdl::removeNodes(map, {box});
+
+      CHECK(tracker.introduced({.modified = {copy}, .replaced = {{box, copy}}}).empty());
+      // without the replacement, the copy's issues would count as new
+      CHECK(
+        typesOf(unaware.introduced(modified(copy)))
+        == std::vector<std::string_view>{"non_integer_vertices"});
+    }
+
     SECTION("issues a modified node had before are not new")
     {
       auto loadedMap = loadFixtureMap("maps/verify.map", logger);

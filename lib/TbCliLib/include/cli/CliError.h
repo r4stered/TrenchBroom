@@ -140,6 +140,16 @@ CliError usageError(const std::string& message);
  */
 CliError invalidArgument(const std::string& message);
 
+/**
+ * An op that cannot be carried out with the given arguments (exit 1), with the op's name
+ * in front of the message, and the node or line it is about, if any.
+ */
+CliError opFailed(
+  std::string_view opName,
+  std::string_view message,
+  std::optional<std::string> node = std::nullopt,
+  std::optional<size_t> line = std::nullopt);
+
 /** A missing or malformed configuration (exit 1). */
 CliError configError(
   const std::string& message, std::optional<size_t> line = std::nullopt);

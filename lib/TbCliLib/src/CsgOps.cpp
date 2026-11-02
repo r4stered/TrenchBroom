@@ -20,6 +20,7 @@
 #include "cli/CsgOps.h"
 
 #include "cli/CliError.h"
+#include "cli/EditorScopes.h"
 #include "cli/Json.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
@@ -74,26 +75,6 @@ std::vector<mdl::Node*> asNodes(const std::vector<mdl::BrushNode*>& brushes)
   return std::vector<mdl::Node*>{brushes.begin(), brushes.end()};
 }
 
-/** Selects the given nodes, and clears the selection when it goes out of scope. */
-class SelectionScope
-{
-private:
-  mdl::Map& m_map;
-
-public:
-  SelectionScope(mdl::Map& map, const std::vector<mdl::Node*>& nodes)
-    : m_map{map}
-  {
-    mdl::deselectAll(m_map);
-    mdl::selectNodes(m_map, nodes);
-  }
-
-  ~SelectionScope() { mdl::deselectAll(m_map); }
-
-  SelectionScope(const SelectionScope&) = delete;
-  SelectionScope& operator=(const SelectionScope&) = delete;
-};
-
 /** Sets the editor's UV lock, and restores it when it goes out of scope. */
 class UvLockScope
 {
@@ -127,12 +108,6 @@ std::vector<mdl::Node*> selectedBrushesInFileOrder(mdl::Map& map)
   auto result = asNodes(map.selection().brushes);
   std::ranges::sort(result, {}, [&](const auto* node) { return order.at(node); });
   return result;
-}
-
-/** An `op_failed` error about the node at the given path. */
-CliError opFailed(std::string message, std::string path)
-{
-  return CliError{ErrorCode::OpFailed, std::move(message), std::move(path)};
 }
 
 /**
@@ -173,7 +148,7 @@ void runCsgCommand(
     if (isInMap(*node, worldNode))
     {
       const auto path = nodePath(*node);
-      throw opFailed(fmt::format("{}: cannot {} {}", context.opName, action, path), path);
+      throw opFailed(context.opName, fmt::format("cannot {} {}", action, path), path);
     }
   }
 
@@ -194,8 +169,8 @@ void checkCombinable(
   {
     const auto path = nodePath(*brushes.front());
     throw opFailed(
-      fmt::format(
-        "{}: {} is the only brush, but {} needs two or more", opName, path, opName),
+      opName,
+      fmt::format("{} is the only brush, but {} needs two or more", path, opName),
       path);
   }
 }
@@ -243,9 +218,9 @@ void hollow(OpContext& context)
     {
       const auto path = nodePath(*brushNode);
       throw opFailed(
+        "hollow",
         fmt::format(
-          "hollow: {} cannot be hollowed with walls {} units thick; it is probably too "
-          "thin",
+          "{} cannot be hollowed with walls {} units thick; it is probably too thin",
           path,
           thickness.dump()),
         path);
@@ -342,10 +317,8 @@ void snapVertices(OpContext& context)
   const auto cannotSnap = [&](const mdl::BrushNode& brushNode) {
     const auto path = nodePath(brushNode);
     return opFailed(
-      fmt::format(
-        "snap_vertices: cannot snap the vertices of {} to a grid of {}",
-        path,
-        grid.dump()),
+      "snap_vertices",
+      fmt::format("cannot snap the vertices of {} to a grid of {}", path, grid.dump()),
       path);
   };
 

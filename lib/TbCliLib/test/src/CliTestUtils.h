@@ -121,6 +121,9 @@ Json runJson(const std::vector<std::string>& args, std::string_view in = {});
 /** The rev that describe reports for the given map. */
 std::string revOf(const std::string& map);
 
+/** The node at the given path, as `show` reports it. */
+Json showNode(const std::string& map, const std::string& path);
+
 /** The number of brushes that describe reports for the given map. */
 size_t brushCount(const std::string& map);
 

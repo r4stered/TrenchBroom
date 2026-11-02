@@ -86,31 +86,6 @@ namespace
 {
 
 /**
- * Records that brushes moved out of the given former ancestors: the brushes and the
- * entities that lost some of them as modified, and the ancestors that the move left
- * empty as removed.
- */
-void recordMoveOutcome(
-  const std::vector<mdl::Node*>& moved,
-  const std::vector<mdl::Node*>& formerAncestors,
-  const mdl::WorldNode& worldNode,
-  OpOutcome& outcome)
-{
-  for (auto* node : moved)
-  {
-    appendOnce(outcome.modified, node);
-  }
-  for (auto* ancestor : formerAncestors)
-  {
-    if (isInMap(*ancestor, worldNode) && kindOf(*ancestor) == NodeKind::Entity)
-    {
-      appendOnce(outcome.modified, ancestor);
-    }
-  }
-  appendRemovedNodes(formerAncestors, worldNode, outcome.removed);
-}
-
-/**
  * Checks the classname and properties that a create op is given.
  *
  * @param reservedKeys the keys that the op sets from its own arguments

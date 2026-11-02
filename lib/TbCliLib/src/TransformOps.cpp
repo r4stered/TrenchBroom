@@ -21,6 +21,7 @@
 #include "cli/TransformOps.h"
 
 #include "cli/CliError.h"
+#include "cli/EditorScopes.h"
 #include "cli/GeometryJson.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
@@ -117,36 +118,6 @@ vm::vec3d centerOf(const OpContext& context, const vm::bbox3d& bounds)
 }
 
 /**
- * Selects the given nodes and sets the editor's alignment lock for its lifetime, and
- * then clears the selection and restores the alignment lock.
- */
-class TransformScope
-{
-private:
-  mdl::Map& m_map;
-  bool m_oldAlignmentLock;
-
-public:
-  TransformScope(mdl::Map& map, const std::vector<mdl::Node*>& nodes, const bool uvLock)
-    : m_map{map}
-    , m_oldAlignmentLock{map.editorContext().alignmentLock()}
-  {
-    mdl::deselectAll(m_map);
-    mdl::selectNodes(m_map, nodes);
-    m_map.editorContext().setAlignmentLock(uvLock);
-  }
-
-  ~TransformScope()
-  {
-    m_map.editorContext().setAlignmentLock(m_oldAlignmentLock);
-    mdl::deselectAll(m_map);
-  }
-
-  TransformScope(const TransformScope&) = delete;
-  TransformScope& operator=(const TransformScope&) = delete;
-};
-
-/**
  * Selects the nodes the op transforms and calls `transform` with the map and the bounds
  * of the selection, then clears the selection. Reports the transformed nodes and the
  * entities that changed with them as modified.
@@ -164,7 +135,8 @@ void transformTargets(
   const auto entities = containingEntities(nodes);
   const auto success = [&]() {
     auto& map = context.map;
-    const auto scope = TransformScope{map, nodes, context.args["uv_lock"].asBool()};
+    const auto selection = SelectionScope{map, nodes};
+    const auto alignmentLock = AlignmentLockScope{map, context.args["uv_lock"].asBool()};
     const auto bounds = map.selectionBounds();
     if (!bounds)
     {

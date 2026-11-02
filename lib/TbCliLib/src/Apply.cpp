@@ -23,6 +23,7 @@
 #include "cli/FileUtils.h"
 #include "cli/IssueTracker.h"
 #include "cli/Json.h"
+#include "cli/LinkedGroups.h"
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
@@ -37,6 +38,7 @@
 #include <map>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace tb::cli
 {
@@ -114,15 +116,23 @@ CliError lossyLoad(const std::vector<LoadProblem>& problems)
       problems.size() > 1 ? fmt::format(" and {} more", problems.size() - 1) : "")};
 }
 
-/** The paths in the new rev of those of the given nodes that are still in the map. */
+/**
+ * The paths in the new rev of those of the given nodes that are still in the map, or
+ * whose copies are (see TargetResolver::replace), each once.
+ */
 Json newPaths(
   const std::vector<mdl::Node*>& nodes,
+  const TargetResolver& targets,
   const std::unordered_map<const mdl::Node*, std::string>& paths)
 {
   auto result = Json::array();
-  for (const auto* node : nodes)
+  auto seen = std::unordered_set<const mdl::Node*>{};
+  for (auto* node : nodes)
   {
-    if (const auto it = paths.find(node); it != paths.end())
+    const auto* current = targets.current(node);
+    if (
+      const auto it = paths.find(current);
+      it != paths.end() && seen.insert(current).second)
     {
       result.push(it->second);
     }
@@ -173,6 +183,9 @@ Json apply(
   }
 
   auto& map = *loadedMap.map;
+  // collated commands delete the nodes that the earlier one replaced, which ops of the
+  // batch still refer to
+  map.setIsCommandCollationEnabled(false);
   auto targets = TargetResolver{map, options.allowLocked};
 
   // resolve every node path and query before anything changes
@@ -192,7 +205,10 @@ Json apply(
       auto& outcome = outcomes[i];
       auto context = OpContext{
         ops[i].def->name, map, ops[i].args, nodes, outcome, options.allowLocked};
+      const auto linkedGroups = LinkedGroupSnapshot{map.worldNode()};
       ops[i].def->execute(context);
+      linkedGroups.recordLinkedUpdates(map.worldNode(), outcome);
+      targets.replace(outcome.replaced);
       if (const auto binding = ops[i].binding())
       {
         targets.bind(*binding, outcome.created);
@@ -224,20 +240,26 @@ Json apply(
       warnings.push(warning);
     }
 
-    auto created = newPaths(outcome.created, paths);
+    auto created = newPaths(outcome.created, targets, paths);
     // a binding whose nodes are all gone from the new rev is left out
     if (const auto binding = ops[i].binding(); binding && created.size() > 0)
     {
-      bindings.set(*binding, created.size() == 1 ? created[0] : created);
+      const auto bindsOne = created.size() == 1 && !ops[i].def->bindsList;
+      bindings.set(*binding, bindsOne ? created[0] : created);
     }
 
     auto opResult = Json::object();
     opResult.set("ok", true);
     opResult.set("created", std::move(created));
-    opResult.set("modified", newPaths(outcome.modified, paths));
+    opResult.set("modified", newPaths(outcome.modified, targets, paths));
     opResult.set("removed", std::move(removed));
     opResult.set("warnings", std::move(warnings));
     opResult.set("issues_introduced", issuesJson(introduced[i], paths));
+    if (!outcome.instancesAffected.empty())
+    {
+      opResult.set(
+        "instances_affected", newPaths(outcome.instancesAffected, targets, paths));
+    }
     opResults.push(std::move(opResult));
   }
 

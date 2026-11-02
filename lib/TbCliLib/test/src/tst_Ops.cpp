@@ -42,7 +42,7 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 25);
+    REQUIRE(json["ops"].size() == 38);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
     const auto opNamed = [&](const std::string_view name) -> const Json& {
       const auto& ops = json["ops"].asArray();

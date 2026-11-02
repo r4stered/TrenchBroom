@@ -19,11 +19,20 @@
 
 #pragma once
 
+#include "base/Result.h"
+
 #include <string>
+#include <vector>
+
+namespace tb
+{
+class ParserStatus;
+}
 
 namespace tb::mdl
 {
 class Map;
+class Node;
 
 enum class PasteType;
 
@@ -31,6 +40,18 @@ std::string serializeSelectedNodes(Map& map);
 std::string serializeSelectedBrushFaces(Map& map);
 
 PasteType paste(Map& map, const std::string& str);
+
+/**
+ * Pastes the nodes that the given string holds into the given parent, as paste does
+ * into the current group or layer, and selects those that can be selected. Unlike paste,
+ * it does not try to paste brush faces. The parser reports what it skips to the given
+ * status.
+ *
+ * Returns the pasted nodes that were added to the parent, or an error if the string holds
+ * no nodes or they could not be added.
+ */
+Result<std::vector<Node*>> pasteNodes(
+  Map& map, const std::string& str, Node& parent, ParserStatus& status);
 
 
 } // namespace tb::mdl
