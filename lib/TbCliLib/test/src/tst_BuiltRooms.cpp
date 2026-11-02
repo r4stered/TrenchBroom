@@ -52,6 +52,21 @@ constexpr auto EmptyMap = std::string_view{R"(// Game: Quake
 }
 )"};
 
+/** The map text without the lines that differ between saves of the same map. */
+std::string withoutVolatileLines(const std::string& text)
+{
+  auto lines = std::vector<std::string>{};
+  for (const auto& line : kdl::str_split(text, "\n"))
+  {
+    if (
+      !line.starts_with("// Generator:") && !line.starts_with("\"_tb_linked_group_id\""))
+    {
+      lines.push_back(line);
+    }
+  }
+  return kdl::str_join(lines, "\n");
+}
+
 /** An empty map in a temp dir with a tbcli.json. */
 struct RoomFixture
 {
@@ -79,6 +94,35 @@ struct RoomFixture
   bool unchanged() const { return env.readFile("rooms.map") == original; }
 
   Json builtRooms() const { return runJson({"describe", map})["built_rooms"]; }
+
+  /**
+   * Checks that the map is the recorded fixture map, and that verify --compile,
+   * replaying the fixture's qbsp recording, reports no leak.
+   */
+  void checkCompilesSealed(const std::string& fixtureName)
+  {
+    const auto generated = env.readFile("rooms.map");
+    const auto recorded =
+      *readFile(fixturePath(fmt::format("compiled/{}.map", fixtureName)));
+    CHECK(withoutVolatileLines(generated) == withoutVolatileLines(recorded));
+
+    auto compilers = Json::object();
+    compilers.set(
+      std::string{QbspTool}, arg(setUpFakeCompiler(env, QbspTool, fixtureName)));
+    auto config = quakeConfig();
+    config.set("compilers", std::move(compilers));
+    env.writeConfig({}, config);
+
+    const auto json = runJson({"verify", map, "--compile"});
+    for (const auto& issue : json["issues"]["items"].asArray())
+    {
+      CHECK_FALSE(issue["type"] == Json{"leak"});
+    }
+    const auto& stages = json["stages"].asArray();
+    REQUIRE(stages.size() == 4);
+    CHECK(stages[3]["name"] == Json{"qbsp"});
+    CHECK_FALSE(stages[3]["status"] == Json{"failed"});
+  }
 };
 
 /** The aabb of the node at the given path. */
@@ -99,23 +143,46 @@ std::vector<Json> brushAabbs(const std::string& map, const std::string& entityPa
   return result;
 }
 
-/** The map text without the lines that differ between saves of the same map. */
-std::string withoutVolatileLines(const std::string& text)
-{
-  auto lines = std::vector<std::string>{};
-  for (const auto& line : kdl::str_split(text, "\n"))
-  {
-    if (
-      !line.starts_with("// Generator:") && !line.starts_with("\"_tb_linked_group_id\""))
-    {
-      lines.push_back(line);
-    }
-  }
-  return kdl::str_join(lines, "\n");
-}
-
 constexpr auto RoomA = std::string_view{
   R"({"op": "add_room", "name": "A", "min": [0, 0, 0], "size": [256, 256, 128]})"};
+
+/** A room as large as A, east of it at a gap of 128. */
+constexpr auto RoomBEastOfA = std::string_view{
+  R"({"op": "add_room", "name": "B", "size": [256, 256, 128],
+      "place": {"east_of": "A", "gap": 128}})"};
+
+/** The textures of each brush of the entity at the given path. */
+std::vector<Json> brushTextures(const std::string& map, const std::string& entityPath)
+{
+  auto result = std::vector<Json>{};
+  const auto entity = showNode(map, entityPath);
+  for (const auto& brush : entity["brushes"]["items"].asArray())
+  {
+    result.push_back(showNode(map, brush.asString())["textures"]);
+  }
+  return result;
+}
+
+/** The last n elements. */
+std::vector<Json> lastOf(const std::vector<Json>& values, const size_t n)
+{
+  return std::vector<Json>(values.end() - static_cast<std::ptrdiff_t>(n), values.end());
+}
+
+/** The batch that compiled/built_rooms.map was made by, followed by the given ops. */
+std::string builtRoomsBatch(const std::string_view moreOps = {})
+{
+  return fmt::format(
+    R"([{},
+      {{"op": "add_room", "name": "B", "size": [192, 320, 96],
+       "place": {{"east_of": "A", "gap": 128}}}},
+      {{"op": "create_point_entity", "classname": "info_player_start",
+       "origin": [128, 128, 24]}},
+      {{"op": "create_point_entity", "classname": "light",
+       "origin": [480, 128, 64]}}{}])",
+    RoomA,
+    moreOps);
+}
 
 } // namespace
 
@@ -389,40 +456,371 @@ TEST_CASE("add_room")
     CHECK(fixture.unchanged());
   }
 
+  SECTION("refuses rooms whose walls would overlap a connection")
+  {
+    fixture.applyJson(
+      fmt::format(
+        R"([{}, {}, {{"op": "connect", "from": "A", "to": "B"}}])", RoomA, RoomBEastOfA));
+    const auto result = fixture.apply(
+      R"([{"op": "add_room", "name": "C", "min": [288, 100, 0], "size": [64, 64, 64]}])");
+    checkError(result, "layout_overlap", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:2/entity:0"});
+  }
+
   SECTION("a generated room compiles sealed")
   {
     // compiled/built_rooms.map was made by this batch; its qbsp recording has no leak
+    fixture.applyJson(builtRoomsBatch());
+    fixture.checkCompilesSealed("built_rooms");
+  }
+}
+
+TEST_CASE("connect")
+{
+  auto fixture = RoomFixture{};
+  const auto& map = fixture.map;
+  const auto rooms = fmt::format("[{}, {}]", RoomA, RoomBEastOfA);
+
+  SECTION("builds a corridor and cuts both rooms' walls around the opening")
+  {
+    fixture.applyJson(rooms);
+    const auto json =
+      fixture.applyJson(R"([{"op": "connect", "from": "A", "to": "B", "height": 96}])");
+    const auto& op = json["ops"][0];
+    CHECK(op["created"] == parseJsonLiteral(R"(["layer:0/group:2"])"));
+    CHECK(
+      op["modified"]
+      == parseJsonLiteral(R"(["layer:0/group:0/entity:0", "layer:0/group:1/entity:0"])"));
+    // the east wall of A and the west wall of B
+    CHECK(
+      op["removed"]
+      == parseJsonLiteral(
+        R"(["layer:0/group:0/entity:0/brush:3", "layer:0/group:1/entity:0/brush:2"])"));
+
+    CHECK(showNode(map, "layer:0/group:2")["name"] == Json{"connection:A-B"});
+    const auto carrier = showNode(map, "layer:0/group:2/entity:0");
+    CHECK(carrier["classname"] == Json{"func_group"});
+    const auto& properties = carrier["properties"];
+    CHECK(properties["_tbcli_kind"] == Json{"connection"});
+    CHECK(properties["_tbcli_from"] == Json{"A"});
+    CHECK(properties["_tbcli_to"] == Json{"B"});
+    CHECK(properties["_tbcli_width"] == Json{"128"});
+    CHECK(properties["_tbcli_height"] == Json{"96"});
+    CHECK(properties["_tbcli_offset"] == Json{"0"});
+    CHECK(properties["_tbcli_fp"].asString().size() == 16);
+    CHECK(properties.find("_tb_type") == nullptr);
+
+    // floor, ceiling, south and north wall between the rooms' outer wall faces, around
+    // an interior centred on the shared wall
+    CHECK(
+      brushAabbs(map, "layer:0/group:2/entity:0")
+      == std::vector<Json>{
+        parseJsonLiteral(R"({"min": [272, 48, -16], "max": [368, 208, 0]})"),
+        parseJsonLiteral(R"({"min": [272, 48, 96], "max": [368, 208, 112]})"),
+        parseJsonLiteral(R"({"min": [272, 48, 0], "max": [368, 64, 96]})"),
+        parseJsonLiteral(R"({"min": [272, 192, 0], "max": [368, 208, 96]})"),
+      });
+
+    // the cut walls are split beside and above the opening
+    CHECK(
+      brushAabbs(map, "layer:0/group:0/entity:0")
+      == std::vector<Json>{
+        parseJsonLiteral(R"({"min": [-16, -16, -16], "max": [272, 272, 0]})"),
+        parseJsonLiteral(R"({"min": [-16, -16, 128], "max": [272, 272, 144]})"),
+        parseJsonLiteral(R"({"min": [-16, -16, 0], "max": [0, 272, 128]})"),
+        parseJsonLiteral(R"({"min": [0, -16, 0], "max": [256, 0, 128]})"),
+        parseJsonLiteral(R"({"min": [0, 256, 0], "max": [256, 272, 128]})"),
+        parseJsonLiteral(R"({"min": [256, -16, 0], "max": [272, 64, 128]})"),
+        parseJsonLiteral(R"({"min": [256, 192, 0], "max": [272, 272, 128]})"),
+        parseJsonLiteral(R"({"min": [256, 64, 96], "max": [272, 192, 128]})"),
+      });
+    CHECK(
+      lastOf(brushAabbs(map, "layer:0/group:1/entity:0"), 3)
+      == std::vector<Json>{
+        parseJsonLiteral(R"({"min": [368, -16, 0], "max": [384, 64, 128]})"),
+        parseJsonLiteral(R"({"min": [368, 192, 0], "max": [384, 272, 128]})"),
+        parseJsonLiteral(R"({"min": [368, 64, 96], "max": [384, 192, 128]})"),
+      });
+  }
+
+  SECTION("the cut rooms stay rebuildable with the fingerprints of their cut walls")
+  {
+    fixture.applyJson(rooms);
+    const auto fingerprintOfA = [&]() {
+      return showNode(map, "layer:0/group:0/entity:0")["properties"]["_tbcli_fp"];
+    };
+    const auto before = fingerprintOfA();
+    fixture.applyJson(R"([{"op": "connect", "from": "A", "to": "B"}])");
+    CHECK(fingerprintOfA() != before);
+    for (const auto& room : fixture.builtRooms()["items"].asArray())
+    {
+      CHECK(room["status"] == Json{"rebuildable"});
+    }
+  }
+
+  SECTION("joins rooms apart along either axis, in either order")
+  {
+    using T = std::tuple<std::string, std::string>;
+    const auto [relation, expected] = GENERATE(
+      T{"west_of", R"({"min": [-112, 48, -16], "max": [-16, 208, 144]})"},
+      T{"north_of", R"({"min": [48, 272, -16], "max": [208, 368, 144]})"});
+    CAPTURE(relation);
+
     fixture.applyJson(
       fmt::format(
-        R"([{},
-          {{"op": "add_room", "name": "B", "size": [192, 320, 96],
-           "place": {{"east_of": "A", "gap": 128}}}},
-          {{"op": "create_point_entity", "classname": "info_player_start",
-           "origin": [128, 128, 24]}},
-          {{"op": "create_point_entity", "classname": "light",
-           "origin": [480, 128, 64]}}])",
-        RoomA));
-    const auto generated = fixture.env.readFile("rooms.map");
-    const auto recorded = *readFile(fixturePath("compiled/built_rooms.map"));
-    CHECK(withoutVolatileLines(generated) == withoutVolatileLines(recorded));
+        R"([{}, {{"op": "add_room", "name": "B", "size": [256, 256, 128],
+          "place": {{"{}": "A", "gap": 128}}}},
+          {{"op": "connect", "from": "B", "to": "A"}}])",
+        RoomA,
+        relation));
+    CHECK(showNode(map, "layer:0/group:2")["name"] == Json{"connection:B-A"});
+    CHECK(aabbOf(map, "layer:0/group:2/entity:0") == parseJsonLiteral(expected));
+  }
 
-    auto compilers = Json::object();
-    compilers.set(
-      std::string{QbspTool},
-      arg(setUpFakeCompiler(fixture.env, QbspTool, "built_rooms")));
-    auto config = quakeConfig();
-    config.set("compilers", std::move(compilers));
-    fixture.env.writeConfig({}, config);
+  SECTION("width and offset place the opening along the shared wall")
+  {
+    fixture.applyJson(rooms);
+    fixture.applyJson(
+      R"([{"op": "connect", "from": "A", "to": "B", "width": 64, "offset": 32}])");
+    CHECK(
+      aabbOf(map, "layer:0/group:2/entity:0")
+      == parseJsonLiteral(R"({"min": [272, 112, -16], "max": [368, 208, 144]})"));
+    CHECK(
+      showNode(map, "layer:0/group:2/entity:0")["properties"]["_tbcli_offset"]
+      == Json{"32"});
+  }
 
-    const auto json = runJson({"verify", map, "--compile"});
-    for (const auto& issue : json["issues"]["items"].asArray())
-    {
-      CHECK_FALSE(issue["type"] == Json{"leak"});
-    }
-    const auto& stages = json["stages"].asArray();
-    REQUIRE(stages.size() == 4);
-    CHECK(stages[3]["name"] == Json{"qbsp"});
-    CHECK_FALSE(stages[3]["status"] == Json{"failed"});
+  SECTION("the cut walls keep their materials")
+  {
+    fixture.applyJson(rooms);
+    fixture.applyJson(R"([
+      {"op": "set_material", "target": "layer:0/group:0/entity:0/brush:3",
+       "material": "outside"},
+      {"op": "set_material", "target": "layer:0/group:0/entity:0/brush:3",
+       "faces": "-x", "material": "inside"},
+      {"op": "connect", "from": "A", "to": "B", "height": 96}])");
+    const auto cut = parseJsonLiteral(R"(["inside", "outside"])");
+    CHECK(
+      lastOf(brushTextures(map, "layer:0/group:0/entity:0"), 3)
+      == std::vector<Json>{cut, cut, cut});
+  }
+
+  SECTION("a room whose walls are cut into other boxes stays rebuildable")
+  {
+    // the order in which openings are cut changes how the walls are cut into boxes
+    fixture.applyJson(rooms);
+    fixture.applyJson(R"([
+      {"op": "create_box", "min": [-16, -16, 0], "max": [0, 128, 128], "material": "a",
+       "as": "$south"},
+      {"op": "create_box", "min": [-16, 128, 0], "max": [0, 272, 128], "material": "a",
+       "as": "$north"},
+      {"op": "delete", "target": "layer:0/group:0/entity:0/brush:2"},
+      {"op": "move_to_entity", "target": ["$south", "$north"],
+       "entity": "layer:0/group:0/entity:0"}])");
+    REQUIRE(brushAabbs(map, "layer:0/group:0/entity:0").size() == 7);
+    CHECK(fixture.builtRooms()["items"][0]["status"] == Json{"rebuildable"});
+  }
+
+  SECTION("as binds the connection's group; the subcommand takes flags")
+  {
+    fixture.applyJson(rooms);
+    const auto json = fixture.applyJson(
+      R"([{"op": "connect", "from": "A", "to": "B", "width": 64, "as": "$c"}])");
+    CHECK(json["bindings"] == parseJsonLiteral(R"({"$c": "layer:0/group:2"})"));
+
+    fixture.env.writeFile("rooms.map", EmptyMap);
+    fixture.applyJson(rooms);
+    const auto flags = runJson(
+      {"connect", map, "--from", "A", "--to", "B", "--width", "64", "--offset", "-96"});
+    CHECK(flags["ops"][0]["created"] == parseJsonLiteral(R"(["layer:0/group:2"])"));
+    CHECK(
+      aabbOf(map, "layer:0/group:2/entity:0")
+      == parseJsonLiteral(R"({"min": [272, -16, -16], "max": [368, 80, 144]})"));
+  }
+
+  SECTION("refuses corridors that do not fit the shared wall")
+  {
+    const auto batch = GENERATE(
+      R"({"op": "connect", "from": "A", "to": "B", "width": 257})",
+      R"({"op": "connect", "from": "A", "to": "B", "offset": 65})",
+      R"({"op": "connect", "from": "A", "to": "B", "offset": -65})");
+    CAPTURE(batch);
+
+    fixture.applyJson(rooms);
+    const auto before = fixture.env.readFile("rooms.map");
+    checkError(
+      fixture.apply(fmt::format("[{}]", batch)), "layout_corridor_does_not_fit", 1, 0);
+    CHECK(fixture.env.readFile("rooms.map") == before);
+  }
+
+  SECTION("refuses rooms that do not stand side by side")
+  {
+    const auto other = GENERATE(
+      // diagonal
+      R"({"op": "add_room", "name": "B", "min": [400, 400, 0], "size": [64, 64, 64]})",
+      // above
+      R"({"op": "add_room", "name": "B", "min": [0, 0, 200], "size": [64, 64, 64]})");
+    CAPTURE(other);
+
+    checkError(
+      fixture.apply(
+        fmt::format(
+          R"([{}, {}, {{"op": "connect", "from": "A", "to": "B"}}])", RoomA, other)),
+      "layout_corridor_does_not_fit",
+      1,
+      2);
+  }
+
+  SECTION("refuses rooms whose floors are at different heights")
+  {
+    checkError(
+      fixture.apply(
+        fmt::format(
+          R"([{}, {{"op": "add_room", "name": "B", "min": [384, 0, 16],
+            "size": [256, 256, 128]}}, {{"op": "connect", "from": "A", "to": "B"}}])",
+          RoomA)),
+      "layout_floor_mismatch",
+      1,
+      2);
+  }
+
+  SECTION("refuses corridors taller than a room")
+  {
+    checkError(
+      fixture.apply(
+        fmt::format(
+          R"([{}, {{"op": "add_room", "name": "B", "size": [256, 256, 64],
+            "place": {{"east_of": "A", "gap": 128}}}},
+            {{"op": "connect", "from": "A", "to": "B", "height": 65}}])",
+          RoomA)),
+      "layout_corridor_too_tall",
+      1,
+      2);
+  }
+
+  SECTION("refuses corridors that would overlap another room or connection")
+  {
+    using T = std::tuple<std::string, std::string, size_t>;
+    const auto [batch, node, opIndex] = GENERATE(
+      // room C stands between A and B
+      T{R"([{"op": "add_room", "name": "C", "min": [288, 100, 0], "size": [64, 64, 64]},
+           {"op": "connect", "from": "A", "to": "B"}])",
+        "layer:0/group:2/entity:0",
+        1},
+      // the corridor between C and D would cross the one between A and B
+      T{R"([{"op": "add_room", "name": "C", "min": [288, 300, 0], "size": [64, 64, 64]},
+           {"op": "add_room", "name": "D", "min": [288, -200, 0], "size": [64, 64, 64]},
+           {"op": "connect", "from": "A", "to": "B"},
+           {"op": "connect", "from": "C", "to": "D", "width": 64, "height": 64}])",
+        "layer:0/group:4/entity:0",
+        3});
+    CAPTURE(batch);
+
+    fixture.applyJson(rooms);
+    const auto result = fixture.apply(batch);
+    checkError(result, "layout_overlap", 1, opIndex);
+    CHECK(parseOutput(result)["error"]["node"] == Json{node});
+  }
+
+  SECTION("refuses rooms whose walls touch, which leave no room for a corridor")
+  {
+    checkError(
+      fixture.apply(
+        fmt::format(
+          R"([{}, {{"op": "add_room", "name": "B", "size": [256, 256, 128],
+            "place": {{"east_of": "A", "gap": 32}}}},
+            {{"op": "connect", "from": "A", "to": "B"}}])",
+          RoomA)),
+      "layout_corridor_does_not_fit",
+      1,
+      2);
+  }
+
+  SECTION("refuses rooms that are joined already, in either direction")
+  {
+    const auto second = GENERATE(
+      R"({"op": "connect", "from": "A", "to": "B", "width": 32, "offset": 96})",
+      R"({"op": "connect", "from": "B", "to": "A", "width": 32, "offset": 96})");
+    CAPTURE(second);
+
+    fixture.applyJson(rooms);
+    const auto result = fixture.apply(
+      fmt::format(
+        R"([{{"op": "connect", "from": "A", "to": "B", "width": 32}}, {}])", second));
+    checkError(result, "op_failed", 1, 1);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:2/entity:0"});
+  }
+
+  SECTION("refuses a room inside a linked group")
+  {
+    fixture.applyJson(rooms);
+    fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:1",
+      "offset": [0, 2000, 0]}])");
+    // until linked copies count as one room, rename the copy so that the name is unique
+    auto text = fixture.env.readFile("rooms.map");
+    const auto copy = text.rfind(R"("_tbcli_name" "B")");
+    REQUIRE(copy != std::string::npos);
+    text.replace(copy, 17, R"("_tbcli_name" "C")");
+    fixture.env.writeFile("rooms.map", text);
+
+    const auto result = fixture.apply(R"([{"op": "connect", "from": "A", "to": "B"}])");
+    checkError(result, "connect_cuts_linked_room", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:1/entity:0"});
+  }
+
+  SECTION("refuses a room that does not exist")
+  {
+    fixture.applyJson(rooms);
+    checkError(
+      fixture.apply(R"([{"op": "connect", "from": "A", "to": "C"}])"),
+      "node_not_found",
+      1,
+      0);
+  }
+
+  SECTION("refuses a locked room")
+  {
+    fixture.applyJson(rooms);
+    fixture.applyJson(R"([
+      {"op": "create_layer", "name": "L", "as": "$l"},
+      {"op": "move_to_layer", "target": "layer:0/group:1", "layer": "$l"},
+      {"op": "lock", "target": "$l"}])");
+    const auto result = fixture.apply(R"([{"op": "connect", "from": "A", "to": "B"}])");
+    checkError(result, "locked", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:1/group:0/entity:0"});
+  }
+
+  SECTION("refuses a hand edited room, whose walls it cannot cut safely")
+  {
+    fixture.applyJson(rooms);
+    const auto result = fixture.apply(R"([
+      {"op": "delete", "target": "layer:0/group:1/entity:0/brush:0"},
+      {"op": "connect", "from": "A", "to": "B"}])");
+    checkError(result, "hand_edited", 1, 1);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:1/entity:0"});
+  }
+
+  SECTION("refuses malformed arguments")
+  {
+    const auto batch = GENERATE(
+      R"({"op": "connect", "from": "A", "to": "A"})",
+      R"({"op": "connect", "from": "A b", "to": "B"})",
+      R"({"op": "connect", "from": "A", "to": "B", "width": 0})",
+      R"({"op": "connect", "from": "A", "to": "B", "height": -8})",
+      R"({"op": "connect", "from": "A"})");
+    CAPTURE(batch);
+
+    checkError(fixture.apply(fmt::format("[{}]", batch)), "invalid_argument", 2, 0);
+    CHECK(fixture.unchanged());
+  }
+
+  SECTION("two rooms and a connection compile sealed")
+  {
+    // compiled/connected_rooms.map was made by this batch; its qbsp recording has no
+    // leak
+    fixture.applyJson(
+      builtRoomsBatch(R"(, {"op": "connect", "from": "A", "to": "B", "height": 96})"));
+    fixture.checkCompilesSealed("connected_rooms");
   }
 }
 

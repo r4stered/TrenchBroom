@@ -1,0 +1,100 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "keepprt" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\connected_rooms.map
+Output file: ${WORKDIR}\connected_rooms.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     9 entities
+     2 unique textures
+     7 texinfos
+    52 unique planes
+
+INFO: world extents calculated to 1384 units
+     19 brushes
+    114 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture __TB_empty
+Processing hull 0...
+    19 SOLID brushes
+    19 brushes total
+    114 visible sides
+INFO: calculating BSP for 19 brushes with 114 sides
+     19 brushes
+    114 visible faces
+    59 nodes
+    59 expensive split nodes
+    60 leaves
+    41 EMPTY leafs
+    19 SOLID leafs
+    60 leafs total
+    9 max tree height
+    7 avg tree height
+    280 tree portals
+    36 outside leaves
+    0 detail filled leafs
+    19 brushes
+    24 visible faces
+    90 non-visible faces
+    72 nodes
+    57 non-visible nodes
+    72 expensive split nodes
+    73 leaves
+    48 EMPTY leafs
+    25 SOLID leafs
+    73 leafs total
+    12 max tree height
+     8 avg tree height
+    328 tree portals
+    45 outside leaves
+    0 detail filled leafs
+    328 tree portals
+    62 sides visible
+    31 makefaces
+    12 merged
+    12 subdivided
+    59 nodes pruned
+    3 player-occupiable leaves
+    3 clusters of leaves
+    2 vis portals
+    11 SOLID leafs
+     3 EMPTY leafs
+    14 leafs total
+    9 max tree height
+    6 avg tree height
+    18 edges added by tjunctions
+    31 faces optimized through MWT
+    80 triangles computed from MWT
+     3 faces created via optimization of MWT triangles
+    74 edges
+    34 faces
+Processing hull 1...
+Processing hull 2...
+Writing connected_rooms.bsp as Quake BSP bsp29
+Wrote connected_rooms.bsp
+
+count   lump name    byte size 
+      1 models               64
+     34 planes              680
+     42 vertexes            504
+     13 nodes               312
+      6 texinfos            240
+     34 faces               680
+     32 clipnodes           256
+      4 leafs               112
+     34 marksurfaces         68
+     75 edges               300
+    148 surfedges           592
+      2 textures             12
+        lightdata             0
+        visdata               0
+        entdata             162
+
+0.022s seconds elapsed
+
+

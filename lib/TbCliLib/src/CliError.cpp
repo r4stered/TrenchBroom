@@ -78,6 +78,16 @@ std::string_view toString(const ErrorCode code)
     return "map_leaks";
   case ErrorCode::LayoutOverlap:
     return "layout_overlap";
+  case ErrorCode::LayoutCorridorDoesNotFit:
+    return "layout_corridor_does_not_fit";
+  case ErrorCode::LayoutFloorMismatch:
+    return "layout_floor_mismatch";
+  case ErrorCode::LayoutCorridorTooTall:
+    return "layout_corridor_too_tall";
+  case ErrorCode::HandEdited:
+    return "hand_edited";
+  case ErrorCode::ConnectCutsLinkedRoom:
+    return "connect_cuts_linked_room";
   case ErrorCode::InternalError:
     return "internal_error";
   }

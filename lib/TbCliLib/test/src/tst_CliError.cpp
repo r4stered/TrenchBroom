@@ -47,6 +47,11 @@ TEST_CASE("CliError")
       T{ErrorCode::StaleArtifact, 1},
       T{ErrorCode::MapLeaks, 1},
       T{ErrorCode::LayoutOverlap, 1},
+      T{ErrorCode::LayoutCorridorDoesNotFit, 1},
+      T{ErrorCode::LayoutFloorMismatch, 1},
+      T{ErrorCode::LayoutCorridorTooTall, 1},
+      T{ErrorCode::HandEdited, 1},
+      T{ErrorCode::ConnectCutsLinkedRoom, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

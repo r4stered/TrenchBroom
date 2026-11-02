@@ -21,7 +21,7 @@
 "_tbcli_name" "A"
 "_tbcli_size" "256 256 128"
 "_tbcli_wall" "16"
-"_tbcli_fp" "2b026b200cab79b2"
+"_tbcli_fp" "dbe00e5be48413b7"
 "_tb_group" "1"
 // brush 0
 {
@@ -94,7 +94,7 @@
 "_tbcli_size" "192 320 96"
 "_tbcli_wall" "16"
 "_tbcli_place" "east_of A 128"
-"_tbcli_fp" "4617afb2b1e5d435"
+"_tbcli_fp" "874e6b8b7631212c"
 "_tb_group" "2"
 // brush 0
 {

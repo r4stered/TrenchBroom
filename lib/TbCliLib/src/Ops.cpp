@@ -1616,6 +1616,49 @@ std::vector<OpDef> makeOpDefs()
       addRoom,
       checkAddRoomArgs,
     },
+    OpDef{
+      "connect",
+      "Builds a straight corridor between two built rooms that stand side by side, "
+      "apart along x or y: an interior of the given width and height on the rooms' "
+      "floor, centred on the wall that they share and moved by offset, with walls, "
+      "floor and ceiling as thick as the thicker of the rooms' walls. Both rooms' walls "
+      "are cut and split around the opening. The corridor is ordinary brushes in a "
+      "func_group carrier that keeps its parameters, wrapped in a group "
+      "connection:<from>-<to>. Fails with layout_corridor_does_not_fit if the rooms do "
+      "not stand side by side, their walls touch, or the corridor does not fit the wall "
+      "that they share, "
+      "layout_floor_mismatch if their floors are at different heights, "
+      "layout_corridor_too_tall if it is taller than a room, and layout_overlap if it "
+      "would overlap another built room or connection. Rooms inside linked groups, rooms "
+      "whose brushes were edited by hand and rooms that are joined already are "
+      "refused.",
+      {
+        ArgDef{"from", ArgType::String, "the name of one built room", true},
+        ArgDef{"to", ArgType::String, "the name of the other built room", true},
+        ArgDef{
+          "width",
+          ArgType::Number,
+          "the width of the corridor's interior, in units; greater than 0",
+          false,
+          Json{128}},
+        ArgDef{
+          "height",
+          ArgType::Number,
+          "the height of the corridor's interior, in units; greater than 0",
+          false,
+          Json{128}},
+        ArgDef{
+          "offset",
+          ArgType::Number,
+          "how far to move the corridor from the middle of the shared wall, in units, "
+          "towards greater coordinates",
+          false,
+          Json{0}},
+        ArgDef{"as", ArgType::Binding, "binds the connection's group to this name"},
+      },
+      connect,
+      checkConnectArgs,
+    },
   };
 }
 

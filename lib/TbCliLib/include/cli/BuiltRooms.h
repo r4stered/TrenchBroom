@@ -42,11 +42,12 @@ class Json;
 struct OpContext;
 
 /**
- * Built rooms: sealed rectangular rooms that `add_room` lays out by relation. A built
- * room is ordinary brushes in a carrier, a plain `func_group` brush entity whose
- * `_tbcli_*` keys hold the room's parameters, wrapped in a group `built_room:<name>`.
- * The carrier identifies the room; the group is optional. The room's position is not
- * stored, it is where the carrier's brushes are.
+ * Built rooms: sealed rectangular rooms that `add_room` lays out by relation, and
+ * connections: straight corridors that `connect` builds between two of them. Each is
+ * ordinary brushes in a carrier, a plain `func_group` brush entity whose `_tbcli_*` keys
+ * hold its parameters, wrapped in a group `built_room:<name>` or `connection:<A>-<B>`.
+ * The carrier identifies the room or connection; the group is optional. Positions are
+ * not stored, they are where the carriers' brushes are.
  */
 
 /** The side of another room that a room is placed on. */
@@ -140,8 +141,9 @@ Json builtRoomToJson(const BuiltRoom& room);
  * from the other room's interior on the given side, centred on the other horizontal
  * axis, with the same floor height. The room is created in the default layer.
  *
- * @throw CliError `layout_overlap` if its walls would overlap another built room's,
- * `node_not_found` if the room to place it against does not exist,
+ * @throw CliError `layout_overlap` if its walls would overlap another built room's or
+ * a connection's brushes, `node_not_found` if the room to place it against does not
+ * exist, `locked` if the default layer is locked, without --allow-locked,
  * and `op_failed` if several rooms have that name, the room to place it against has no
  * brushes or malformed parameter keys, or a room with the new name exists already
  */
@@ -155,5 +157,37 @@ void addRoom(OpContext& context);
  * min and place is given
  */
 void checkAddRoomArgs(const Json& args);
+
+/**
+ * `connect {from, to, width, height, offset, as?}`: a straight corridor between two
+ * built rooms that stand side by side, apart along x or y. Its interior is `width` wide
+ * and `height` tall, stands on the rooms' floor, and is centred on the wall that they
+ * share, moved by `offset` towards greater coordinates. Its walls, floor and ceiling are
+ * as thick as the thicker of the rooms' walls. Both rooms' walls are cut and split
+ * around the opening, keeping their materials, and their fingerprints are updated so
+ * that they stay rebuildable. The corridor's carrier keeps the parameters in
+ * `_tbcli_from`, `_tbcli_to`, `_tbcli_width`, `_tbcli_height` and `_tbcli_offset`, and
+ * is wrapped in a group `connection:<from>-<to>` in the default layer.
+ *
+ * @throw CliError `layout_corridor_does_not_fit` if the rooms do not stand side by side,
+ * their walls touch, or the corridor reaches beyond the wall that they share,
+ * `layout_floor_mismatch` if their floors are at different heights,
+ * `layout_corridor_too_tall` if the corridor would reach above a room's ceiling,
+ * `layout_overlap` if it would overlap another built room or connection,
+ * `node_not_found` if a room does not exist, `locked` if a room or the default layer is
+ * locked, without --allow-locked, `connect_cuts_linked_room` if a room is inside a
+ * linked group, `hand_edited` if a room's brushes no longer match what tbcli built, and
+ * `op_failed` if a connection joins the rooms already, several rooms have a name, or a
+ * room has no brushes or malformed parameter keys
+ */
+void connect(OpContext& context);
+
+/**
+ * Checks the arguments of `connect`.
+ *
+ * @throw CliError `invalid_argument` if a room name is not made of letters, digits and
+ * underscores, both name the same room, or the width or height is not greater than 0
+ */
+void checkConnectArgs(const Json& args);
 
 } // namespace tb::cli

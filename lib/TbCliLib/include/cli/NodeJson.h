@@ -23,6 +23,7 @@
 
 namespace tb::mdl
 {
+class Brush;
 class BrushNode;
 class GroupNode;
 class LayerNode;
@@ -51,6 +52,9 @@ Json layerToJson(const mdl::LayerNode& layerNode);
 
 /** A group: `{path, id, name, bounds, counts, hidden, locked}`, as for layers. */
 Json groupToJson(const mdl::GroupNode& groupNode);
+
+/** Whether the brush is exactly six axis-aligned faces: a box along the axes. */
+bool isAxialBox(const mdl::Brush& brush);
 
 /**
  * A brush summary: `{path, aabb, axial_box, textures, entity}`. `axial_box` tells

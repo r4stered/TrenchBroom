@@ -83,13 +83,6 @@ Json layerOrGroupToJson(const mdl::Node& node, const std::optional<mdl::IdType>&
   return result;
 }
 
-bool isAxialBox(const mdl::Brush& brush)
-{
-  return brush.faceCount() == 6
-         && std::ranges::all_of(
-           brush.faces(), [](const auto& face) { return isAxial(face.normal()); });
-}
-
 Json pointsToJson(const auto& points)
 {
   auto result = Json::array();
@@ -101,6 +94,13 @@ Json pointsToJson(const auto& points)
 }
 
 } // namespace
+
+bool isAxialBox(const mdl::Brush& brush)
+{
+  return brush.faceCount() == 6
+         && std::ranges::all_of(
+           brush.faces(), [](const auto& face) { return isAxial(face.normal()); });
+}
 
 Json countsToJson(const Summary& summary)
 {

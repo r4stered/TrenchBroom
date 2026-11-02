@@ -87,8 +87,22 @@ enum class ErrorCode
   StaleArtifact,
   /** `rooms` on a map that leaks; the error carries the `leak` issue */
   MapLeaks,
-  /** `add_room` would build a room whose walls overlap another built room's */
+  /**
+   * `add_room` would build a room whose walls overlap another built room's, or `connect`
+   * a corridor that overlaps another built room or connection
+   */
   LayoutOverlap,
+  /** `connect` would build a corridor that does not fit the wall the rooms share */
+  LayoutCorridorDoesNotFit,
+  /** `connect` would join two rooms whose floors are at different heights */
+  LayoutFloorMismatch,
+  /** `connect` would build a corridor taller than one of the rooms */
+  LayoutCorridorTooTall,
+  /** `connect` would cut the walls of a room whose brushes no longer match what tbcli
+   * built */
+  HandEdited,
+  /** `connect` would cut the walls of a room inside a linked group */
+  ConnectCutsLinkedRoom,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

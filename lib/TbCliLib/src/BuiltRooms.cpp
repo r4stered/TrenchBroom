@@ -25,10 +25,12 @@
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
 #include "cli/MapContents.h"
+#include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Sha256.h"
+#include "mdl/Brush.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -38,8 +40,11 @@
 #include "mdl/Group.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
+#include "mdl/LinkedGroupUtils.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
+#include "mdl/ModelUtils.h"
+#include "mdl/NodeContents.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/contracts.h"
@@ -53,6 +58,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <ranges>
 #include <utility>
@@ -69,14 +75,25 @@ const auto Name = std::string{"_tbcli_name"};
 const auto Size = std::string{"_tbcli_size"};
 const auto Wall = std::string{"_tbcli_wall"};
 const auto Place = std::string{"_tbcli_place"};
+const auto From = std::string{"_tbcli_from"};
+const auto To = std::string{"_tbcli_to"};
+const auto Width = std::string{"_tbcli_width"};
+const auto Height = std::string{"_tbcli_height"};
+const auto Offset = std::string{"_tbcli_offset"};
 const auto Fingerprint = std::string{"_tbcli_fp"};
 } // namespace Keys
 
 /** The `_tbcli_kind` of a built room's carrier. */
 const auto RoomKind = std::string{"room"};
 
+/** The `_tbcli_kind` of a connection's carrier. */
+const auto ConnectionKind = std::string{"connection"};
+
 /** The prefix of the name of the group that wraps a built room's carrier. */
 constexpr auto RoomGroupPrefix = std::string_view{"built_room:"};
+
+/** The prefix of the name of the group that wraps a connection's carrier. */
+constexpr auto ConnectionGroupPrefix = std::string_view{"connection:"};
 
 constexpr auto RelationNames =
   std::array<std::string_view, 4>{"east_of", "west_of", "north_of", "south_of"};
@@ -177,13 +194,29 @@ std::optional<RoomParams> parseRoomParams(const mdl::Entity& entity)
   return result;
 }
 
-/** Whether the entity is a built room's carrier. */
-bool isRoomCarrier(const mdl::EntityNode& entityNode)
+/**
+ * Whether the entity is a carrier of the given kind: a plain func_group, not one of the
+ * editor's own groups, whose `_tbcli_kind` is that kind.
+ */
+bool isCarrierOfKind(const mdl::EntityNode& entityNode, const std::string& kind)
 {
   const auto& entity = entityNode.entity();
   return entity.classname() == mdl::EntityPropertyValues::GroupClassname
          && !entity.hasProperty(mdl::EntityPropertyKeys::TbGroupType)
-         && entity.hasProperty(Keys::Kind, RoomKind) && entity.property(Keys::Name);
+         && entity.hasProperty(Keys::Kind, kind);
+}
+
+/** Whether the entity is a built room's carrier. */
+bool isRoomCarrier(const mdl::EntityNode& entityNode)
+{
+  return isCarrierOfKind(entityNode, RoomKind)
+         && entityNode.entity().property(Keys::Name);
+}
+
+/** Whether the entity is a connection's carrier. */
+bool isConnectionCarrier(const mdl::EntityNode& entityNode)
+{
+  return isCarrierOfKind(entityNode, ConnectionKind);
 }
 
 /** The walls, floor and ceiling around an interior, as in the reference lowering. */
@@ -259,14 +292,14 @@ std::vector<vm::bbox3d> subtract(const vm::bbox3d& a, const vm::bbox3d& b)
 }
 
 /**
- * The boxes of a room, as the reference lowering builds them: the shell slabs around its
- * interior, less the given interiors of every room, so that no slab reaches into a room.
+ * The boxes that slabs lower to, as in the reference lowering: the slabs less the given
+ * interiors of every room and corridor, so that no slab reaches into one.
  */
-std::vector<vm::bbox3d> lowerRoom(
-  const vm::bbox3d& interior, const double wall, const std::vector<vm::bbox3d>& interiors)
+std::vector<vm::bbox3d> lowerSlabs(
+  const std::vector<vm::bbox3d>& slabs, const std::vector<vm::bbox3d>& interiors)
 {
   auto result = std::vector<vm::bbox3d>{};
-  for (const auto& slab : shellSlabs(interior, wall))
+  for (const auto& slab : slabs)
   {
     auto pieces = std::vector{slab};
     for (const auto& each : interiors)
@@ -283,41 +316,197 @@ std::vector<vm::bbox3d> lowerRoom(
   return result;
 }
 
-std::vector<vm::vec3d> cornersOf(const vm::bbox3d& box)
+/** The boxes of a room, as the reference lowering builds them. */
+std::vector<vm::bbox3d> lowerRoom(
+  const vm::bbox3d& interior, const double wall, const std::vector<vm::bbox3d>& interiors)
 {
-  auto result = std::vector<vm::vec3d>{};
-  for (const auto x : {box.min.x(), box.max.x()})
-  {
-    for (const auto y : {box.min.y(), box.max.y()})
-    {
-      for (const auto z : {box.min.z(), box.max.z()})
-      {
-        result.emplace_back(x, y, z);
-      }
-    }
-  }
-  return result;
+  return lowerSlabs(shellSlabs(interior, wall), interiors);
+}
+
+/** A coordinate rounded to 3 decimals, as fingerprints compare coordinates. */
+double roundedCoordinate(const double coordinate)
+{
+  return std::round(coordinate * 1000.0) / 1000.0;
 }
 
 /**
- * A fingerprint of the geometry of some brushes, given by their vertices, that ignores
- * where they are, their order and the order of their vertices: a hash of the vertices
- * relative to the minimum of all of them, rounded to 3 decimals, sorted per brush, and of
- * the brushes sorted.
+ * The space that some boxes fill together, as a grid along the axes whose cells are
+ * filled or empty.
  */
-std::string geometryFingerprint(const std::vector<std::vector<vm::vec3d>>& brushes)
+class FilledGrid
+{
+private:
+  /** The planes of the grid along each axis, ascending. */
+  std::array<std::vector<double>, 3> m_planes;
+  /** Whether each cell is filled, x fastest. */
+  std::vector<bool> m_filled;
+
+  size_t cells(const size_t axis) const { return m_planes[axis].size() - 1; }
+
+  size_t indexOf(const std::array<size_t, 3>& cell) const
+  {
+    return cell[0] + cells(0) * (cell[1] + cells(1) * cell[2]);
+  }
+
+  /** Calls f with each cell, as {x, y, z} indices. */
+  void forEachCell(const std::function<void(const std::array<size_t, 3>&)>& f) const
+  {
+    for (size_t z = 0; z < cells(2); ++z)
+    {
+      for (size_t y = 0; y < cells(1); ++y)
+      {
+        for (size_t x = 0; x < cells(0); ++x)
+        {
+          f({x, y, z});
+        }
+      }
+    }
+  }
+
+  /**
+   * Whether the plane with the given index along the axis can go: whether the cells on
+   * either side of it are filled alike everywhere.
+   */
+  bool isRedundant(const size_t axis, const size_t plane) const
+  {
+    auto result = true;
+    forEachCell([&](const auto& cell) {
+      if (cell[axis] == plane)
+      {
+        auto before = cell;
+        --before[axis];
+        result = result && m_filled[indexOf(cell)] == m_filled[indexOf(before)];
+      }
+    });
+    return result;
+  }
+
+  /** Removes a plane, merging the cells on either side of it. */
+  void removePlane(const size_t axis, const size_t plane)
+  {
+    auto planes = m_planes;
+    planes[axis].erase(planes[axis].begin() + static_cast<std::ptrdiff_t>(plane));
+    auto merged = FilledGrid{std::move(planes)};
+    forEachCell([&](const auto& cell) {
+      if (cell[axis] != plane)
+      {
+        auto target = cell;
+        target[axis] -= cell[axis] > plane ? 1 : 0;
+        merged.m_filled[merged.indexOf(target)] = m_filled[indexOf(cell)];
+      }
+    });
+    *this = std::move(merged);
+  }
+
+  explicit FilledGrid(std::array<std::vector<double>, 3> planes)
+    : m_planes{std::move(planes)}
+    , m_filled(cells(0) * cells(1) * cells(2), false)
+  {
+  }
+
+public:
+  /**
+   * The grid of the boxes, rounded to 3 decimals, with only the planes where the filled
+   * space changes, so that it is the same however the space is cut into boxes.
+   */
+  explicit FilledGrid(const std::vector<vm::bbox3d>& boxes)
+  {
+    auto rounded = std::vector<vm::bbox3d>{};
+    for (const auto& box : boxes)
+    {
+      auto each = vm::bbox3d{};
+      for (size_t k = 0; k < 3; ++k)
+      {
+        each.min[k] = roundedCoordinate(box.min[k]);
+        each.max[k] = roundedCoordinate(box.max[k]);
+        m_planes[k].push_back(each.min[k]);
+        m_planes[k].push_back(each.max[k]);
+      }
+      rounded.push_back(each);
+    }
+    for (auto& planes : m_planes)
+    {
+      std::ranges::sort(planes);
+      const auto [first, last] = std::ranges::unique(planes);
+      planes.erase(first, last);
+      if (planes.empty())
+      {
+        planes.push_back(0.0);
+      }
+    }
+
+    m_filled.assign(cells(0) * cells(1) * cells(2), false);
+    forEachCell([&](const auto& cell) {
+      auto center = vm::vec3d{};
+      for (size_t k = 0; k < 3; ++k)
+      {
+        center[k] = (m_planes[k][cell[k]] + m_planes[k][cell[k] + 1]) / 2.0;
+      }
+      m_filled[indexOf(cell)] = std::ranges::any_of(
+        rounded, [&](const auto& box) { return box.contains(center); });
+    });
+
+    for (size_t k = 0; k < 3; ++k)
+    {
+      for (auto plane = cells(k) > 0 ? cells(k) - 1 : 0; plane > 0; --plane)
+      {
+        if (isRedundant(k, plane))
+        {
+          removePlane(k, plane);
+        }
+      }
+    }
+  }
+
+  /** The planes relative to the given origin and the filled cells, as text. */
+  std::string toString(const vm::vec3d& origin) const
+  {
+    auto result = std::string{};
+    for (size_t k = 0; k < 3; ++k)
+    {
+      for (const auto plane : m_planes[k])
+      {
+        result += formatNumber(roundedCoordinate(plane - origin[k])) + ",";
+      }
+      result += ";";
+    }
+    for (const auto filled : m_filled)
+    {
+      result += filled ? '1' : '0';
+    }
+    return result;
+  }
+};
+
+/**
+ * A fingerprint of the geometry of some brushes that ignores where they are and how they
+ * are ordered: a hash, relative to the minimum of all of them, of the space that the
+ * axis-aligned boxes fill together, however it is cut into boxes, and of the vertices of
+ * the other brushes, rounded to 3 decimals, sorted per brush, with the brushes sorted.
+ */
+std::string geometryFingerprint(
+  const std::vector<vm::bbox3d>& boxes,
+  const std::vector<std::vector<vm::vec3d>>& otherBrushes)
 {
   auto origin = std::optional<vm::vec3d>{};
-  for (const auto& vertices : brushes)
+  for (const auto& box : boxes)
+  {
+    origin = origin ? vm::min(*origin, box.min) : box.min;
+  }
+  for (const auto& vertices : otherBrushes)
   {
     for (const auto& vertex : vertices)
     {
       origin = origin ? vm::min(*origin, vertex) : vertex;
     }
   }
+  if (!origin)
+  {
+    origin = vm::vec3d{};
+  }
 
   auto brushStrings = std::vector<std::string>{};
-  for (const auto& vertices : brushes)
+  for (const auto& vertices : otherBrushes)
   {
     auto vertexStrings = std::vector<std::string>{};
     for (const auto& vertex : vertices)
@@ -328,28 +517,37 @@ std::string geometryFingerprint(const std::vector<std::vector<vm::vec3d>>& brush
     brushStrings.push_back(kdl::str_join(vertexStrings, ","));
   }
   std::ranges::sort(brushStrings);
-  return sha256Hex(kdl::str_join(brushStrings, ";")).substr(0, FingerprintLength);
+
+  const auto text = boxes.empty() ? std::string{} : FilledGrid{boxes}.toString(*origin);
+  return sha256Hex(text + "|" + kdl::str_join(brushStrings, ";"))
+    .substr(0, FingerprintLength);
 }
 
 std::string boxesFingerprint(const std::vector<vm::bbox3d>& boxes)
 {
-  return geometryFingerprint(
-    boxes | std::views::transform(cornersOf) | kdl::ranges::to<std::vector>());
+  return geometryFingerprint(boxes, {});
 }
-
 
 /** The fingerprint of the carrier's brushes. */
 std::string carrierFingerprint(const mdl::EntityNode& carrier)
 {
-  auto brushes = std::vector<std::vector<vm::vec3d>>{};
+  auto boxes = std::vector<vm::bbox3d>{};
+  auto otherBrushes = std::vector<std::vector<vm::vec3d>>{};
   for (const auto* child : carrier.children())
   {
     if (const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(child))
     {
-      brushes.push_back(brushNode->brush().vertexPositions());
+      if (isAxialBox(brushNode->brush()))
+      {
+        boxes.push_back(brushNode->logicalBounds());
+      }
+      else
+      {
+        otherBrushes.push_back(brushNode->brush().vertexPositions());
+      }
     }
   }
-  return geometryFingerprint(brushes);
+  return geometryFingerprint(boxes, otherBrushes);
 }
 
 /**
@@ -409,9 +607,16 @@ vm::bbox3d interiorOf(const BuiltRoom& room)
   return room.carrier->logicalBounds().expand(-room.params->wall);
 }
 
-/** The room with the given name that a room is placed against. */
-const BuiltRoom& placementReference(
-  const std::vector<BuiltRoom>& rooms, const std::string& name)
+/**
+ * The built room with the given name that an op acts on.
+ *
+ * @param action what the op does with the room, for messages, as in `place against`
+ */
+const BuiltRoom& findRoom(
+  const std::string_view opName,
+  const std::string_view action,
+  const std::vector<BuiltRoom>& rooms,
+  const std::string& name)
 {
   auto candidates = std::vector<const BuiltRoom*>{};
   for (const auto& room : rooms)
@@ -427,9 +632,10 @@ const BuiltRoom& placementReference(
     throw CliError{
       ErrorCode::NodeNotFound,
       fmt::format(
-        "add_room: there is no built room named \"{}\" to place against; describe "
-        "lists the built rooms",
-        name)};
+        "{}: there is no built room named \"{}\" to {}; describe lists the built rooms",
+        opName,
+        name,
+        action)};
   }
   if (candidates.size() > 1)
   {
@@ -439,7 +645,7 @@ const BuiltRoom& placementReference(
       paths.push_back(nodePath(*room->carrier));
     }
     throw opFailed(
-      "add_room",
+      opName,
       fmt::format(
         "{} built rooms are named \"{}\" ({}); rename or delete all but one",
         candidates.size(),
@@ -452,18 +658,18 @@ const BuiltRoom& placementReference(
   if (!room.params)
   {
     throw opFailed(
-      "add_room",
+      opName,
       fmt::format(
-        "cannot place against room \"{}\", whose parameter keys are missing or "
-        "malformed",
+        "cannot {} room \"{}\", whose parameter keys are missing or malformed",
+        action,
         name),
       path);
   }
   if (!room.carrier->hasChildren())
   {
     throw opFailed(
-      "add_room",
-      fmt::format("cannot place against room \"{}\", which has no brushes", name),
+      opName,
+      fmt::format("cannot {} room \"{}\", which has no brushes", action, name),
       path);
   }
   return room;
@@ -493,53 +699,127 @@ vm::bbox3d placedInterior(
   return {min, min + size};
 }
 
-void checkNoOverlap(
-  const std::vector<BuiltRoom>& rooms, const std::string& name, const vm::bbox3d& shell)
+/** How messages name a carrier: `room "A"` or `connection A-B`. */
+std::string describeCarrier(const mdl::EntityNode& carrier)
 {
-  for (const auto& room : rooms)
+  const auto& entity = carrier.entity();
+  if (isRoomCarrier(carrier))
+  {
+    return fmt::format("room \"{}\"", *entity.property(Keys::Name));
+  }
+  const auto* from = entity.property(Keys::From);
+  const auto* to = entity.property(Keys::To);
+  return fmt::format("connection {}-{}", from ? *from : "?", to ? *to : "?");
+}
+
+/**
+ * Fails if the box overlaps the brushes of a built room or a connection by more than
+ * OverlapTolerance, compared by the bounds of their carriers. Boxes that only touch do
+ * not overlap; carriers without brushes are skipped.
+ *
+ * @param what what would overlap, for the message, as in `the walls of room "B"`
+ * @param hint how to avoid the overlap, for the message
+ */
+void checkNoOverlap(
+  const mdl::WorldNode& worldNode,
+  const std::string_view opName,
+  const std::string_view what,
+  const vm::bbox3d& box,
+  const std::string_view hint)
+{
+  for (const auto* entityNode : collectContents(worldNode).entities)
   {
     if (
-      room.carrier->hasChildren()
-      && overlaps(shell, room.carrier->logicalBounds(), OverlapTolerance))
+      (isRoomCarrier(*entityNode) || isConnectionCarrier(*entityNode))
+      && entityNode->hasChildren()
+      && overlaps(box, entityNode->logicalBounds(), OverlapTolerance))
     {
-      const auto path = nodePath(*room.carrier);
+      const auto path = nodePath(*entityNode);
       throw CliError{
         ErrorCode::LayoutOverlap,
         fmt::format(
-          "add_room: the walls of room \"{}\" would overlap those of room \"{}\" ({}); "
-          "place it elsewhere or with a larger gap",
-          name,
-          room.name,
-          path),
+          "{}: {} would overlap {} ({}); {}",
+          opName,
+          what,
+          describeCarrier(*entityNode),
+          path,
+          hint),
         path};
     }
   }
 }
 
-/** The carrier of a new room, holding its brushes, in a new group. */
-std::unique_ptr<mdl::GroupNode> newRoomGroup(
-  const mdl::Map& map,
-  const std::string& name,
-  const RoomParams& params,
+/**
+ * Fails with `locked` if the node is locked, without --allow-locked.
+ *
+ * @param what what the node is, for the message, as in `room "A"`
+ * @param action what the op would do to it, for the message, as in `cut its walls`
+ */
+void checkUnlocked(
+  const OpContext& context,
+  const mdl::Node& node,
+  const std::string_view what,
+  const std::string_view action)
+{
+  if (!context.allowLocked && node.locked())
+  {
+    const auto path = nodePath(node);
+    throw CliError{
+      ErrorCode::Locked,
+      fmt::format(
+        "{}: {} ({}) is locked; pass --allow-locked to {} anyway",
+        context.opName,
+        what,
+        path,
+        action),
+      path};
+  }
+}
+
+/**
+ * The default layer, which built rooms and connections are created in.
+ *
+ * @throw CliError `locked` if it is locked, without --allow-locked
+ */
+mdl::LayerNode& defaultLayerToBuildIn(const OpContext& context)
+{
+  auto& layer = *context.map.worldNode().defaultLayer();
+  checkUnlocked(
+    context,
+    layer,
+    "the default layer, where built rooms and connections are created,",
+    "edit it");
+  return layer;
+}
+
+/** The interiors of the rooms that have parameters and brushes. */
+std::vector<vm::bbox3d> roomInteriors(const std::vector<BuiltRoom>& rooms)
+{
+  auto result = std::vector<vm::bbox3d>{};
+  for (const auto& room : rooms)
+  {
+    if (room.params && room.carrier->hasChildren())
+    {
+      result.push_back(interiorOf(room));
+    }
+  }
+  return result;
+}
+
+/**
+ * A new carrier with the given keys that holds a brush for each box, in a new group with
+ * the given name. `_tbcli_fp` is added to the keys: the fingerprint of the boxes, which
+ * rebuilds compare against.
+ */
+std::unique_ptr<mdl::GroupNode> newCarrierGroup(
+  const OpContext& context,
+  const std::string& groupName,
+  std::vector<mdl::EntityProperty> properties,
   const std::vector<vm::bbox3d>& boxes)
 {
-  auto properties = std::vector<mdl::EntityProperty>{
-    {mdl::EntityPropertyKeys::Classname, mdl::EntityPropertyValues::GroupClassname},
-    {Keys::Kind, RoomKind},
-    {Keys::Name, name},
-    {Keys::Size, formatVec3(params.size)},
-    {Keys::Wall, formatNumber(params.wall)},
-  };
-  if (params.place)
-  {
-    properties.emplace_back(Keys::Place, placementToString(*params.place));
-  }
-  // the fingerprint of the brushes as built, which rebuilds compare against
   properties.emplace_back(Keys::Fingerprint, boxesFingerprint(boxes));
 
-  const auto builder = brushBuilderOf(map);
-
-
+  const auto builder = brushBuilderOf(context.map);
   auto carrier = std::make_unique<mdl::EntityNode>(mdl::Entity{std::move(properties)});
   for (const auto& box : boxes)
   {
@@ -547,18 +827,458 @@ std::unique_ptr<mdl::GroupNode> newRoomGroup(
     if (!brush)
     {
       throw opFailed(
-        "add_room",
+        context.opName,
         fmt::format(
-          "cannot create the brushes of room \"{}\": {}",
-          name,
+          "cannot create the brushes of {}: {}",
+          groupName,
           std::get<Error>(brush.error()).msg));
     }
     carrier->addChild(new mdl::BrushNode{std::move(brush).value()});
   }
 
-  auto group = std::make_unique<mdl::GroupNode>(mdl::Group{roomGroupName(name)});
+  auto group = std::make_unique<mdl::GroupNode>(mdl::Group{groupName});
   group->addChild(carrier.release());
   return group;
+}
+
+/** Adds a new carrier's group to the layer and reports it as created. */
+void addCarrierGroup(
+  OpContext& context, mdl::LayerNode& layer, std::unique_ptr<mdl::GroupNode> group)
+{
+  if (mdl::addNodes(context.map, {{&layer, {group.get()}}}).empty())
+  {
+    throw opFailed(
+      context.opName, fmt::format("cannot add {} to the map", group->name()));
+  }
+  context.outcome.created.push_back(group.release());
+}
+
+std::string connectionGroupName(const std::string_view from, const std::string_view to)
+{
+  return fmt::format("{}{}-{}", ConnectionGroupPrefix, from, to);
+}
+
+/** The parameters of a connection. */
+struct ConnectionParams
+{
+  /** The width of the corridor's interior. */
+  double width = 0.0;
+  /** The height of the corridor's interior. */
+  double height = 0.0;
+  /**
+   * How far the corridor is moved from the middle of the wall that the rooms share,
+   * towards greater coordinates.
+   */
+  double offset = 0.0;
+};
+
+/** The horizontal axes of a corridor: the one it runs along, and the one across it. */
+struct CorridorAxes
+{
+  size_t along = 0;
+  size_t across = 1;
+
+  static CorridorAxes runningAlong(const size_t axis) { return {axis, 1 - axis}; }
+};
+
+/** A straight corridor between two rooms, as the reference lowering builds it. */
+struct Corridor
+{
+  /** Its space, from one room's interior to the other's, through both walls. */
+  vm::bbox3d interior;
+  /** The part of the interior between the rooms' outer wall faces. */
+  vm::bbox3d segment;
+  CorridorAxes axes;
+  /** The thickness of its walls, floor and ceiling. */
+  double wall = 0.0;
+};
+
+std::string_view axisName(const size_t axis)
+{
+  return axis == 0 ? "x" : "y";
+}
+
+/**
+ * The axes of a corridor between the interiors: it runs along the horizontal axis along
+ * which they lie apart, with walls that face each other over a positive width. Nothing
+ * if there is no such axis.
+ */
+std::optional<CorridorAxes> corridorAxesBetween(
+  const vm::bbox3d& fromInterior, const vm::bbox3d& toInterior)
+{
+  for (const auto axis : {size_t{0}, size_t{1}})
+  {
+    const auto axes = CorridorAxes::runningAlong(axis);
+    const auto apart = toInterior.min[axes.along] >= fromInterior.max[axes.along]
+                       || fromInterior.min[axes.along] >= toInterior.max[axes.along];
+    const auto shared =
+      std::min(fromInterior.max[axes.across], toInterior.max[axes.across])
+      - std::max(fromInterior.min[axes.across], toInterior.min[axes.across]);
+    if (apart && shared > 0)
+    {
+      return axes;
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * The corridor between two rooms that stand side by side, as in the reference lowering:
+ * on their floor, centred on the wall that they share and moved by the offset, rounded
+ * half up. Its walls are as thick as the thicker of the rooms' walls.
+ *
+ * @throw CliError `layout_corridor_does_not_fit` if the rooms do not stand side by side,
+ * their walls touch so that the corridor would have no length, or the corridor reaches
+ * beyond the wall that they share, `layout_floor_mismatch` if their floors are at
+ * different heights, and `layout_corridor_too_tall` if the corridor would reach above a
+ * room's ceiling
+ */
+Corridor corridorBetween(
+  const std::string_view opName,
+  const BuiltRoom& from,
+  const BuiltRoom& to,
+  const ConnectionParams& params)
+{
+  const auto fromInterior = interiorOf(from);
+  const auto toInterior = interiorOf(to);
+
+  const auto axes = corridorAxesBetween(fromInterior, toInterior);
+  if (!axes)
+  {
+    throw CliError{
+      ErrorCode::LayoutCorridorDoesNotFit,
+      fmt::format(
+        "{}: rooms \"{}\" and \"{}\" do not stand side by side, apart along x or y with "
+        "walls that face each other, so no straight corridor joins them",
+        opName,
+        from.name,
+        to.name)};
+  }
+  const auto [along, across] = *axes;
+
+  const auto floor = fromInterior.min.z();
+  if (std::abs(floor - toInterior.min.z()) > OverlapTolerance)
+  {
+    throw CliError{
+      ErrorCode::LayoutFloorMismatch,
+      fmt::format(
+        "{}: the floor of room \"{}\" is at z {}, that of room \"{}\" at z {}; "
+        "corridors join rooms on the same floor",
+        opName,
+        from.name,
+        formatNumber(floor),
+        to.name,
+        formatNumber(toInterior.min.z()))};
+  }
+
+  const auto sharedMin = std::max(fromInterior.min[across], toInterior.min[across]);
+  const auto sharedMax = std::min(fromInterior.max[across], toInterior.max[across]);
+  // rounded half up, as in the reference lowering
+  const auto acrossMin =
+    std::floor((sharedMin + sharedMax) / 2 + params.offset - params.width / 2 + 0.5);
+  const auto acrossMax = acrossMin + params.width;
+  if (
+    acrossMin < sharedMin - OverlapTolerance || acrossMax > sharedMax + OverlapTolerance)
+  {
+    throw CliError{
+      ErrorCode::LayoutCorridorDoesNotFit,
+      fmt::format(
+        "{}: the corridor would span {} {} to {}, beyond the wall that rooms \"{}\" and "
+        "\"{}\" share from {} to {}; make it narrower or change its offset",
+        opName,
+        axisName(across),
+        formatNumber(acrossMin),
+        formatNumber(acrossMax),
+        from.name,
+        to.name,
+        formatNumber(sharedMin),
+        formatNumber(sharedMax))};
+  }
+
+  const auto top = floor + params.height;
+  const auto& lower = fromInterior.max.z() <= toInterior.max.z() ? from : to;
+  const auto ceiling = std::min(fromInterior.max.z(), toInterior.max.z());
+  if (top > ceiling + OverlapTolerance)
+  {
+    throw CliError{
+      ErrorCode::LayoutCorridorTooTall,
+      fmt::format(
+        "{}: the corridor would reach z {}, above the ceiling of room \"{}\" at z {}; "
+        "make it at most {} tall",
+        opName,
+        formatNumber(top),
+        lower.name,
+        formatNumber(ceiling),
+        formatNumber(ceiling - floor))};
+  }
+
+  // the rooms in the order the corridor runs along its axis
+  const auto fromFirst = fromInterior.max[along] <= toInterior.min[along];
+  const auto& [first, second] = fromFirst ? std::pair{&from, &to} : std::pair{&to, &from};
+  const auto firstInterior = interiorOf(*first);
+  const auto secondInterior = interiorOf(*second);
+
+  auto interior = vm::bbox3d{};
+  interior.min[along] = firstInterior.max[along];
+  interior.max[along] = secondInterior.min[along];
+  interior.min[across] = acrossMin;
+  interior.max[across] = acrossMax;
+  interior.min[2] = floor;
+  interior.max[2] = top;
+
+  auto segment = interior;
+  segment.min[along] += first->params->wall;
+  segment.max[along] -= second->params->wall;
+  if (segment.max[along] - segment.min[along] <= OverlapTolerance)
+  {
+    throw CliError{
+      ErrorCode::LayoutCorridorDoesNotFit,
+      fmt::format(
+        "{}: the walls of rooms \"{}\" and \"{}\" touch, so a corridor between them "
+        "would have no length; place them further apart",
+        opName,
+        from.name,
+        to.name)};
+  }
+
+  return Corridor{interior, segment, *axes, std::max(from.params->wall, to.params->wall)};
+}
+
+/**
+ * The walls, floor and ceiling of a corridor along the segment between the rooms' outer
+ * wall faces, as in the reference lowering: the floor and ceiling span the side walls.
+ */
+std::vector<vm::bbox3d> corridorSlabs(const Corridor& corridor)
+{
+  const auto& segment = corridor.segment;
+  const auto across = corridor.axes.across;
+  const auto thickness = corridor.wall;
+
+  auto floor = segment;
+  floor.min[across] -= thickness;
+  floor.max[across] += thickness;
+  floor.max[2] = segment.min[2];
+  floor.min[2] = segment.min[2] - thickness;
+
+  auto ceiling = floor;
+  ceiling.min[2] = segment.max[2];
+  ceiling.max[2] = segment.max[2] + thickness;
+
+  auto low = segment;
+  low.max[across] = segment.min[across];
+  low.min[across] = segment.min[across] - thickness;
+
+  auto high = segment;
+  high.min[across] = segment.max[across];
+  high.max[across] = segment.max[across] + thickness;
+
+  return {floor, ceiling, low, high};
+}
+
+/** The box that a corridor's brushes fill: its segment with its walls around it. */
+vm::bbox3d corridorShell(const Corridor& corridor)
+{
+  auto grow = vm::vec3d{0, 0, corridor.wall};
+  grow[corridor.axes.across] = corridor.wall;
+  return {corridor.segment.min - grow, corridor.segment.max + grow};
+}
+
+/**
+ * A cuboid brush that fills the box, with the materials and UV of the faces of the
+ * given brush that face the same way.
+ */
+mdl::Brush cuboidLike(
+  const OpContext& context,
+  const mdl::BrushBuilder& builder,
+  const vm::bbox3d& box,
+  const mdl::Brush& original)
+{
+  auto brush = builder.createCuboid(box, mdl::BrushFace::NoMaterialName);
+  if (!brush)
+  {
+    throw opFailed(
+      context.opName,
+      fmt::format("cannot cut a wall: {}", std::get<Error>(brush.error()).msg));
+  }
+  auto result = std::move(brush).value();
+  for (auto& face : result.faces())
+  {
+    if (const auto index = original.findFace(face.normal()))
+    {
+      const auto& originalFace = original.face(*index);
+      if (const auto snapshot = originalFace.takeUvCoordSystemSnapshot())
+      {
+        face.restoreUvCoordSystemSnapshot(*snapshot);
+      }
+      face.copyAttributes(originalFace);
+    }
+  }
+  return result;
+}
+
+/**
+ * Cuts the opening out of a room's walls: each brush that reaches into it is replaced by
+ * the boxes of it that lie outside, which keep its materials. The room's fingerprint is
+ * set to its cut brushes, so that it stays rebuildable; the fingerprint does not depend
+ * on how the walls are cut into brushes, so the order in which openings are cut does
+ * not matter. The carrier is reported as modified and the brushes that were cut as
+ * removed.
+ */
+void cutOpening(OpContext& context, const BuiltRoom& room, const vm::bbox3d& opening)
+{
+  auto& map = context.map;
+  // the rooms were collected from the map that this op edits
+  auto& carrier = const_cast<mdl::EntityNode&>(*room.carrier);
+  const auto builder = brushBuilderOf(map);
+
+  auto cut = std::vector<mdl::Node*>{};
+  auto pieces = std::vector<std::unique_ptr<mdl::BrushNode>>{};
+  for (auto* child : carrier.children())
+  {
+    if (
+      auto* brushNode = dynamic_cast<mdl::BrushNode*>(child);
+      brushNode && overlaps(brushNode->logicalBounds(), opening))
+    {
+      for (const auto& box : subtract(brushNode->logicalBounds(), opening))
+      {
+        if (hasVolume(box))
+        {
+          pieces.push_back(
+            std::make_unique<mdl::BrushNode>(
+              cuboidLike(context, builder, box, brushNode->brush())));
+        }
+      }
+      cut.push_back(brushNode);
+    }
+  }
+
+  if (!pieces.empty())
+  {
+    auto nodes =
+      pieces
+      | std::views::transform([](const auto& piece) -> mdl::Node* { return piece.get(); })
+      | kdl::ranges::to<std::vector>();
+    if (mdl::addNodes(map, {{&carrier, std::move(nodes)}}).empty())
+    {
+      throw opFailed(
+        context.opName, fmt::format("cannot cut the walls of room \"{}\"", room.name));
+    }
+    for (auto& piece : pieces)
+    {
+      piece.release();
+    }
+  }
+  // the pieces are added first, so that removing the cut brushes never empties the
+  // carrier
+  mdl::removeNodes(map, cut);
+
+  auto entity = carrier.entity();
+  entity.addOrUpdateProperty(Keys::Fingerprint, carrierFingerprint(carrier));
+  if (!mdl::updateNodeContents(
+        map,
+        std::string{context.opName},
+        {{&carrier, mdl::NodeContents{std::move(entity)}}},
+        mdl::collectContainingGroups({&carrier})))
+  {
+    throw opFailed(
+      context.opName,
+      fmt::format("cannot update the fingerprint of room \"{}\"", room.name));
+  }
+
+  context.outcome.modified.push_back(&carrier);
+  std::ranges::copy(cut, std::back_inserter(context.outcome.removed));
+}
+
+/** Whether the node is inside a group that is linked to another. */
+bool isInLinkedGroup(OpContext& context, const mdl::Node& node)
+{
+  auto& worldNode = context.map.worldNode();
+  for (const auto* ancestor = node.parent(); ancestor; ancestor = ancestor->parent())
+  {
+    if (
+      const auto* group = dynamic_cast<const mdl::GroupNode*>(ancestor);
+      group && mdl::collectGroupsWithLinkId({&worldNode}, group->linkId()).size() > 1)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A room whose walls a connection cuts.
+ *
+ * @throw CliError as findRoom does, `locked` if the room is locked, without
+ * --allow-locked, `connect_cuts_linked_room` if it is inside a linked group, and
+ * `hand_edited` if its brushes no longer match what tbcli built
+ */
+const BuiltRoom& roomToConnect(
+  OpContext& context, const std::vector<BuiltRoom>& rooms, const std::string& name)
+{
+  const auto& room = findRoom(context.opName, "connect", rooms, name);
+  const auto what = fmt::format("room \"{}\"", name);
+  checkUnlocked(context, *room.carrier, what, "cut its walls");
+
+  const auto path = nodePath(*room.carrier);
+  if (isInLinkedGroup(context, *room.carrier))
+  {
+    throw CliError{
+      ErrorCode::ConnectCutsLinkedRoom,
+      fmt::format(
+        "{}: {} ({}) is inside a linked group, and cutting its walls would cut every "
+        "linked copy without a corridor",
+        context.opName,
+        what,
+        path),
+      path};
+  }
+  if (room.status != RoomStatus::Rebuildable)
+  {
+    throw CliError{
+      ErrorCode::HandEdited,
+      fmt::format(
+        "{}: {} ({}) is hand_edited: its brushes no longer match what tbcli built, so "
+        "its walls cannot be cut safely",
+        context.opName,
+        what,
+        path),
+      path};
+  }
+  return room;
+}
+
+/**
+ * Fails if a connection joins the two rooms already, in either direction, since
+ * connections are named by the rooms that they join.
+ */
+void checkNotConnected(
+  const OpContext& context, const std::string& from, const std::string& to)
+{
+  for (const auto* entityNode : collectContents(context.map.worldNode()).entities)
+  {
+    if (!isConnectionCarrier(*entityNode))
+    {
+      continue;
+    }
+    const auto& entity = entityNode->entity();
+    const auto* existingFrom = entity.property(Keys::From);
+    const auto* existingTo = entity.property(Keys::To);
+    if (
+      existingFrom && existingTo
+      && ((*existingFrom == from && *existingTo == to) || (*existingFrom == to && *existingTo == from)))
+    {
+      const auto path = nodePath(*entityNode);
+      throw opFailed(
+        context.opName,
+        fmt::format(
+          "rooms \"{}\" and \"{}\" are joined already by {} ({})",
+          from,
+          to,
+          describeCarrier(*entityNode),
+          path),
+        path);
+    }
+  }
 }
 
 } // namespace
@@ -654,20 +1374,8 @@ Json builtRoomToJson(const BuiltRoom& room)
 void addRoom(OpContext& context)
 {
   const auto& args = context.args;
-  auto& map = context.map;
-  auto& worldNode = map.worldNode();
-
-  auto* layer = worldNode.defaultLayer();
-  if (!context.allowLocked && layer->locked())
-  {
-    throw CliError{
-      ErrorCode::Locked,
-      fmt::format(
-        "add_room: the default layer {}, which rooms are created in, is locked; pass "
-        "--allow-locked to edit it anyway",
-        nodePath(*layer)),
-      nodePath(*layer)};
-  }
+  auto& worldNode = context.map.worldNode();
+  auto& layer = defaultLayerToBuildIn(context);
 
   const auto& name = args["name"].asString();
   const auto rooms = collectBuiltRooms(worldNode);
@@ -677,7 +1385,7 @@ void addRoom(OpContext& context)
     {
       const auto path = nodePath(*room.carrier);
       throw opFailed(
-        "add_room",
+        context.opName,
         fmt::format("a built room named \"{}\" exists already ({})", name, path),
         path);
     }
@@ -688,7 +1396,8 @@ void addRoom(OpContext& context)
   if (const auto* place = args.find("place"))
   {
     params.place = placementFromJson(*place);
-    const auto& reference = placementReference(rooms, params.place->room);
+    const auto& reference =
+      findRoom(context.opName, "place against", rooms, params.place->room);
     interior = placedInterior(interiorOf(reference), params.size, *params.place);
   }
   else
@@ -697,23 +1406,35 @@ void addRoom(OpContext& context)
     interior = vm::bbox3d{min, min + params.size};
   }
 
-  checkNoOverlap(rooms, name, interior.expand(params.wall));
+  checkNoOverlap(
+    worldNode,
+    context.opName,
+    fmt::format("the walls of room \"{}\"", name),
+    interior.expand(params.wall),
+    "place it elsewhere or with a larger gap");
 
-  auto interiors = std::vector{interior};
-  for (const auto& room : rooms)
+  auto interiors = roomInteriors(rooms);
+  interiors.insert(interiors.begin(), interior);
+
+  auto properties = std::vector<mdl::EntityProperty>{
+    {mdl::EntityPropertyKeys::Classname, mdl::EntityPropertyValues::GroupClassname},
+    {Keys::Kind, RoomKind},
+    {Keys::Name, name},
+    {Keys::Size, formatVec3(params.size)},
+    {Keys::Wall, formatNumber(params.wall)},
+  };
+  if (params.place)
   {
-    if (room.params && room.carrier->hasChildren())
-    {
-      interiors.push_back(interiorOf(room));
-    }
+    properties.emplace_back(Keys::Place, placementToString(*params.place));
   }
-  auto group =
-    newRoomGroup(map, name, params, lowerRoom(interior, params.wall, interiors));
-  if (mdl::addNodes(map, {{layer, {group.get()}}}).empty())
-  {
-    throw opFailed("add_room", "cannot add the room to the map");
-  }
-  context.outcome.created.push_back(group.release());
+  addCarrierGroup(
+    context,
+    layer,
+    newCarrierGroup(
+      context,
+      roomGroupName(name),
+      std::move(properties),
+      lowerRoom(interior, params.wall, interiors)));
 }
 
 void checkAddRoomArgs(const Json& args)
@@ -742,6 +1463,74 @@ void checkAddRoomArgs(const Json& args)
       "add_room: give exactly one of \"min\" (absolute) and \"place\" (next to another "
       "room)");
   }
+}
+
+void connect(OpContext& context)
+{
+  const auto& args = context.args;
+  auto& worldNode = context.map.worldNode();
+  auto& layer = defaultLayerToBuildIn(context);
+
+  const auto& fromName = args["from"].asString();
+  const auto& toName = args["to"].asString();
+  const auto params = ConnectionParams{
+    args["width"].asNumber(), args["height"].asNumber(), args["offset"].asNumber()};
+
+  const auto rooms = collectBuiltRooms(worldNode);
+  const auto& from = roomToConnect(context, rooms, fromName);
+  const auto& to = roomToConnect(context, rooms, toName);
+  checkNotConnected(context, fromName, toName);
+  const auto corridor = corridorBetween(context.opName, from, to, params);
+  checkNoOverlap(
+    worldNode,
+    context.opName,
+    fmt::format("the corridor between rooms \"{}\" and \"{}\"", fromName, toName),
+    corridorShell(corridor),
+    "move the rooms apart or the corridor along the wall");
+
+  auto interiors = roomInteriors(rooms);
+  interiors.insert(interiors.begin(), corridor.interior);
+  auto group = newCarrierGroup(
+    context,
+    connectionGroupName(fromName, toName),
+    {
+      {mdl::EntityPropertyKeys::Classname, mdl::EntityPropertyValues::GroupClassname},
+      {Keys::Kind, ConnectionKind},
+      {Keys::From, fromName},
+      {Keys::To, toName},
+      {Keys::Width, formatNumber(params.width)},
+      {Keys::Height, formatNumber(params.height)},
+      {Keys::Offset, formatNumber(params.offset)},
+    },
+    lowerSlabs(corridorSlabs(corridor), interiors));
+
+  cutOpening(context, from, corridor.interior);
+  cutOpening(context, to, corridor.interior);
+  addCarrierGroup(context, layer, std::move(group));
+}
+
+void checkConnectArgs(const Json& args)
+{
+  for (const auto* key : {"from", "to"})
+  {
+    if (!isRoomName(args[key].asString()))
+    {
+      throw invalidArgument(
+        fmt::format(
+          "connect: \"{}\" must be a room name, letters, digits and underscores, not {}",
+          key,
+          args[key].dump()));
+    }
+  }
+  if (args["from"].asString() == args["to"].asString())
+  {
+    throw invalidArgument(
+      fmt::format(
+        "connect: \"from\" and \"to\" must name two rooms, not {} twice",
+        args["from"].dump()));
+  }
+  checkPositiveArg("connect", "width", args);
+  checkPositiveArg("connect", "height", args);
 }
 
 } // namespace tb::cli

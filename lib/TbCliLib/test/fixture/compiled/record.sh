@@ -37,6 +37,9 @@
 #                         of it) with a player start in A and a light in B, without the
 #                         Generator line; tst_BuiltRooms regenerates it and compares;
 #                         recorded with -keepprt, as verify runs qbsp
+#   connected_rooms.map   built_rooms.map with the two rooms joined by tbcli connect;
+#                         tst_BuiltRooms regenerates it and compares; recorded with
+#                         -keepprt, as verify runs qbsp
 #
 # Usage: ERICW_TOOLS_DIR=<dir> lib/TbCliLib/test/fixture/compiled/record.sh
 
@@ -58,6 +61,7 @@ mdl="$(git -C "$here" rev-parse --show-toplevel)/lib/TbMdlLib/test/fixture/mdl/C
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_sky.map" "$here/rooms_sky"
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_openings.map" "$here/rooms_openings"
 "$record" --qbsp-args "-keepprt" "$here/built_rooms.map" "$here/built_rooms"
+"$record" --qbsp-args "-keepprt" "$here/connected_rooms.map" "$here/connected_rooms"
 # recorded under the name that the test build copies the map to
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

@@ -143,6 +143,15 @@ TEST_CASE("NodeJson")
     })"));
   }
 
+  SECTION("isAxialBox")
+  {
+    CHECK(isAxialBox(brush->brush()));
+    CHECK_FALSE(isAxialBox(
+      builder.createCylinder(
+        vm::bbox3d{{0, 0, 0}, {64, 64, 64}}, mdl::EdgeAlignedCircle{8}, vm::axis::z, "a")
+      | kdl::value()));
+  }
+
   SECTION("brushSummaryToJson")
   {
     CHECK(brushSummaryToJson(*brush) == parseJsonLiteral(R"({
