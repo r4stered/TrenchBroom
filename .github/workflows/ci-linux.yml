@@ -1,6 +1,11 @@
 name: CI Linux
 on:
   workflow_call:
+    inputs:
+      bundle-tbcli:
+        description: Also upload a bundle of TrenchBroom, tbcli and ericw-tools
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -103,6 +108,13 @@ jobs:
           path: |
             cmakebuild/*.zip
             cmakebuild/*.md5
+
+      - name: Bundle tbcli
+        if: ${{ inputs.bundle-tbcli }}
+        uses: ./.github/actions/bundle-tbcli
+        with:
+          name: linux-x64
+          ericw-asset: Linux
 
       - name: Release
         uses: ./.github/actions/create-draft-release

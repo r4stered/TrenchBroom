@@ -1,6 +1,11 @@
 name: CI macOS
 on:
   workflow_call:
+    inputs:
+      bundle-tbcli:
+        description: Also upload a bundle of TrenchBroom, tbcli and ericw-tools
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -117,6 +122,13 @@ jobs:
           path: |
             cmakebuild/*.zip
             cmakebuild/*.md5
+
+      - name: Bundle tbcli
+        if: ${{ inputs.bundle-tbcli && matrix.tb-build-type != 'sanitize' }}
+        uses: ./.github/actions/bundle-tbcli
+        with:
+          name: ${{ matrix.os == 'macos-15-intel' && 'macos-x64' || 'macos-arm64' }}
+          ericw-asset: Darwin
 
       - name: Release
         uses: ./.github/actions/create-draft-release

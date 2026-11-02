@@ -1,0 +1,153 @@
+name: Bundle tbcli
+description: >
+  Package the TrenchBroom build together with tbcli, the ericw-tools release for this
+  platform (including the libraries the compilers need), the Quake game config and a
+  tbcli.json that points at them, smoke test the bundle, and upload it.
+inputs:
+  name:
+    description: Platform name used in the bundle and artifact name, e.g. windows-x64
+    required: true
+  ericw-asset:
+    description: Platform suffix of the ericw-tools release archive (win64, Linux, Darwin)
+    required: true
+  ericw-version:
+    description: ericw-tools release tag to bundle
+    required: false
+    default: 2.0.0-alpha11
+runs:
+  using: composite
+  steps:
+    - name: Download ericw-tools
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        rm -rf ericw-download && mkdir -p ericw-download
+        gh release download "${{ inputs.ericw-version }}" -R ericwa/ericw-tools \
+          -p "ericw-tools-${{ inputs.ericw-version }}-${{ inputs.ericw-asset }}.zip" -D ericw-download
+
+    - name: Assemble bundle
+      shell: bash
+      env:
+        BUNDLE_NAME: TrenchBroom-tbcli-${{ inputs.name }}
+        ERICW_VERSION: ${{ inputs.ericw-version }}
+      run: |
+        set -euo pipefail
+        bundle="dist/$BUNDLE_NAME"
+        rm -rf dist && mkdir -p "$bundle"
+
+        # The TrenchBroom package exactly as the platform build produced it.
+        unzip -q cmakebuild/*.zip -d "$bundle"
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then exe=".exe"; else exe=""; fi
+        cli="$bundle/tbcli"
+        mkdir -p "$cli/games" "$cli/maps" "$cli/ericw-tools"
+        cp "$(find cmakebuild/app/TbCli -name "tbcli$exe" -type f | head -n 1)" "$cli/"
+
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          # Ship the MSVC runtime next to tbcli.exe so no redistributable install is needed.
+          vs=$("/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe" -latest -property installationPath)
+          crt=$(find "$(cygpath "$vs")/VC/Redist/MSVC" -path '*x64/Microsoft.VC14*.CRT' -type d | grep -v onecore | sort | tail -n 1)
+          cp "$crt"/msvcp140.dll "$crt"/vcruntime140.dll "$crt"/vcruntime140_1.dll "$cli/"
+        fi
+
+        # tbcli needs the game config as plain files; inside the app bundle or AppImage they
+        # are not reachable on every platform.
+        cp -r app/TrenchBroom/resources/games/Quake "$cli/games/Quake"
+
+        # unzip keeps the executable bits stored in the archive.
+        unzip -q ericw-download/*.zip -d "$cli/ericw-tools"
+
+        find_tool() {
+          local found
+          found=$(find "$cli/ericw-tools" -type f -name "$1$exe" | head -n 1)
+          if [[ -z "$found" ]]; then
+            echo "Could not find $1 in the ericw-tools archive" >&2
+            exit 1
+          fi
+          echo "${found#"$cli/"}"
+        }
+        qbsp=$(find_tool qbsp)
+        vis=$(find_tool vis)
+        light=$(find_tool light)
+
+        # Relative paths in tbcli.json resolve against the directory that holds it, and
+        # tbcli finds it by walking up from the map, so maps below tbcli/ pick it up.
+        cat > "$cli/tbcli.json" <<EOF
+        {
+          "game_config": "games/Quake/GameConfig.cfg",
+          "fgd": "games/Quake/Quake.fgd",
+          "compilers": {
+            "qbsp": "$qbsp",
+            "vis": "$vis",
+            "light": "$light"
+          }
+        }
+        EOF
+
+        cat > "$bundle/README-tbcli.txt" <<EOF
+        TrenchBroom with tbcli (${{ inputs.name }}), built from ${GITHUB_SHA}.
+
+        The editor is packaged as in a normal TrenchBroom release. tbcli/ holds:
+          tbcli$exe          the tbcli command line tool
+          tbcli.json        configuration used for any map below tbcli/
+          games/Quake/      Quake game config and entity definitions (FGD)
+          ericw-tools/      ericw-tools ${ERICW_VERSION} (qbsp, vis, light) with its libraries
+          maps/             put Valve 220 maps here to use tbcli.json as is
+
+        Start with:  tbcli/tbcli$exe guide
+        For maps elsewhere, copy tbcli.json next to them and adjust its paths.
+        Set "quake_dir" in tbcli.json to your Quake directory to check textures.
+        To compile from the editor, point its compilation profiles at the tools in
+        tbcli/ericw-tools/.
+        EOF
+        cat "$cli/tbcli.json"
+
+    # Compile a sealed fixture map with the bundled tools, so a bundle whose compilers
+    # cannot load their libraries is never uploaded.
+    - name: Smoke test bundle
+      shell: bash
+      env:
+        BUNDLE_NAME: TrenchBroom-tbcli-${{ inputs.name }}
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS" == "Windows" ]]; then exe=".exe"; else exe=""; fi
+        rm -rf smoke && mkdir -p smoke
+        cp -r "dist/$BUNDLE_NAME/tbcli" smoke/tbcli
+        cp lib/TbCliLib/test/fixture/compiled/connected_rooms.map smoke/tbcli/maps/
+        cd smoke/tbcli
+        ./tbcli$exe describe maps/connected_rooms.map > /dev/null
+        ./tbcli$exe verify maps/connected_rooms.map --compile=light > ../verify.json
+        python3 - ../verify.json <<'EOF'
+        import json, sys
+        result = json.load(open(sys.argv[1], encoding="utf-8"))
+        stages = {stage["name"]: stage for stage in result["stages"]}
+        for name in ("qbsp", "vis", "light"):
+            stage = stages.get(name)
+            print(name, stage)
+            if stage is None or stage["status"] not in ("ok", "issues"):
+                sys.exit(f"{name} did not run cleanly")
+        EOF
+
+    - name: Archive bundle
+      shell: bash
+      env:
+        BUNDLE_NAME: TrenchBroom-tbcli-${{ inputs.name }}
+      run: |
+        cd dist
+        if [[ "$RUNNER_OS" == "Windows" ]]; then
+          7z a -tzip "$BUNDLE_NAME.zip" "$BUNDLE_NAME" > /dev/null
+        else
+          # tar keeps the executable bits that the artifact's own zip would drop.
+          tar -czf "$BUNDLE_NAME.tar.gz" "$BUNDLE_NAME"
+        fi
+
+    - name: Upload bundle
+      uses: actions/upload-artifact@v4
+      with:
+        name: TrenchBroom-tbcli-${{ inputs.name }}
+        path: |
+          dist/*.zip
+          dist/*.tar.gz
+        if-no-files-found: error
+        retention-days: 30
