@@ -207,6 +207,31 @@ std::string builtRoomsBatch(const std::string_view moreOps = {})
     moreOps);
 }
 
+/** A, and a linked copy of its group 1024 units north. */
+void addLinkedA(const RoomFixture& fixture)
+{
+  fixture.applyJson(fmt::format("[{}]", RoomA));
+  fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:0",
+    "offset": [0, 1024, 0]}])");
+}
+
+/** The groups of A and its linked copy, as addLinkedA makes them. */
+Json linkedAInstances()
+{
+  return parseJsonLiteral(R"(["layer:0/group:0", "layer:0/group:1"])");
+}
+
+/** A and B east of it in a group G, and a linked copy of G 1024 units north. */
+void addLinkedAAndB(const RoomFixture& fixture)
+{
+  fixture.applyJson(fmt::format("[{}, {}]", RoomA, RoomBEastOfA));
+  fixture.applyJson(R"([
+    {"op": "group", "target": ["layer:0/group:0", "layer:0/group:1"], "name": "G",
+     "as": "$g"},
+    {"op": "linked_duplicate", "target": "$g", "offset": [0, 1024, 0]}
+  ])");
+}
+
 } // namespace
 
 TEST_CASE("BuiltRooms")
@@ -472,7 +497,9 @@ TEST_CASE("add_room")
       R"({"op": "add_room", "name": "A", "size": [64, 64, 64],
           "place": {"east_of": "B", "west_of": "C"}})",
       R"({"op": "add_room", "name": "A", "size": [64, 64, 64],
-          "place": {"above": "B", "gap": 64}})");
+          "place": {"above": "B", "gap": 64}})",
+      R"({"op": "add_room", "name": "A", "min": [0, 0, 0], "size": [64, 64, 64],
+          "instance": "layer:0"})");
     CAPTURE(batch);
 
     checkError(fixture.apply(fmt::format("[{}]", batch)), "invalid_argument", 2, 0);
@@ -495,6 +522,48 @@ TEST_CASE("add_room")
     // compiled/built_rooms.map was made by this batch; its qbsp recording has no leak
     fixture.applyJson(builtRoomsBatch());
     fixture.checkCompilesSealed("built_rooms");
+  }
+
+  SECTION("places against the linked instance that instance names")
+  {
+    addLinkedA(fixture);
+    const auto instance = GENERATE("layer:0/group:1", "layer:0/group:1/entity:0");
+    CAPTURE(instance);
+
+    fixture.applyJson(
+      fmt::format(
+        R"([{{"op": "add_room", "name": "B", "size": [256, 256, 128],
+          "place": {{"east_of": "A", "gap": 128}}, "instance": "{}"}}])",
+        instance));
+    CHECK(
+      aabbOf(map, "layer:0/group:2/entity:0")
+      == parseJsonLiteral(R"({"min": [368, 1008, -16], "max": [656, 1296, 144]})"));
+    // the instance is not stored
+    CHECK(
+      carrierKey(map, "layer:0/group:2/entity:0", "_tbcli_place")
+      == Json{"east_of A 128"});
+  }
+
+  SECTION("refuses to guess the linked instance to place against")
+  {
+    addLinkedA(fixture);
+    const auto result = fixture.apply(fmt::format("[{}]", RoomBEastOfA));
+    checkError(result, "op_failed", 1, 0);
+    CHECK_THAT(
+      parseOutput(result)["error"]["message"].asString(),
+      ContainsSubstring("layer:0/group:0, layer:0/group:1"));
+  }
+
+  SECTION("refuses an instance of another room")
+  {
+    addLinkedA(fixture);
+    fixture.applyJson(
+      R"([{"op": "add_room", "name": "C", "min": [0, -1024, 0], "size": [64, 64, 64]}])");
+    const auto result = fixture.apply(R"([{"op": "add_room", "name": "B",
+      "size": [256, 256, 128], "place": {"east_of": "A", "gap": 128},
+      "instance": "layer:0/group:2"}])");
+    checkError(result, "op_failed", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:2"});
   }
 }
 
@@ -786,17 +855,11 @@ TEST_CASE("connect")
     CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:2/entity:0"});
   }
 
-  SECTION("refuses a room inside a linked group")
+  SECTION("refuses rooms across a linked boundary")
   {
     fixture.applyJson(rooms);
     fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:1",
       "offset": [0, 2000, 0]}])");
-    // until linked copies count as one room, rename the copy so that the name is unique
-    auto text = fixture.env.readFile("rooms.map");
-    const auto copy = text.rfind(R"("_tbcli_name" "B")");
-    REQUIRE(copy != std::string::npos);
-    text.replace(copy, 17, R"("_tbcli_name" "C")");
-    fixture.env.writeFile("rooms.map", text);
 
     const auto result = fixture.apply(R"([{"op": "connect", "from": "A", "to": "B"}])");
     checkError(result, "connect_cuts_linked_room", 1, 0);
@@ -856,6 +919,62 @@ TEST_CASE("connect")
     fixture.applyJson(
       builtRoomsBatch(R"(, {"op": "connect", "from": "A", "to": "B", "height": 96})"));
     fixture.checkCompilesSealed("connected_rooms");
+  }
+
+  SECTION("builds the corridor inside the linked copy that both rooms are in")
+  {
+    addLinkedAAndB(fixture);
+    const auto json = fixture.applyJson(R"([{"op": "connect", "from": "A", "to": "B"}])");
+    const auto& op = json["ops"][0];
+    CHECK(op["created"] == parseJsonLiteral(R"(["layer:0/group:0/group:2"])"));
+    // the rooms' groups are linked too, as copies inside the copies of G
+    CHECK(op["instances_affected"] == parseJsonLiteral(R"([
+      "layer:0/group:0", "layer:0/group:0/group:0", "layer:0/group:0/group:1",
+      "layer:0/group:1", "layer:0/group:1/group:0", "layer:0/group:1/group:1"])"));
+    CHECK(
+      carrierKey(map, "layer:0/group:1/group:2/entity:0", "_tbcli_kind")
+      == Json{"connection"});
+    CHECK(
+      aabbOf(map, "layer:0/group:1/group:2/entity:0")
+      == parseJsonLiteral(R"({"min": [272, 1072, -16], "max": [368, 1232, 144]})"));
+    for (const auto* carrier : {"group:0/entity:0", "group:1/entity:0"})
+    {
+      CAPTURE(carrier);
+      CHECK(
+        carrierKey(map, fmt::format("layer:0/group:1/{}", carrier), "_tbcli_fp")
+        == carrierKey(map, fmt::format("layer:0/group:0/{}", carrier), "_tbcli_fp"));
+    }
+    CHECK(
+      statuses(fixture) == std::vector<Json>{Json{"rebuildable"}, Json{"rebuildable"}});
+
+    // its linked rooms and connection can be rebuilt
+    const auto edits = fixture.applyJson(R"([
+      {"op": "edit_connection", "connection": "A-B", "width": 64},
+      {"op": "edit_room", "room": "A", "size": [256, 256, 192]},
+      {"op": "edit_room", "room": "B", "place": {"east_of": "A", "gap": 192}}])");
+    for (const auto& each : edits["ops"].asArray())
+    {
+      CHECK(each["instances_affected"] == parseJsonLiteral(R"([
+        "layer:0/group:0", "layer:0/group:0/group:0", "layer:0/group:0/group:1",
+        "layer:0/group:0/group:2", "layer:0/group:1", "layer:0/group:1/group:0",
+        "layer:0/group:1/group:1", "layer:0/group:1/group:2"])"));
+    }
+    CHECK(
+      aabbOf(map, "layer:0/group:1/group:1/entity:0")
+      == parseJsonLiteral(R"({"min": [432, 1008, -16], "max": [720, 1296, 144]})"));
+    CHECK(
+      statuses(fixture) == std::vector<Json>{Json{"rebuildable"}, Json{"rebuildable"}});
+  }
+
+  SECTION("refuses a corridor whose linked copy would overlap")
+  {
+    addLinkedAAndB(fixture);
+    // in the way of the copy of the corridor, but not of the corridor
+    fixture.applyJson(
+      R"([{"op": "add_room", "name": "C", "min": [288, 1100, 0], "size": [32, 32, 32]}])");
+    const auto result = fixture.apply(R"([{"op": "connect", "from": "A", "to": "B"}])");
+    checkError(result, "layout_overlap", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:2/entity:0"});
   }
 }
 
@@ -1062,6 +1181,56 @@ TEST_CASE("built rooms")
     }
     CHECK(
       showNode(map, "layer:0/group:0/entity:0/brush:0").find("instance_of") == nullptr);
+  }
+
+  SECTION("describe lists a room in linked groups once, with every instance")
+  {
+    addLinkedA(fixture);
+    CHECK(fixture.builtRooms() == parseJsonLiteral(R"({
+      "items": [
+        {
+          "name": "A",
+          "kind": "room",
+          "params": {"size": [256, 256, 128], "wall": 16},
+          "status": "rebuildable",
+          "instances": ["layer:0/group:0", "layer:0/group:1"],
+          "group": "layer:0/group:0"
+        }
+      ],
+      "total": 1,
+      "truncated": false
+    })"));
+
+    for (const auto& path : {"layer:0/group:1", "layer:0/group:1/entity:0"})
+    {
+      CAPTURE(path);
+      const auto node = showNode(map, path);
+      CHECK(node["instance_of"] == Json{"A"});
+      CHECK(node["instances"] == Json{2});
+      CHECK(node["status"] == Json{"rebuildable"});
+    }
+  }
+
+  SECTION("tbcli's keys are never protected, so writes reach every instance")
+  {
+    addLinkedA(fixture);
+    // protect the copy's keys, as the editor's entity inspector can
+    auto text = fixture.env.readFile("rooms.map");
+    const auto copy = text.rfind(R"("_tbcli_name" "A")");
+    REQUIRE(copy != std::string::npos);
+    text.insert(
+      copy, "\"_tb_protected_properties\" \"_tbcli_kind;_tbcli_name;_tbcli_wall\"\n");
+    fixture.env.writeFile("rooms.map", text);
+    REQUIRE(fixture.builtRooms()["items"][0]["instances"] == linkedAInstances());
+
+    fixture.applyJson(R"([{"op": "edit_room", "room": "A", "wall": 8}])");
+    CHECK(carrierKey(map, "layer:0/group:1/entity:0", "_tbcli_wall") == Json{"8"});
+    CHECK(
+      fixture.env.readFile("rooms.map").find("_tb_protected_properties")
+      == std::string::npos);
+
+    fixture.applyJson(R"([{"op": "detach", "room": "A"}])");
+    CHECK(fixture.builtRooms()["total"] == Json{0});
   }
 }
 
@@ -1377,6 +1546,7 @@ TEST_CASE("edit_room")
       R"({"op": "edit_room", "room": "A", "size": [64, 0, 64]})",
       R"({"op": "edit_room", "room": "A", "wall": 0})",
       R"({"op": "edit_room", "room": "A", "place": {"east_of": "B"}})",
+      R"({"op": "edit_room", "room": "A", "wall": 8, "instance": "layer:0"})",
       R"({"op": "edit_room", "wall": 8})");
     CAPTURE(batch);
 
@@ -1397,6 +1567,135 @@ TEST_CASE("edit_room")
       aabbOf(map, "layer:0/group:2/entity:0")
       == parseJsonLiteral(R"({"min": [412.5, 8, -8], "max": [508.5, 168, 152]})"));
     CHECK(statuses(fixture) == rebuildable);
+  }
+
+  SECTION("rebuilds every linked instance and lists them")
+  {
+    addLinkedA(fixture);
+    const auto json =
+      fixture.applyJson(R"([{"op": "edit_room", "room": "A", "size": [256, 256, 192]}])");
+    CHECK(json["ops"][0]["instances_affected"] == linkedAInstances());
+    CHECK(
+      aabbOf(map, "layer:0/group:1/entity:0")
+      == parseJsonLiteral(R"({"min": [-16, 1008, -16], "max": [272, 1296, 208]})"));
+    CHECK(statuses(fixture) == std::vector<Json>{Json{"rebuildable"}});
+  }
+
+  SECTION("force rebuilds every hand edited linked instance")
+  {
+    addLinkedA(fixture);
+    // the linked update removes the brush from the copy too
+    fixture.applyJson(
+      R"([{"op": "delete", "target": "layer:0/group:0/entity:0/brush:5"}])");
+    checkError(
+      fixture.apply(R"([{"op": "edit_room", "room": "A", "wall": 8}])"),
+      "hand_edited",
+      1,
+      0);
+
+    const auto json = fixture.applyJson(
+      R"([{"op": "edit_room", "room": "A", "wall": 8, "force": true}])");
+    CHECK(json["ops"][0]["instances_affected"] == linkedAInstances());
+    CHECK(brushAabbs(map, "layer:0/group:1/entity:0").size() == 6);
+    CHECK(statuses(fixture) == std::vector<Json>{Json{"rebuildable"}});
+  }
+
+  SECTION("a rebuild re-places a room against the instance that it stands next to")
+  {
+    addLinkedA(fixture);
+    fixture.applyJson(R"([{"op": "add_room", "name": "B", "size": [256, 256, 128],
+      "place": {"east_of": "A", "gap": 128}, "instance": "layer:0/group:1"}])");
+    const auto json =
+      fixture.applyJson(R"([{"op": "edit_room", "room": "A", "size": [512, 256, 128]}])");
+    CHECK(json["ops"][0]["instances_affected"] == linkedAInstances());
+    CHECK(json["ops"][0].find("stale_placements") == nullptr);
+    CHECK(
+      aabbOf(map, "layer:0/group:2/entity:0")
+      == parseJsonLiteral(R"({"min": [624, 1008, -16], "max": [912, 1296, 144]})"));
+  }
+
+  SECTION("a room that stands next to no instance is a stale placement")
+  {
+    addLinkedA(fixture);
+    fixture.applyJson(R"([{"op": "add_room", "name": "B", "size": [256, 256, 128],
+        "place": {"east_of": "A", "gap": 128}, "instance": "layer:0/group:1", "as": "$b"},
+      {"op": "translate", "target": "$b", "delta": [0, 2048, 0]}])");
+    const auto before = aabbOf(map, "layer:0/group:2/entity:0");
+    const auto json =
+      fixture.applyJson(R"([{"op": "edit_room", "room": "A", "size": [512, 256, 128]}])");
+    CHECK(
+      json["ops"][0]["stale_placements"]
+      == parseJsonLiteral(R"(["layer:0/group:2/entity:0"])"));
+    CHECK(aabbOf(map, "layer:0/group:2/entity:0") == before);
+  }
+
+  SECTION("refuses a rebuild whose linked copies would overlap")
+  {
+    fixture.applyJson(fmt::format("[{}]", RoomA));
+    fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:0",
+      "offset": [0, 320, 0]}])");
+    const auto result =
+      fixture.apply(R"([{"op": "edit_room", "room": "A", "size": [256, 320, 128]}])");
+    checkError(result, "layout_overlap", 1, 0);
+  }
+
+  SECTION("refuses rebuilds that would cut a wall across a linked boundary")
+  {
+    fixture.applyJson(
+      fmt::format(
+        R"([{}, {}, {{"op": "connect", "from": "A", "to": "B"}}])", RoomA, RoomBEastOfA));
+    fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:0",
+      "offset": [0, 1024, 0]}])");
+    const auto batch = GENERATE(
+      R"({"op": "edit_room", "room": "A", "wall": 8})",
+      R"({"op": "edit_room", "room": "B", "size": [256, 256, 96]})");
+    CAPTURE(batch);
+
+    const auto result = fixture.apply(fmt::format("[{}]", batch));
+    checkError(result, "connect_cuts_linked_room", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:0/entity:0"});
+  }
+
+  SECTION("refuses to rebuild a room whose linked copy is locked")
+  {
+    addLinkedA(fixture);
+    fixture.applyJson(R"([
+      {"op": "create_layer", "name": "L", "as": "$l"},
+      {"op": "move_to_layer", "target": "layer:0/group:1", "layer": "$l"},
+      {"op": "lock", "target": "$l"}])");
+    const auto result = fixture.apply(R"([{"op": "edit_room", "room": "A", "wall": 8}])");
+    checkError(result, "locked", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:1/group:0/entity:0"});
+  }
+
+  SECTION("re-places a room in the linked copy that its room was rebuilt in")
+  {
+    // A stands east of C only in the linked copy of G, and B east of A in both copies
+    fixture.applyJson(R"([
+      {"op": "add_room", "name": "C", "min": [0, 0, 0], "size": [256, 256, 128]},
+      {"op": "add_room", "name": "A", "min": [384, -2048, 0], "size": [256, 256, 128]}])");
+    fixture.applyJson(R"([
+      {"op": "add_room", "name": "B", "size": [256, 256, 128],
+       "place": {"east_of": "A", "gap": 128}},
+      {"op": "set_property", "target": "layer:0/group:1/entity:0",
+       "key": "_tbcli_place", "value": "east_of C 128"}])");
+    fixture.applyJson(R"([
+      {"op": "group", "target": ["layer:0/group:1", "layer:0/group:2"], "name": "G",
+       "as": "$g"},
+      {"op": "linked_duplicate", "target": "$g", "offset": [0, 2048, 0]}])");
+
+    const auto json =
+      fixture.applyJson(R"([{"op": "edit_room", "room": "C", "size": [384, 256, 128]}])");
+    CHECK(json["ops"][0].find("stale_placements") == nullptr);
+    CHECK(
+      aabbOf(map, "layer:0/group:2/group:0/entity:0")
+      == parseJsonLiteral(R"({"min": [496, -16, -16], "max": [784, 272, 144]})"));
+    CHECK(
+      aabbOf(map, "layer:0/group:2/group:1/entity:0")
+      == parseJsonLiteral(R"({"min": [880, -16, -16], "max": [1168, 272, 144]})"));
+    CHECK(
+      aabbOf(map, "layer:0/group:1/group:1/entity:0")
+      == parseJsonLiteral(R"({"min": [880, -2064, -16], "max": [1168, -1776, 144]})"));
   }
 }
 
@@ -1502,6 +1801,17 @@ TEST_CASE("edit_connection")
     checkError(fixture.apply(fmt::format("[{}]", batch)), "invalid_argument", 2, 0);
     CHECK(fixture.unchanged());
   }
+
+  SECTION("refuses a corridor that would cut a wall across a linked boundary")
+  {
+    fixture.applyJson(connected);
+    fixture.applyJson(R"([{"op": "linked_duplicate", "target": "layer:0/group:0",
+      "offset": [0, 1024, 0]}])");
+    const auto result =
+      fixture.apply(R"([{"op": "edit_connection", "connection": "A-B", "width": 64}])");
+    checkError(result, "connect_cuts_linked_room", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:0/group:0/entity:0"});
+  }
 }
 
 TEST_CASE("detach")
@@ -1605,6 +1915,26 @@ TEST_CASE("detach")
     CAPTURE(batch);
 
     checkError(fixture.apply(fmt::format("[{}]", batch)), "invalid_argument", 2, 0);
+  }
+
+  SECTION("strips the keys of every linked instance")
+  {
+    addLinkedA(fixture);
+    const auto json = fixture.applyJson(R"([{"op": "detach", "room": "A"}])");
+    CHECK(json["ops"][0]["instances_affected"] == linkedAInstances());
+    CHECK(fixture.builtRooms()["total"] == Json{0});
+  }
+
+  SECTION("refuses a room whose linked copy is locked")
+  {
+    addLinkedA(fixture);
+    fixture.applyJson(R"([
+      {"op": "create_layer", "name": "L", "as": "$l"},
+      {"op": "move_to_layer", "target": "layer:0/group:1", "layer": "$l"},
+      {"op": "lock", "target": "$l"}])");
+    const auto result = fixture.apply(R"([{"op": "detach", "room": "A"}])");
+    checkError(result, "locked", 1, 0);
+    CHECK(parseOutput(result)["error"]["node"] == Json{"layer:1/group:0/entity:0"});
   }
 }
 

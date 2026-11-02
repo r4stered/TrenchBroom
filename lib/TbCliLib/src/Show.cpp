@@ -78,8 +78,8 @@ Json groupInFullToJson(const mdl::GroupNode& groupNode, const mdl::WorldNode& wo
 
 /**
  * Adds what a carrier or the group that wraps it says about its built room:
- * `instance_of` (the room's name), `instances` (their number, one until linked built
- * rooms are recognised), `params` (or null if malformed) and `status`.
+ * `instance_of` (the room's name), `instances` (the number of its linked instances),
+ * `params` (or null if malformed) and `status`.
  */
 void addBuiltRoom(Json& json, const mdl::Node& node, const mdl::WorldNode& worldNode)
 {
@@ -94,7 +94,7 @@ void addBuiltRoom(Json& json, const mdl::Node& node, const mdl::WorldNode& world
   if (const auto* room = builtRoomOf(node, rooms))
   {
     json.set("instance_of", room->name);
-    json.set("instances", 1);
+    json.set("instances", room->instances.size());
     json.set("params", room->params ? paramsToJson(*room->params) : Json{});
     json.set("status", toString(room->status));
   }

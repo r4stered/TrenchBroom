@@ -53,6 +53,7 @@
 #include "kd/string_utils.h"
 
 #include "vm/bbox.h"
+#include "vm/mat.h"
 
 #include <fmt/format.h>
 
@@ -64,6 +65,7 @@
 #include <memory>
 #include <optional>
 #include <ranges>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -223,6 +225,96 @@ bool isRoomCarrier(const mdl::EntityNode& entityNode)
 bool isConnectionCarrier(const mdl::EntityNode& entityNode)
 {
   return isCarrierOfKind(entityNode, ConnectionKind);
+}
+
+/** How many groups have each link id: a group is linked if another group has its id. */
+using GroupCountByLinkId = std::unordered_map<std::string, size_t>;
+
+/** How many groups of the map have each link id. */
+GroupCountByLinkId groupCountByLinkId(const mdl::WorldNode& worldNode)
+{
+  auto result = GroupCountByLinkId{};
+  for (const auto* groupNode : collectContents(worldNode).groups)
+  {
+    ++result[groupNode->linkId()];
+  }
+  return result;
+}
+
+/** The groups around a node that are linked to another group, innermost first. */
+std::vector<const mdl::GroupNode*> linkedGroupsAround(
+  const mdl::Node& node, const GroupCountByLinkId& groupCounts)
+{
+  auto result = std::vector<const mdl::GroupNode*>{};
+  for (const auto* ancestor = node.parent(); ancestor; ancestor = ancestor->parent())
+  {
+    if (const auto* groupNode = dynamic_cast<const mdl::GroupNode*>(ancestor))
+    {
+      if (
+        const auto it = groupCounts.find(groupNode->linkId());
+        it != groupCounts.end() && it->second > 1)
+      {
+        result.push_back(groupNode);
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * The transformation that takes what is inside a linked group around `from` to where
+ * it is in the linked copy of that group around `to`, as the editor's linked update
+ * transforms it: from the innermost group around `from` that has a linked copy around
+ * `to`. Nothing if no group around `from` has a linked copy around `to`.
+ */
+std::optional<vm::mat4x4d> linkedTransformation(
+  const mdl::Node& from, const mdl::Node& to)
+{
+  for (const auto* a = from.parent(); a; a = a->parent())
+  {
+    if (const auto* groupA = dynamic_cast<const mdl::GroupNode*>(a))
+    {
+      for (const auto* b = to.parent(); b; b = b->parent())
+      {
+        if (
+          const auto* groupB = dynamic_cast<const mdl::GroupNode*>(b);
+          groupB && groupB != groupA && groupB->linkId() == groupA->linkId())
+        {
+          const auto inverted = vm::invert(groupA->group().transformation());
+          return inverted ? std::optional{groupB->group().transformation() * *inverted}
+                          : std::nullopt;
+        }
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * Whether two carriers are linked copies of each other: they sit inside linked copies of
+ * a group, at the same place in them, which the editor marks by giving them the same
+ * link id.
+ */
+bool areLinkedCopies(const mdl::EntityNode& a, const mdl::EntityNode& b)
+{
+  return &a != &b && a.linkId() == b.linkId() && linkedTransformation(a, b);
+}
+
+/**
+ * The room or connection among the given ones that the carrier is a linked copy of, so
+ * that it is another instance of it, if there is one.
+ *
+ * @param isAlike whether a room or connection has what the carrier's keys name it, as
+ * its name or the rooms that it joins
+ */
+template <typename T, typename IsAlike>
+T* linkedOriginalOf(
+  std::vector<T>& items, const mdl::EntityNode& carrier, const IsAlike& isAlike)
+{
+  const auto it = std::ranges::find_if(items, [&](const auto& item) {
+    return isAlike(item) && areLinkedCopies(*item.carrier(), carrier);
+  });
+  return it != items.end() ? &*it : nullptr;
 }
 
 /** The walls, floor and ceiling around an interior, as in the reference lowering. */
@@ -569,43 +661,50 @@ struct RoomShape
 using Shapes = std::map<const mdl::EntityNode*, RoomShape>;
 
 /**
- * Where a room stands now: an interior of the size that its parameters give, at the
- * minimum of its carrier's brushes plus its walls. Nothing if the room has no
- * parameters or no brushes.
+ * Where an instance of a room stands now: an interior of the size that the room's
+ * parameters give, at the minimum of the instance's brushes plus its walls. Nothing if
+ * the room has no parameters or the instance no brushes.
  */
-std::optional<RoomShape> shapeOf(const BuiltRoom& room)
+std::optional<RoomShape> shapeOf(const BuiltRoom& room, const mdl::EntityNode& carrier)
 {
-  if (!room.params || !room.carrier->hasChildren())
+  if (!room.params || !carrier.hasChildren())
   {
     return std::nullopt;
   }
-  const auto min = room.carrier->logicalBounds().min + vm::vec3d::fill(room.params->wall);
+  const auto min = carrier.logicalBounds().min + vm::vec3d::fill(room.params->wall);
   return RoomShape{room.name, {min, min + room.params->size}, room.params->wall};
 }
 
+/** Where each instance of the rooms stands, by carrier. */
 Shapes shapesOf(const std::vector<BuiltRoom>& rooms)
 {
   auto result = Shapes{};
   for (const auto& room : rooms)
   {
-    if (auto shape = shapeOf(room))
+    for (const auto& instance : room.instances)
     {
-      result.emplace(room.carrier, std::move(*shape));
+      if (auto shape = shapeOf(room, *instance.carrier))
+      {
+        result.emplace(instance.carrier, std::move(*shape));
+      }
     }
   }
   return result;
 }
 
-/** The interiors of the rooms that have a shape, in the order of the rooms. */
+/** The interiors of the instances that have a shape, in the order of the rooms. */
 std::vector<vm::bbox3d> interiorsOf(
   const std::vector<BuiltRoom>& rooms, const Shapes& shapes)
 {
   auto result = std::vector<vm::bbox3d>{};
   for (const auto& room : rooms)
   {
-    if (const auto it = shapes.find(room.carrier); it != shapes.end())
+    for (const auto& instance : room.instances)
     {
-      result.push_back(it->second.interior);
+      if (const auto it = shapes.find(instance.carrier); it != shapes.end())
+      {
+        result.push_back(it->second.interior);
+      }
     }
   }
   return result;
@@ -651,7 +750,20 @@ BuiltRoom builtRoomOfCarrier(const mdl::EntityNode& carrier)
     group = nullptr;
   }
   return BuiltRoom{
-    &carrier, std::move(name), std::move(params), RoomStatus::HandEdited, group};
+    std::move(name),
+    std::move(params),
+    RoomStatus::HandEdited,
+    {RoomInstance{&carrier, group}}};
+}
+
+/** The paths of the instances of a room: their groups, or their carriers. */
+std::vector<std::string> instancePaths(const BuiltRoom& room)
+{
+  return room.instances | std::views::transform([](const auto& instance) {
+           return instance.group ? nodePath(*instance.group)
+                                 : nodePath(*instance.carrier);
+         })
+         | kdl::ranges::to<std::vector>();
 }
 
 Json placementToJson(const Placement& place)
@@ -727,7 +839,7 @@ const BuiltRoom& findNamedRoom(
     throw ambiguousName(
       opName,
       fmt::format("{} built rooms are named \"{}\"", candidates.size(), name),
-      candidates | std::views::transform([](const auto* room) { return room->carrier; })
+      candidates | std::views::transform([](const auto* room) { return room->carrier(); })
         | kdl::ranges::to<std::vector>());
   }
   return *candidates.front();
@@ -747,7 +859,7 @@ const BuiltRoom& findRoom(
   const std::string& name)
 {
   const auto& room = findNamedRoom(opName, action, rooms, name);
-  const auto path = nodePath(*room.carrier);
+  const auto path = nodePath(*room.carrier());
   if (!room.params)
   {
     throw opFailed(
@@ -758,7 +870,7 @@ const BuiltRoom& findRoom(
         name),
       path);
   }
-  if (!room.carrier->hasChildren())
+  if (!room.carrier()->hasChildren())
   {
     throw opFailed(
       opName,
@@ -957,6 +1069,23 @@ void checkUnlocked(
 }
 
 /**
+ * Fails with `locked` if the carrier of an instance of a room or connection is locked,
+ * without --allow-locked, since a write to one instance reaches all of them.
+ *
+ * @param action what the op would do to them, for the message, as in `rebuild it`
+ */
+void checkInstancesUnlocked(
+  const OpContext& context,
+  const std::vector<const mdl::EntityNode*>& carriers,
+  const std::string_view action)
+{
+  for (const auto* carrier : carriers)
+  {
+    checkUnlocked(context, *carrier, describeCarrier(*carrier), action);
+  }
+}
+
+/**
  * The default layer, which built rooms and connections are created in.
  *
  * @throw CliError `locked` if it is locked, without --allow-locked
@@ -1006,11 +1135,11 @@ std::unique_ptr<mdl::GroupNode> newCarrierGroup(
   return group;
 }
 
-/** Adds a new carrier's group to the layer and reports it as created. */
+/** Adds a new carrier's group to the layer or group and reports it as created. */
 void addCarrierGroup(
-  OpContext& context, mdl::LayerNode& layer, std::unique_ptr<mdl::GroupNode> group)
+  OpContext& context, mdl::Node& parent, std::unique_ptr<mdl::GroupNode> group)
 {
-  if (mdl::addNodes(context.map, {{&layer, {group.get()}}}).empty())
+  if (mdl::addNodes(context.map, {{&parent, {group.get()}}}).empty())
   {
     throw opFailed(
       context.opName, fmt::format("cannot add {} to the map", group->name()));
@@ -1053,16 +1182,23 @@ std::optional<ConnectionParams> parseConnectionParams(const mdl::Entity& entity)
            : std::nullopt;
 }
 
-/** A connection as the map holds it. */
+/**
+ * A connection as the map holds it. Like a room, a connection inside linked copies of a
+ * group has an instance in each.
+ */
 struct BuiltConnection
 {
-  const mdl::EntityNode* carrier = nullptr;
   /** The name of the room it starts at, empty if the key is missing. */
   std::string from;
   /** The name of the room it leads to, empty if the key is missing. */
   std::string to;
   /** Unset if the carrier's parameter keys are missing or malformed. */
   std::optional<ConnectionParams> params;
+  /** The carriers of every instance, in file order; there is at least one. */
+  std::vector<const mdl::EntityNode*> instances;
+
+  /** The carrier of the first instance. */
+  const mdl::EntityNode* carrier() const { return instances.front(); }
 
   bool joins(const std::string_view room) const { return from == room || to == room; }
 
@@ -1070,7 +1206,7 @@ struct BuiltConnection
   std::string name() const { return fmt::format("{}-{}", from, to); }
 };
 
-/** The connections of the map, in file order. */
+/** The connections of the map, in file order, with their linked copies as instances. */
 std::vector<BuiltConnection> collectConnections(const mdl::WorldNode& worldNode)
 {
   auto result = std::vector<BuiltConnection>{};
@@ -1079,14 +1215,25 @@ std::vector<BuiltConnection> collectConnections(const mdl::WorldNode& worldNode)
     if (isConnectionCarrier(*entityNode))
     {
       const auto& entity = entityNode->entity();
-      const auto* from = entity.property(Keys::From);
-      const auto* to = entity.property(Keys::To);
-      result.push_back(
-        BuiltConnection{
-          entityNode,
-          from ? *from : std::string{},
-          to ? *to : std::string{},
-          parseConnectionParams(entity)});
+      const auto* fromValue = entity.property(Keys::From);
+      const auto* toValue = entity.property(Keys::To);
+      auto from = fromValue ? *fromValue : std::string{};
+      auto to = toValue ? *toValue : std::string{};
+
+      if (
+        auto* original =
+          linkedOriginalOf(result, *entityNode, [&](const auto& connection) {
+            return connection.from == from && connection.to == to;
+          }))
+      {
+        original->instances.push_back(entityNode);
+      }
+      else
+      {
+        result.push_back(
+          BuiltConnection{
+            std::move(from), std::move(to), parseConnectionParams(entity), {entityNode}});
+      }
     }
   }
   return result;
@@ -1141,7 +1288,7 @@ const BuiltConnection& findConnection(
         rooms[0],
         rooms[1]),
       candidates | std::views::transform([](const auto* connection) {
-        return connection->carrier;
+        return connection->carrier();
       }) | kdl::ranges::to<std::vector>());
   }
   return *candidates.front();
@@ -1162,7 +1309,7 @@ const ConnectionParams& paramsOf(
       fmt::format(
         "cannot rebuild connection {}, whose parameter keys are missing or malformed",
         connection.name()),
-      nodePath(*connection.carrier));
+      nodePath(*connection.carrier()));
   }
   return *connection.params;
 }
@@ -1416,6 +1563,16 @@ std::vector<vm::bbox3d> corridorBoxes(const Corridor& corridor)
 }
 
 /**
+ * Where some carriers are with respect to linked groups, when the editor's linked update
+ * copies all of them into the same copies of a group and nothing else.
+ */
+struct LinkedCopy
+{
+  /** The linked copy of a group that they are inside, or null if none. */
+  const mdl::GroupNode* group = nullptr;
+};
+
+/**
  * The built rooms and connections of a map and where the rooms stand, which statuses
  * and rebuilds are determined against.
  */
@@ -1423,30 +1580,187 @@ struct Layout
 {
   std::vector<BuiltRoom> rooms;
   std::vector<BuiltConnection> connections;
+  /** Where each instance of the rooms stands. */
   Shapes shapes;
+  /** How many groups have each link id, which tells which groups are linked. */
+  GroupCountByLinkId groupCounts;
+  /** The entities of the map by link id, which linked copies of an entity share. */
+  std::unordered_map<std::string, std::vector<const mdl::EntityNode*>> entitiesByLinkId;
+
+  /**
+   * How many copies of the entity the editor's linked update keeps alike, the entity
+   * itself included.
+   */
+  size_t linkedCopies(const mdl::EntityNode& entityNode) const
+  {
+    const auto it = entitiesByLinkId.find(entityNode.linkId());
+    return it == entitiesByLinkId.end()
+             ? 1
+             : 1 + size_t(std::ranges::count_if(it->second, [&](const auto* other) {
+                 return areLinkedCopies(entityNode, *other);
+               }));
+  }
+
+  /**
+   * The linked copy of a group that the carriers are inside together, so that the
+   * editor's linked update copies all of them into the same other copies of the group,
+   * and nothing else: the innermost linked group around all of them, which no carrier
+   * has a linked copy outside the copies of. Its group is null if they are not inside
+   * linked groups and have no linked copies. Nothing if they are not inside one linked
+   * copy together, so that an edit of one of them would reach copies where the others
+   * are missing.
+   */
+  std::optional<LinkedCopy> sharedLinkedCopy(
+    const std::vector<const mdl::EntityNode*>& carriers) const
+  {
+    const mdl::GroupNode* group = nullptr;
+    for (const auto* each : linkedGroupsAround(*carriers.front(), groupCounts))
+    {
+      if (std::ranges::all_of(carriers, [&](const auto* carrier) {
+            return each->isAncestorOf(*carrier);
+          }))
+      {
+        group = each;
+        break;
+      }
+    }
+    const auto copies = group ? groupCounts.at(group->linkId()) : size_t{1};
+    return std::ranges::all_of(
+             carriers,
+             [&](const auto* carrier) { return linkedCopies(*carrier) == copies; })
+             ? std::optional{LinkedCopy{group}}
+             : std::nullopt;
+  }
+
+  /** Whether the carriers are inside one linked copy of a group together. */
+  bool shareLinkedGroup(const std::vector<const mdl::EntityNode*>& carriers) const
+  {
+    const auto copy = sharedLinkedCopy(carriers);
+    return copy && copy->group;
+  }
 };
 
 /**
+ * The carrier of the first instance of the room that is inside the same linked copy of
+ * a group as the given carrier, if there is one.
+ */
+const mdl::EntityNode* instanceWith(
+  const BuiltRoom& room, const mdl::EntityNode& carrier, const Layout& layout)
+{
+  const auto it = std::ranges::find_if(room.instances, [&](const auto& instance) {
+    return layout.shareLinkedGroup({instance.carrier, &carrier});
+  });
+  return it != room.instances.end() ? it->carrier : nullptr;
+}
+
+/**
+ * Of the room that has linked copies, if only one of two rooms has, that one, else the
+ * first: the room whose walls a corridor between them would cut across a linked
+ * boundary, as errors name it.
+ */
+const BuiltRoom& roomAcrossBoundary(
+  const BuiltRoom& first, const BuiltRoom& second, const Layout& layout)
+{
+  return layout.linkedCopies(*first.carrier()) == 1
+             && layout.linkedCopies(*second.carrier()) > 1
+           ? second
+           : first;
+}
+
+/** The carriers of an instance of each of two rooms. */
+struct InstancePair
+{
+  const mdl::EntityNode* first = nullptr;
+  const mdl::EntityNode* second = nullptr;
+};
+
+/**
+ * The first pair of instances of two rooms that the predicate accepts, by the instances
+ * of the first room in file order, then those of the second.
+ */
+template <typename Predicate>
+std::optional<InstancePair> firstInstancePair(
+  const BuiltRoom& first, const BuiltRoom& second, const Predicate& predicate)
+{
+  for (const auto& firstInstance : first.instances)
+  {
+    for (const auto& secondInstance : second.instances)
+    {
+      if (predicate(*firstInstance.carrier, *secondInstance.carrier))
+      {
+        return InstancePair{firstInstance.carrier, secondInstance.carrier};
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * An instance of a connection with the instances of the rooms that it joins: one that
+ * lies inside the same linked copy of a group as they do, if any, so that the editor
+ * copies the corridor wherever it copies the openings that it cuts.
+ */
+struct ConnectionInstance
+{
+  const mdl::EntityNode* carrier = nullptr;
+  const mdl::EntityNode* from = nullptr;
+  const mdl::EntityNode* to = nullptr;
+};
+
+/**
+ * The first instance of the connection that lies, with an instance of each of the rooms
+ * that it joins, inside one linked copy of a group, or outside linked groups, where one
+ * of the three carriers is the given one. Nothing if there is none, which means that the
+ * corridor would cut a wall across a linked boundary.
+ */
+std::optional<ConnectionInstance> connectionInstanceWith(
+  const BuiltConnection& connection,
+  const BuiltRoom& from,
+  const BuiltRoom& to,
+  const mdl::EntityNode& carrier,
+  const Layout& layout)
+{
+  for (const auto* connectionCarrier : connection.instances)
+  {
+    if (
+      const auto rooms =
+        firstInstancePair(from, to, [&](const auto& fromCarrier, const auto& toCarrier) {
+          const auto carriers = std::vector{connectionCarrier, &fromCarrier, &toCarrier};
+          return kdl::ranges::contains(carriers, &carrier)
+                 && layout.sharedLinkedCopy(carriers);
+        }))
+    {
+      return ConnectionInstance{connectionCarrier, rooms->first, rooms->second};
+    }
+  }
+  return std::nullopt;
+}
+
+/**
  * The corridor that a connection with the given parameters builds between its rooms
- * where they stand, or nothing if a room is missing, ambiguous or has no shape, or the
- * rooms no longer allow the corridor.
+ * where they stand, in its instance with the given carrier (see connectionInstanceWith),
+ * or nothing if a room is missing, ambiguous or has no shape, there is no such instance,
+ * or the rooms no longer allow the corridor.
  */
 std::optional<Corridor> corridorIfPossible(
-  const BuiltConnection& connection, const ConnectionParams& params, const Layout& layout)
+  const BuiltConnection& connection,
+  const ConnectionParams& params,
+  const Layout& layout,
+  const mdl::EntityNode& carrier)
 {
-  const auto shapeNamed = [&](const std::string& name) -> const RoomShape* {
-    const auto* room = uniqueRoom(layout.rooms, name);
-    const auto it = room ? layout.shapes.find(room->carrier) : layout.shapes.end();
-    return it != layout.shapes.end() ? &it->second : nullptr;
-  };
-
-  const auto* from = shapeNamed(connection.from);
-  const auto* to = shapeNamed(connection.to);
-  if (!from || !to)
+  const auto* fromRoom = uniqueRoom(layout.rooms, connection.from);
+  const auto* toRoom = uniqueRoom(layout.rooms, connection.to);
+  const auto instance =
+    fromRoom && toRoom
+      ? connectionInstanceWith(connection, *fromRoom, *toRoom, carrier, layout)
+      : std::nullopt;
+  const auto from = instance ? layout.shapes.find(instance->from) : layout.shapes.end();
+  const auto to = instance ? layout.shapes.find(instance->to) : layout.shapes.end();
+  if (from == layout.shapes.end() || to == layout.shapes.end())
   {
     return std::nullopt;
   }
-  const auto result = tryCorridorBetween({}, *from, *to, params);
+  const auto result = tryCorridorBetween({}, from->second, to->second, params);
   const auto* corridor = std::get_if<Corridor>(&result);
   return corridor ? std::optional{*corridor} : std::nullopt;
 }
@@ -1494,33 +1808,38 @@ bool hasStoredFingerprint(const mdl::EntityNode& carrier, const std::string& fin
  * opening of every connection that joins it cut out. The stored fingerprint keeps a
  * room rebuildable when a room it is joined to is moved alone or a connection is
  * detached, which leave its own brushes as they were; the built one accepts rooms whose
- * fingerprint tbcli did not write, such as rooms made by hand.
+ * fingerprint tbcli did not write, such as rooms made by hand. A room is rebuildable
+ * only if every instance is, since a rebuild replaces the brushes of all of them.
  */
 RoomStatus roomStatus(const BuiltRoom& room, const Layout& layout)
 {
-  const auto shape = layout.shapes.find(room.carrier);
-  if (
-    shape == layout.shapes.end()
-    || !vm::is_equal(
-      room.carrier->logicalBounds().size(),
-      shape->second.interior.expand(shape->second.wall).size(),
-      OverlapTolerance))
-  {
-    return RoomStatus::HandEdited;
-  }
+  const auto instanceIsRebuildable = [&](const mdl::EntityNode* carrier) {
+    const auto shape = layout.shapes.find(carrier);
+    if (
+      shape == layout.shapes.end()
+      || !vm::is_equal(
+        carrier->logicalBounds().size(),
+        shape->second.interior.expand(shape->second.wall).size(),
+        OverlapTolerance))
+    {
+      return false;
+    }
 
-  const auto fingerprint = carrierFingerprint(*room.carrier);
-  if (hasStoredFingerprint(*room.carrier, fingerprint))
-  {
-    return RoomStatus::Rebuildable;
-  }
-  const auto openings =
-    openingsOf(room.name, layout.connections, [&](const BuiltConnection& connection) {
-      return connection.params
-               ? corridorIfPossible(connection, *connection.params, layout)
-               : std::nullopt;
-    });
-  return openings && boxesFingerprint(roomBoxes(shape->second, *openings)) == fingerprint
+    const auto fingerprint = carrierFingerprint(*carrier);
+    if (hasStoredFingerprint(*carrier, fingerprint))
+    {
+      return true;
+    }
+    const auto openings =
+      openingsOf(room.name, layout.connections, [&](const BuiltConnection& connection) {
+        return connection.params
+                 ? corridorIfPossible(connection, *connection.params, layout, *carrier)
+                 : std::nullopt;
+      });
+    return openings
+           && boxesFingerprint(roomBoxes(shape->second, *openings)) == fingerprint;
+  };
+  return std::ranges::all_of(room.carriers(), instanceIsRebuildable)
            ? RoomStatus::Rebuildable
            : RoomStatus::HandEdited;
 }
@@ -1533,23 +1852,33 @@ RoomStatus roomStatus(const BuiltRoom& room, const Layout& layout)
  */
 RoomStatus connectionStatus(const BuiltConnection& connection, const Layout& layout)
 {
-  if (!connection.params || !connection.carrier->hasChildren())
-  {
-    return RoomStatus::HandEdited;
-  }
+  const auto instanceIsRebuildable = [&](const mdl::EntityNode* carrier) {
+    if (!connection.params || !carrier->hasChildren())
+    {
+      return false;
+    }
 
-  const auto fingerprint = carrierFingerprint(*connection.carrier);
-  if (hasStoredFingerprint(*connection.carrier, fingerprint))
-  {
-    return RoomStatus::Rebuildable;
-  }
-  const auto corridor = corridorIfPossible(connection, *connection.params, layout);
-  return corridor && boxesFingerprint(corridorBoxes(*corridor)) == fingerprint
+    const auto fingerprint = carrierFingerprint(*carrier);
+    if (hasStoredFingerprint(*carrier, fingerprint))
+    {
+      return true;
+    }
+    const auto corridor =
+      corridorIfPossible(connection, *connection.params, layout, *carrier);
+    return corridor && boxesFingerprint(corridorBoxes(*corridor)) == fingerprint;
+  };
+  return std::ranges::all_of(connection.instances, instanceIsRebuildable)
            ? RoomStatus::Rebuildable
            : RoomStatus::HandEdited;
 }
 
-/** The built rooms with their statuses and the connections of the map. */
+/**
+ * The built rooms with their statuses and the connections of the map. A carrier that is
+ * a linked copy of an earlier one with the same name is an instance of its room; other
+ * carriers with the same name are rooms of their own, whose name is ambiguous. The
+ * status of a room is that of its first instance, which the editor keeps the others
+ * alike with.
+ */
 Layout layoutOf(const mdl::WorldNode& worldNode)
 {
   auto result = Layout{};
@@ -1557,11 +1886,28 @@ Layout layoutOf(const mdl::WorldNode& worldNode)
   {
     if (isRoomCarrier(*entityNode))
     {
-      result.rooms.push_back(builtRoomOfCarrier(*entityNode));
+      auto room = builtRoomOfCarrier(*entityNode);
+      if (
+        auto* original =
+          linkedOriginalOf(result.rooms, *entityNode, [&](const auto& each) {
+            return each.name == room.name;
+          }))
+      {
+        original->instances.push_back(room.instances.front());
+      }
+      else
+      {
+        result.rooms.push_back(std::move(room));
+      }
     }
   }
   result.connections = collectConnections(worldNode);
   result.shapes = shapesOf(result.rooms);
+  result.groupCounts = groupCountByLinkId(worldNode);
+  for (const auto* entityNode : collectContents(worldNode).entities)
+  {
+    result.entitiesByLinkId[entityNode->linkId()].push_back(entityNode);
+  }
   for (auto& room : result.rooms)
   {
     room.status = roomStatus(room, result);
@@ -1605,17 +1951,51 @@ mdl::Brush cuboidLike(
   return result;
 }
 
-/** Updates the carrier's keys, as one change that reaches its linked copies. */
+/** The entity without `_tbcli_*` keys among its protected properties. */
+mdl::Entity withoutProtectedCarrierKeys(mdl::Entity entity)
+{
+  auto protectedProperties = std::vector<std::string>{};
+  std::ranges::copy_if(
+    entity.protectedProperties(),
+    std::back_inserter(protectedProperties),
+    [](const auto& key) { return !key.starts_with(Keys::Prefix); });
+  entity.setProtectedProperties(std::move(protectedProperties));
+  return entity;
+}
+
+/**
+ * Updates the carrier's keys, as one change that reaches its linked copies. tbcli's keys
+ * are never protected properties: the editor's linked update would keep a protected
+ * key's value in each linked copy, so the carrier and its copies lose the protection of
+ * their `_tbcli_*` keys first.
+ */
 void updateCarrierKeys(
   OpContext& context,
   mdl::EntityNode& carrier,
   mdl::Entity entity,
   const std::string_view what)
 {
+  auto swaps = std::vector<std::pair<mdl::Node*, mdl::NodeContents>>{
+    {&carrier, mdl::NodeContents{withoutProtectedCarrierKeys(std::move(entity))}}};
+  for (const auto* entityNode : collectContents(context.map.worldNode()).entities)
+  {
+    if (
+      areLinkedCopies(carrier, *entityNode)
+      && std::ranges::any_of(
+        entityNode->entity().protectedProperties(),
+        [](const auto& key) { return key.starts_with(Keys::Prefix); }))
+    {
+      // the copies are in the map that this op edits
+      swaps.emplace_back(
+        const_cast<mdl::EntityNode*>(entityNode),
+        mdl::NodeContents{withoutProtectedCarrierKeys(entityNode->entity())});
+    }
+  }
+
   if (!mdl::updateNodeContents(
         context.map,
         std::string{context.opName},
-        {{&carrier, mdl::NodeContents{std::move(entity)}}},
+        std::move(swaps),
         mdl::collectContainingGroups({&carrier})))
   {
     throw opFailed(
@@ -1626,16 +2006,18 @@ void updateCarrierKeys(
 }
 
 /**
- * Cuts the opening out of a room's walls: each brush that reaches into it is replaced by
- * the boxes of it that lie outside, which keep its materials. The room's fingerprint is
- * set to its cut brushes. The carrier is reported as modified and the brushes that were
- * cut as removed.
+ * Cuts the opening out of a room's walls: each brush of the carrier that reaches into it
+ * is replaced by the boxes of it that lie outside, which keep its materials. The room's
+ * fingerprint is set to its cut brushes. The carrier is reported as modified and the
+ * brushes that were cut as removed.
  */
-void cutOpening(OpContext& context, const BuiltRoom& room, const vm::bbox3d& opening)
+void cutOpening(
+  OpContext& context, const mdl::EntityNode& constCarrier, const vm::bbox3d& opening)
 {
   auto& map = context.map;
   // the rooms were collected from the map that this op edits
-  auto& carrier = const_cast<mdl::EntityNode&>(*room.carrier);
+  auto& carrier = const_cast<mdl::EntityNode&>(constCarrier);
+  const auto what = describeCarrier(carrier);
   const auto builder = brushBuilderOf(map);
 
   auto cut = std::vector<mdl::Node*>{};
@@ -1667,8 +2049,7 @@ void cutOpening(OpContext& context, const BuiltRoom& room, const vm::bbox3d& ope
       | kdl::ranges::to<std::vector>();
     if (mdl::addNodes(map, {{&carrier, std::move(nodes)}}).empty())
     {
-      throw opFailed(
-        context.opName, fmt::format("cannot cut the walls of room \"{}\"", room.name));
+      throw opFailed(context.opName, fmt::format("cannot cut the walls of {}", what));
     }
     for (auto& piece : pieces)
     {
@@ -1681,47 +2062,38 @@ void cutOpening(OpContext& context, const BuiltRoom& room, const vm::bbox3d& ope
 
   auto entity = carrier.entity();
   entity.addOrUpdateProperty(Keys::Fingerprint, carrierFingerprint(carrier));
-  updateCarrierKeys(context, carrier, std::move(entity), describeCarrier(carrier));
+  updateCarrierKeys(context, carrier, std::move(entity), what);
 
   context.outcome.modified.push_back(&carrier);
   std::ranges::copy(cut, std::back_inserter(context.outcome.removed));
 }
 
-/** Whether the node is inside a group that is linked to another. */
-bool isInLinkedGroup(OpContext& context, const mdl::Node& node)
-{
-  auto& worldNode = context.map.worldNode();
-  for (const auto* ancestor = node.parent(); ancestor; ancestor = ancestor->parent())
-  {
-    if (
-      const auto* group = dynamic_cast<const mdl::GroupNode*>(ancestor);
-      group && mdl::collectGroupsWithLinkId({&worldNode}, group->linkId()).size() > 1)
-    {
-      return true;
-    }
-  }
-  return false;
-}
-
 /**
- * Fails with `connect_cuts_linked_room` if the room is inside a linked group, whose
- * copies would get the opening without the corridor.
+ * A `connect_cuts_linked_room` error: a corridor of the given connection, or between the
+ * given rooms, would cut the walls of the room with the given carrier across a linked
+ * boundary, so that the linked copies of its walls would get the opening without the
+ * corridor, or the corridor without the opening.
+ *
+ * @param what the corridor, for the message, as in `connection A-B`
  */
-void checkNotLinked(OpContext& context, const BuiltRoom& room)
+CliError cutsLinkedRoom(
+  const std::string_view opName,
+  const std::string_view what,
+  const mdl::EntityNode& carrier)
 {
-  if (isInLinkedGroup(context, *room.carrier))
-  {
-    const auto path = nodePath(*room.carrier);
-    throw CliError{
-      ErrorCode::ConnectCutsLinkedRoom,
-      fmt::format(
-        "{}: room \"{}\" ({}) is inside a linked group, and cutting its walls would cut "
-        "every linked copy without a corridor",
-        context.opName,
-        room.name,
-        path),
-      path};
-  }
+  const auto path = nodePath(carrier);
+  return CliError{
+    ErrorCode::ConnectCutsLinkedRoom,
+    fmt::format(
+      "{}: {} would cut the walls of {} ({}) across a linked boundary: a corridor and "
+      "the rooms that it joins must be inside the same linked copy of a group, or "
+      "outside linked groups, so that every linked copy gets both the opening and the "
+      "corridor",
+      opName,
+      what,
+      describeCarrier(carrier),
+      path),
+    path};
 }
 
 /** A `hand_edited` error for a carrier whose brushes no longer match its parameters. */
@@ -1744,19 +2116,16 @@ CliError handEdited(
 /**
  * A room whose walls a connection cuts.
  *
- * @throw CliError as findRoom does, `locked` if the room is locked, without
- * --allow-locked, `connect_cuts_linked_room` if it is inside a linked group, and
- * `hand_edited` if its brushes no longer match what its parameters build
+ * @throw CliError as findRoom does, and `hand_edited` if its brushes no longer match
+ * what its parameters build
  */
 const BuiltRoom& roomToConnect(
   OpContext& context, const std::vector<BuiltRoom>& rooms, const std::string& name)
 {
   const auto& room = findRoom(context.opName, "connect", rooms, name);
-  checkUnlocked(context, *room.carrier, describeCarrier(*room.carrier), "cut its walls");
-  checkNotLinked(context, room);
   if (room.status != RoomStatus::Rebuildable)
   {
-    throw handEdited(context, *room.carrier, "its walls cannot be cut safely");
+    throw handEdited(context, *room.carrier(), "its walls cannot be cut safely");
   }
   return room;
 }
@@ -1774,14 +2143,14 @@ void checkNotConnected(
       (connection.from == from && connection.to == to)
       || (connection.from == to && connection.to == from))
     {
-      const auto path = nodePath(*connection.carrier);
+      const auto path = nodePath(*connection.carrier());
       throw opFailed(
         context.opName,
         fmt::format(
           "rooms \"{}\" and \"{}\" are joined already by {} ({})",
           from,
           to,
-          describeCarrier(*connection.carrier),
+          describeCarrier(*connection.carrier()),
           path),
         path);
     }
@@ -1922,6 +2291,27 @@ void rebuildCarrier(
   std::ranges::copy(oldNodes, std::back_inserter(context.outcome.removed));
 }
 
+/** A room that a rebuild replaces the brushes of, in one of its instances. */
+struct RoomRebuild
+{
+  const BuiltRoom* room = nullptr;
+  /**
+   * The carrier of the instance whose brushes are replaced; the editor's linked update
+   * replaces those of the other instances.
+   */
+  const mdl::EntityNode* carrier = nullptr;
+  RoomParams params;
+};
+
+/** A connection that a rebuild replaces the brushes of, in one of its instances. */
+struct ConnectionRebuild
+{
+  const BuiltConnection* connection = nullptr;
+  /** The instance whose brushes are replaced, with the instances of its rooms. */
+  ConnectionInstance instance;
+  ConnectionParams params;
+};
+
 /**
  * What a rebuild replaces: the rooms and connections whose brushes it rebuilds with
  * their new parameters, and where the rooms stand before and after it.
@@ -1930,12 +2320,12 @@ struct RebuildPlan
 {
   /** The rooms and connections, and where the rooms stand before the rebuild. */
   Layout layout;
-  /** Where the rooms stand after the rebuild. */
+  /** Where the instances of the rooms stand after the rebuild. */
   Shapes after;
   /** The rooms whose brushes are rebuilt, in order, with their new parameters. */
-  std::vector<std::pair<const BuiltRoom*, RoomParams>> roomsToRebuild;
+  std::vector<RoomRebuild> roomsToRebuild;
   /** The connections whose brushes are rebuilt, in order, with their new parameters. */
-  std::vector<std::pair<const BuiltConnection*, ConnectionParams>> connectionsToRebuild;
+  std::vector<ConnectionRebuild> connectionsToRebuild;
   /** The rooms left where they are because their placement could not be matched. */
   std::vector<const BuiltRoom*> stale;
 
@@ -1949,27 +2339,55 @@ struct RebuildPlan
   RebuildPlan(const RebuildPlan&) = delete;
   RebuildPlan& operator=(const RebuildPlan&) = delete;
 
-  bool rebuildsRoom(const BuiltRoom& room) const
+  /** The carrier of the instance that the room is rebuilt in, if it is rebuilt. */
+  const mdl::EntityNode* rebuiltInstance(const BuiltRoom& room) const
   {
-    return std::ranges::any_of(
-      roomsToRebuild, [&](const auto& entry) { return entry.first == &room; });
+    const auto it = std::ranges::find(roomsToRebuild, &room, &RoomRebuild::room);
+    return it != roomsToRebuild.end() ? it->carrier : nullptr;
   }
 
-  /** Adds the room with the given parameters, unless it is rebuilt already. */
-  void rebuildRoom(const BuiltRoom& room, const RoomParams& params)
+  /**
+   * Adds the room, rebuilt in the instance with the given carrier with the given
+   * parameters, unless it is rebuilt already.
+   */
+  void rebuildRoom(
+    const BuiltRoom& room, const mdl::EntityNode& carrier, const RoomParams& params)
   {
-    if (!rebuildsRoom(room))
+    if (!rebuiltInstance(room))
     {
-      roomsToRebuild.emplace_back(&room, params);
+      roomsToRebuild.push_back(RoomRebuild{&room, &carrier, params});
     }
   }
 
-  /** The parameters that the connection is rebuilt with, if it is rebuilt. */
-  const ConnectionParams* rebuiltParams(const BuiltConnection& connection) const
+  /**
+   * Sets where the instance of the room with the given carrier stands after the rebuild,
+   * and where its other instances do, which the editor's linked update moves along.
+   */
+  void standAfter(
+    const BuiltRoom& room, const mdl::EntityNode& carrier, const RoomShape& shape)
+  {
+    for (const auto& instance : room.instances)
+    {
+      if (instance.carrier == &carrier)
+      {
+        after.insert_or_assign(instance.carrier, shape);
+      }
+      else if (
+        const auto transformation = linkedTransformation(carrier, *instance.carrier))
+      {
+        after.insert_or_assign(
+          instance.carrier,
+          RoomShape{shape.name, shape.interior.transform(*transformation), shape.wall});
+      }
+    }
+  }
+
+  /** How the connection is rebuilt, if it is rebuilt. */
+  const ConnectionRebuild* rebuilt(const BuiltConnection& connection) const
   {
     const auto it = std::ranges::find(
-      connectionsToRebuild, &connection, [](const auto& entry) { return entry.first; });
-    return it != connectionsToRebuild.end() ? &it->second : nullptr;
+      connectionsToRebuild, &connection, &ConnectionRebuild::connection);
+    return it != connectionsToRebuild.end() ? &*it : nullptr;
   }
 };
 
@@ -1980,28 +2398,60 @@ std::string rebuildAction(const BuiltConnection& connection)
 }
 
 /**
- * Adds a connection with the given parameters to the rebuild, unless it is rebuilt
- * already, and the rooms that it joins, whose walls it cuts.
+ * The instance of a connection with the given carrier or with the given carrier of one of
+ * its rooms, with the instances of the rooms that it joins, which a rebuild builds its
+ * corridor in (see connectionInstanceWith).
  *
  * @throw CliError as findRoom does if a room that it joins is missing, ambiguous or
- * malformed
+ * malformed, and `connect_cuts_linked_room` if there is no such instance
+ */
+ConnectionInstance connectionInstanceToRebuild(
+  const std::string_view opName,
+  const Layout& layout,
+  const BuiltConnection& connection,
+  const mdl::EntityNode& carrier)
+{
+  const auto action = rebuildAction(connection);
+  const auto& from = findRoom(opName, action, layout.rooms, connection.from);
+  const auto& to = findRoom(opName, action, layout.rooms, connection.to);
+  if (const auto instance = connectionInstanceWith(connection, from, to, carrier, layout))
+  {
+    return *instance;
+  }
+  throw cutsLinkedRoom(
+    opName,
+    fmt::format("connection {}", connection.name()),
+    *roomAcrossBoundary(from, to, layout).carrier());
+}
+
+/**
+ * Adds a connection with the given parameters to the rebuild, in its instance with the
+ * given carrier or the given carrier of one of its rooms (see connectionInstanceWith),
+ * unless it is rebuilt already, and the rooms that it joins, whose walls it cuts, in the
+ * instances with it.
+ *
+ * @throw CliError as connectionInstanceToRebuild does
  */
 void rebuildConnection(
   const std::string_view opName,
   RebuildPlan& plan,
   const BuiltConnection& connection,
-  const ConnectionParams& params)
+  const ConnectionParams& params,
+  const mdl::EntityNode& carrier)
 {
-  if (plan.rebuiltParams(connection))
+  if (plan.rebuilt(connection))
   {
     return;
   }
-  plan.connectionsToRebuild.emplace_back(&connection, params);
-  for (const auto& name : {connection.from, connection.to})
+  const auto instance =
+    connectionInstanceToRebuild(opName, plan.layout, connection, carrier);
+  plan.connectionsToRebuild.push_back(ConnectionRebuild{&connection, instance, params});
+  const auto action = rebuildAction(connection);
+  for (const auto& [name, roomCarrier] :
+       {std::pair{connection.from, instance.from}, std::pair{connection.to, instance.to}})
   {
-    const auto& room =
-      findRoom(opName, rebuildAction(connection), plan.layout.rooms, name);
-    plan.rebuildRoom(room, *room.params);
+    const auto& room = findRoom(opName, action, plan.layout.rooms, name);
+    plan.rebuildRoom(room, *roomCarrier, *room.params);
   }
 }
 
@@ -2030,10 +2480,41 @@ bool isPlacedAgainst(
 }
 
 /**
+ * The carriers of an instance of the room (first) and an instance of the reference
+ * (second) that it stands next to where its placement puts it: preferably next to the
+ * given instance of the reference, else the first such pair in file order. Nothing if
+ * no instance of the room stands next to an instance of the reference.
+ */
+std::optional<InstancePair> standingInstances(
+  const BuiltRoom& room,
+  const BuiltRoom& reference,
+  const Placement& place,
+  const Shapes& shapes,
+  const mdl::EntityNode* preferred = nullptr)
+{
+  const auto standsNextTo = [&](const auto& carrier, const auto& referenceCarrier) {
+    const auto shape = shapes.find(&carrier);
+    const auto referenceShape = shapes.find(&referenceCarrier);
+    return shape != shapes.end() && referenceShape != shapes.end()
+           && standsAt(shape->second.interior, referenceShape->second.interior, place);
+  };
+  if (
+    const auto result = firstInstancePair(
+      room, reference, [&](const auto& carrier, const auto& referenceCarrier) {
+        return &referenceCarrier == preferred && standsNextTo(carrier, referenceCarrier);
+      }))
+  {
+    return result;
+  }
+  return firstInstancePair(room, reference, standsNextTo);
+}
+
+/**
  * Re-places the rooms that are placed against the given moved rooms, directly or
  * through others, and adds the ones that move and every connection that joins a moved
- * room to the rebuild. A room that does not stand where its placement puts it, or
- * whose reference's name is ambiguous, stays where it is and is recorded as stale.
+ * room to the rebuild. A room is re-placed in the instance that stands next to an
+ * instance of the moved room where its placement puts it; a room with no such instance,
+ * or whose reference's name is ambiguous, stays where it is and is recorded as stale.
  */
 void moveDependents(
   const std::string_view opName, RebuildPlan& plan, std::vector<const BuiltRoom*> moved)
@@ -2041,9 +2522,13 @@ void moveDependents(
   for (size_t i = 0; i < moved.size(); ++i)
   {
     const auto& reference = *moved[i];
-    const auto& referenceBefore = plan.layout.shapes.at(reference.carrier).interior;
-    const auto& referenceAfter = plan.after.at(reference.carrier).interior;
-    if (vm::is_equal(referenceBefore, referenceAfter, OverlapTolerance))
+    const auto* referenceCarrier = plan.rebuiltInstance(reference);
+    contract_assert(referenceCarrier != nullptr);
+    if (
+      vm::is_equal(
+        plan.layout.shapes.at(referenceCarrier).interior,
+        plan.after.at(referenceCarrier).interior,
+        OverlapTolerance))
     {
       continue;
     }
@@ -2052,29 +2537,41 @@ void moveDependents(
     {
       if (
         !room.params || !room.params->place || room.params->place->room != reference.name
-        || !plan.layout.shapes.contains(room.carrier)
-        || kdl::ranges::contains(moved, &room))
+        || kdl::ranges::contains(moved, &room)
+        || std::ranges::none_of(room.instances, [&](const auto& instance) {
+             return plan.layout.shapes.contains(instance.carrier);
+           }))
       {
         continue;
       }
 
-      const auto& before = plan.layout.shapes.at(room.carrier).interior;
-      const auto interior = uniqueRoom(plan.layout.rooms, reference.name) == &reference
-                              ? replacedInterior(
-                                  before,
-                                  room.params->size,
-                                  *room.params->place,
-                                  referenceBefore,
-                                  referenceAfter)
-                              : std::nullopt;
-      if (!interior)
+      const auto instances =
+        uniqueRoom(plan.layout.rooms, reference.name) == &reference
+          ? standingInstances(
+              room, reference, *room.params->place, plan.layout.shapes, referenceCarrier)
+          : std::nullopt;
+      if (!instances)
       {
         plan.stale.push_back(&room);
+        continue;
       }
-      else if (!vm::is_equal(*interior, before, OverlapTolerance))
+
+      const auto [carrier, referenceInstance] = *instances;
+      const auto& before = plan.layout.shapes.at(carrier).interior;
+      // the room stands at its placement, so it is placed again
+      const auto replaced = replacedInterior(
+        before,
+        room.params->size,
+        *room.params->place,
+        plan.layout.shapes.at(referenceInstance).interior,
+        plan.after.at(referenceInstance).interior);
+      contract_assert(replaced.has_value());
+      const auto interior = *replaced;
+      if (!vm::is_equal(interior, before, OverlapTolerance))
       {
-        plan.after.at(room.carrier).interior = *interior;
-        plan.rebuildRoom(room, *room.params);
+        plan.standAfter(
+          room, *carrier, RoomShape{room.name, interior, room.params->wall});
+        plan.rebuildRoom(room, *carrier, *room.params);
         moved.push_back(&room);
       }
     }
@@ -2082,11 +2579,16 @@ void moveDependents(
 
   for (const auto& connection : plan.layout.connections)
   {
-    if (std::ranges::any_of(moved, [&](const auto* room) {
-          return connection.joins(room->name);
-        }))
+    const auto it = std::ranges::find_if(
+      moved, [&](const auto* room) { return connection.joins(room->name); });
+    if (it != moved.end())
     {
-      rebuildConnection(opName, plan, connection, paramsOf(opName, connection));
+      rebuildConnection(
+        opName,
+        plan,
+        connection,
+        paramsOf(opName, connection),
+        *plan.rebuiltInstance(**it));
     }
   }
 }
@@ -2102,7 +2604,64 @@ struct RebuiltCarrier
   std::function<void(mdl::Entity&)> setKeys;
   /** The space that its brushes take after the rebuild. */
   vm::bbox3d shell;
+  /**
+   * The space that the brushes of its other instances take after the editor's linked
+   * update rebuilt them, with their carriers.
+   */
+  std::vector<Obstacle> copies;
 };
+
+/**
+ * Where the other instances of a carrier take the space that it takes, once the editor's
+ * linked update copied it to them.
+ */
+std::vector<Obstacle> linkedCopiesOf(
+  const mdl::EntityNode& carrier,
+  const std::vector<const mdl::EntityNode*>& instances,
+  const vm::bbox3d& shell)
+{
+  auto result = std::vector<Obstacle>{};
+  for (const auto* instance : instances)
+  {
+    if (instance != &carrier)
+    {
+      if (const auto transformation = linkedTransformation(carrier, *instance))
+      {
+        result.push_back({shell.transform(*transformation), instance});
+      }
+    }
+  }
+  return result;
+}
+
+/**
+ * Fails with `op_failed` if two of the carriers are in linked copies of the same group:
+ * the editor's linked update copies one copy over the others, so it cannot keep the
+ * edits of both.
+ */
+void checkOneLinkedCopy(
+  const std::string_view opName, const std::vector<const mdl::EntityNode*>& carriers)
+{
+  for (size_t i = 0; i < carriers.size(); ++i)
+  {
+    for (size_t j = i + 1; j < carriers.size(); ++j)
+    {
+      if (linkedTransformation(*carriers[i], *carriers[j]))
+      {
+        throw opFailed(
+          opName,
+          fmt::format(
+            "would rebuild {} ({}) and {} ({}), which are in different linked copies of "
+            "a group, and the editor keeps the edits of only one copy",
+            describeCarrier(*carriers[i]),
+            nodePath(*carriers[i]),
+            describeCarrier(*carriers[j]),
+            nodePath(*carriers[j])),
+          nodePath(*carriers[i]));
+      }
+    }
+  }
+}
 
 /**
  * Carries out a rebuild: replaces the brushes of every room and connection of the plan
@@ -2111,62 +2670,64 @@ struct RebuiltCarrier
  *
  * @throw CliError `locked` if a carrier is locked, without --allow-locked,
  * `hand_edited` if a carrier's brushes no longer match what its parameters build,
- * without `force`, `connect_cuts_linked_room` if the walls of a room inside a linked
- * group would be cut, the layout errors of corridorBetween, `layout_overlap` if a
- * rebuilt room or corridor would overlap another, and as findRoom and paramsOf do if a
- * connection of a rebuilt room cannot be built
+ * without `force`, `op_failed` if two carriers are in different linked copies of a
+ * group, `connect_cuts_linked_room` if a connection that joins a rebuilt room is not
+ * inside the same linked groups as it, the layout errors of corridorBetween,
+ * `layout_overlap` if a rebuilt room or corridor, or a linked copy of one, would overlap
+ * another, and as findRoom and paramsOf do if a connection of a rebuilt room cannot be
+ * built
  */
 void executeRebuild(OpContext& context, const RebuildPlan& plan, const bool force)
 {
   const auto opName = context.opName;
   const auto forceHint =
     "pass force to rebuild it anyway, or detach it to keep its brushes";
-  for (const auto& [room, params] : plan.roomsToRebuild)
+  auto carriers = std::vector<const mdl::EntityNode*>{};
+  for (const auto& [room, carrier, params] : plan.roomsToRebuild)
   {
-    checkUnlocked(context, *room->carrier, describeCarrier(*room->carrier), "rebuild it");
+    checkInstancesUnlocked(context, room->carriers(), "rebuild it");
     if (!force && room->status != RoomStatus::Rebuildable)
     {
-      throw handEdited(context, *room->carrier, forceHint);
+      throw handEdited(context, *carrier, forceHint);
     }
+    carriers.push_back(carrier);
   }
-  for (const auto& [connection, params] : plan.connectionsToRebuild)
+  for (const auto& [connection, instance, params] : plan.connectionsToRebuild)
   {
-    checkUnlocked(
-      context, *connection->carrier, describeCarrier(*connection->carrier), "rebuild it");
+    checkInstancesUnlocked(context, connection->instances, "rebuild it");
     if (!force && connectionStatus(*connection, plan.layout) != RoomStatus::Rebuildable)
     {
-      throw handEdited(context, *connection->carrier, forceHint);
+      throw handEdited(context, *instance.carrier, forceHint);
     }
+    carriers.push_back(instance.carrier);
   }
+  checkOneLinkedCopy(opName, carriers);
 
-  const auto corridorAfter = [&](const BuiltConnection& connection) {
-    const auto* rebuilt = plan.rebuiltParams(connection);
-    const auto& params = rebuilt ? *rebuilt : paramsOf(opName, connection);
-    const auto action = rebuildAction(connection);
-    const auto& from = findRoom(opName, action, plan.layout.rooms, connection.from);
-    const auto& to = findRoom(opName, action, plan.layout.rooms, connection.to);
-    return corridorBetween(
-      opName, plan.after.at(from.carrier), plan.after.at(to.carrier), params);
-  };
+  // the corridor of a connection of the room with the given carrier
+  const auto corridorAfter =
+    [&](const BuiltConnection& connection, const mdl::EntityNode& roomCarrier) {
+      const auto* rebuilt = plan.rebuilt(connection);
+      const auto instance = rebuilt ? rebuilt->instance
+                                    : connectionInstanceToRebuild(
+                                        opName, plan.layout, connection, roomCarrier);
+      const auto& params = rebuilt ? rebuilt->params : paramsOf(opName, connection);
+      return corridorBetween(
+        opName, plan.after.at(instance.from), plan.after.at(instance.to), params);
+    };
 
   auto rebuilt = std::vector<RebuiltCarrier>{};
-  for (const auto& [room, params] : plan.roomsToRebuild)
+  for (const auto& [room, carrier, params] : plan.roomsToRebuild)
   {
-    if (std::ranges::any_of(plan.layout.connections, [&](const auto& connection) {
-          return connection.joins(room->name);
-        }))
-    {
-      checkNotLinked(context, *room);
-    }
     // corridorAfter throws rather than build no corridor
     const auto openings = *openingsOf(
       room->name, plan.layout.connections, [&](const BuiltConnection& connection) {
-        return std::optional{corridorAfter(connection)};
+        return std::optional{corridorAfter(connection, *carrier)};
       });
-    const auto& shape = plan.after.at(room->carrier);
+    const auto& shape = plan.after.at(carrier);
+    const auto shell = shape.interior.expand(shape.wall);
     rebuilt.push_back(
       RebuiltCarrier{
-        room->carrier,
+        carrier,
         roomBoxes(shape, openings),
         [params](mdl::Entity& entity) {
           entity.addOrUpdateProperty(Keys::Size, formatVec3(params.size));
@@ -2180,41 +2741,50 @@ void executeRebuild(OpContext& context, const RebuildPlan& plan, const bool forc
             entity.removeProperty(Keys::Place);
           }
         },
-        shape.interior.expand(shape.wall)});
+        shell,
+        linkedCopiesOf(*carrier, room->carriers(), shell)});
   }
-  for (const auto& [connection, params] : plan.connectionsToRebuild)
+  for (const auto& [connection, instance, params] : plan.connectionsToRebuild)
   {
-    const auto corridor = corridorAfter(*connection);
+    const auto corridor = corridorAfter(*connection, *instance.from);
+    const auto shell = corridorShell(corridor);
     rebuilt.push_back(
       RebuiltCarrier{
-        connection->carrier,
+        instance.carrier,
         corridorBoxes(corridor),
         [params](mdl::Entity& entity) {
           entity.addOrUpdateProperty(Keys::Width, formatNumber(params.width));
           entity.addOrUpdateProperty(Keys::Height, formatNumber(params.height));
           entity.addOrUpdateProperty(Keys::Offset, formatNumber(params.offset));
         },
-        corridorShell(corridor)});
+        shell,
+        linkedCopiesOf(*instance.carrier, connection->instances, shell)});
   }
 
-  const auto obstacles = carrierObstacles(
-    context.map.worldNode(),
-    rebuilt | std::views::transform(&RebuiltCarrier::carrier)
-      | kdl::ranges::to<std::vector>());
+  // every rebuilt carrier and linked copy of one is checked against the others
+  auto shells = std::vector<Obstacle>{};
   for (const auto& each : rebuilt)
   {
+    shells.push_back({each.shell, each.carrier});
+    std::ranges::copy(each.copies, std::back_inserter(shells));
+  }
+  const auto obstacles = carrierObstacles(
+    context.map.worldNode(),
+    shells | std::views::transform(&Obstacle::carrier) | kdl::ranges::to<std::vector>());
+  for (size_t i = 0; i < shells.size(); ++i)
+  {
     auto others = obstacles;
-    for (const auto& other : rebuilt)
+    for (size_t j = 0; j < shells.size(); ++j)
     {
-      if (&other != &each)
+      if (j != i)
       {
-        others.push_back({other.shell, other.carrier});
+        others.push_back(shells[j]);
       }
     }
     checkNoOverlap(
       opName,
-      fmt::format("the rebuilt {}", describeCarrier(*each.carrier)),
-      each.shell,
+      fmt::format("the rebuilt {}", describeCarrier(*shells[i].carrier)),
+      shells[i].box,
       others,
       "change the parameters or move the rooms apart first");
   }
@@ -2226,7 +2796,7 @@ void executeRebuild(OpContext& context, const RebuildPlan& plan, const bool forc
   for (const auto* room : plan.stale)
   {
     context.outcome.stalePlacements.push_back(
-      const_cast<mdl::EntityNode*>(room->carrier));
+      const_cast<mdl::EntityNode*>(room->carrier()));
   }
   if (!plan.stale.empty())
   {
@@ -2282,6 +2852,24 @@ void checkConnectionNameArg(
   }
 }
 
+/**
+ * Checks that `instance` is only given with `place`, which it picks the room to place
+ * against for.
+ *
+ * @throw CliError `invalid_argument` if it is given without place
+ */
+void checkInstanceArg(const std::string_view opName, const Json& args)
+{
+  if (args.find("instance") && !args.find("place"))
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{}: \"instance\" picks the instance of the room to place against; give it "
+        "with \"place\"",
+        opName));
+  }
+}
+
 /** Checks that the argument is greater than 0, if it is given. */
 void checkPositiveArgIfGiven(
   const std::string_view opName, const std::string_view argName, const Json& args)
@@ -2292,7 +2880,146 @@ void checkPositiveArgIfGiven(
   }
 }
 
+/**
+ * The carrier of the instance of the reference that a room is placed against anew: the
+ * one that the op's `instance` argument names by its group or carrier, else its only
+ * instance, else its instance inside the same linked copy of a group as the room.
+ *
+ * @param room the carrier of the room that is placed, if it exists already
+ * @throw CliError `op_failed` if `instance` is not an instance of the reference, or it
+ * is not given and none of these instances exists, or the instance has no brushes
+ */
+const mdl::EntityNode& referenceInstance(
+  const OpContext& context,
+  const BuiltRoom& reference,
+  const mdl::EntityNode* room,
+  const Layout& layout)
+{
+  const auto paths = kdl::str_join(instancePaths(reference), ", ");
+  const auto* result = static_cast<const mdl::EntityNode*>(nullptr);
+  if (const auto it = context.nodes.find("instance"); it != context.nodes.end())
+  {
+    const auto* node = it->second.front().node;
+    const auto instance = std::ranges::find_if(
+      reference.instances,
+      [&](const auto& each) { return each.carrier == node || each.group == node; });
+    if (instance == reference.instances.end())
+    {
+      const auto& path = context.args["instance"].asString();
+      throw opFailed(
+        context.opName,
+        fmt::format(
+          "{} is not an instance of room \"{}\"; its instances are {}",
+          path,
+          reference.name,
+          paths),
+        path);
+    }
+    result = instance->carrier;
+  }
+  else if (reference.instances.size() == 1)
+  {
+    result = reference.carrier();
+  }
+  else if (room)
+  {
+    result = instanceWith(reference, *room, layout);
+  }
+
+  if (!result)
+  {
+    throw opFailed(
+      context.opName,
+      fmt::format(
+        "room \"{}\" has {} instances in linked groups ({}); give instance, the group or "
+        "carrier of the one to place against",
+        reference.name,
+        reference.instances.size(),
+        paths),
+      nodePath(*reference.carrier()));
+  }
+  if (!layout.shapes.contains(result))
+  {
+    throw opFailed(
+      context.opName,
+      fmt::format(
+        "cannot place against the instance {} of room \"{}\", which has no brushes",
+        nodePath(*result),
+        reference.name),
+      nodePath(*result));
+  }
+  return *result;
+}
+
+/**
+ * The carriers of the instances of two rooms whose walls a new corridor cuts, and the
+ * linked copy of a group that they are inside together, if any.
+ */
+struct CorridorEnds
+{
+  const mdl::EntityNode* from = nullptr;
+  const mdl::EntityNode* to = nullptr;
+  LinkedCopy linkedCopy;
+};
+
+/**
+ * The first pair of instances of the rooms, in file order, that have brushes and are
+ * inside one linked copy of a group together, or outside linked groups (see
+ * Layout::sharedLinkedCopy). Nothing if there is none, so that a corridor between the
+ * rooms would cut a wall across a linked boundary.
+ */
+std::optional<CorridorEnds> corridorEnds(
+  const BuiltRoom& from, const BuiltRoom& to, const Layout& layout)
+{
+  const auto pair =
+    firstInstancePair(from, to, [&](const auto& fromCarrier, const auto& toCarrier) {
+      return layout.shapes.contains(&fromCarrier) && layout.shapes.contains(&toCarrier)
+             && layout.sharedLinkedCopy({&fromCarrier, &toCarrier});
+    });
+  return pair ? std::optional{CorridorEnds{
+                  pair->first,
+                  pair->second,
+                  *layout.sharedLinkedCopy({pair->first, pair->second})}}
+              : std::nullopt;
+}
+
+/**
+ * Where a new connection's group goes: in the linked copy of a group that its rooms are
+ * inside together, so that every linked copy gets the corridor, else in the default
+ * layer.
+ *
+ * @throw CliError `locked` if that group or layer is locked, without --allow-locked
+ */
+mdl::Node& connectionParent(const OpContext& context, const mdl::GroupNode* linkedGroup)
+{
+  if (!linkedGroup)
+  {
+    return defaultLayerToBuildIn(context);
+  }
+  // the corridor reaches every linked copy of the group
+  for (const auto* copy :
+       mdl::collectGroupsWithLinkId({&context.map.worldNode()}, linkedGroup->linkId()))
+  {
+    checkUnlocked(
+      context,
+      *copy,
+      fmt::format(
+        "the linked group \"{}\" that the rooms are inside, where the corridor is "
+        "created,",
+        copy->name()),
+      "edit it");
+  }
+  // the group was collected from the map that this op edits
+  return const_cast<mdl::GroupNode&>(*linkedGroup);
+}
+
 } // namespace
+
+std::vector<const mdl::EntityNode*> BuiltRoom::carriers() const
+{
+  return instances | std::views::transform(&RoomInstance::carrier)
+         | kdl::ranges::to<std::vector>();
+}
 
 std::span<const std::string_view> relationNames()
 {
@@ -2337,17 +3064,23 @@ std::vector<BuiltRoom> collectBuiltRooms(const mdl::WorldNode& worldNode)
 const BuiltRoom* builtRoomOf(const mdl::Node& node, const std::vector<BuiltRoom>& rooms)
 {
   const auto it = std::ranges::find_if(rooms, [&](const auto& room) {
-    return room.carrier == &node || room.group == &node;
+    return std::ranges::any_of(room.instances, [&](const auto& instance) {
+      return instance.carrier == &node || instance.group == &node;
+    });
   });
   return it != rooms.end() ? &*it : nullptr;
 }
 
 Json builtRoomToJson(const BuiltRoom& room)
 {
-  const auto groupPath = room.group ? std::optional{nodePath(*room.group)} : std::nullopt;
+  const auto groupPath =
+    room.group() ? std::optional{nodePath(*room.group())} : std::nullopt;
 
   auto instances = Json::array();
-  instances.push(groupPath ? *groupPath : nodePath(*room.carrier));
+  for (auto& path : instancePaths(room))
+  {
+    instances.push(std::move(path));
+  }
 
   auto result = Json::object();
   result.set("name", room.name);
@@ -2366,12 +3099,13 @@ void addRoom(OpContext& context)
   auto& layer = defaultLayerToBuildIn(context);
 
   const auto& name = args["name"].asString();
-  const auto rooms = collectBuiltRooms(worldNode);
+  const auto layout = layoutOf(worldNode);
+  const auto& rooms = layout.rooms;
   for (const auto& room : rooms)
   {
     if (room.name == name)
     {
-      const auto path = nodePath(*room.carrier);
+      const auto path = nodePath(*room.carrier());
       throw opFailed(
         context.opName,
         fmt::format("a built room named \"{}\" exists already ({})", name, path),
@@ -2379,7 +3113,7 @@ void addRoom(OpContext& context)
     }
   }
 
-  const auto shapes = shapesOf(rooms);
+  const auto& shapes = layout.shapes;
   auto params = RoomParams{vec3FromJson(args["size"]), args["wall"].asNumber(), {}};
   auto interior = vm::bbox3d{};
   if (const auto* place = args.find("place"))
@@ -2387,8 +3121,9 @@ void addRoom(OpContext& context)
     params.place = placementFromJson(*place);
     const auto& reference =
       findRoom(context.opName, "place against", rooms, params.place->room);
-    interior =
-      placedInterior(shapes.at(reference.carrier).interior, params.size, *params.place);
+    // the new room is created in the default layer, outside linked groups
+    const auto& instance = referenceInstance(context, reference, nullptr, layout);
+    interior = placedInterior(shapes.at(&instance).interior, params.size, *params.place);
   }
   else
   {
@@ -2453,32 +3188,57 @@ void checkAddRoomArgs(const Json& args)
       "add_room: give exactly one of \"min\" (absolute) and \"place\" (next to another "
       "room)");
   }
+  checkInstanceArg("add_room", args);
 }
 
 void connect(OpContext& context)
 {
   const auto& args = context.args;
   auto& worldNode = context.map.worldNode();
-  auto& layer = defaultLayerToBuildIn(context);
 
   const auto& fromName = args["from"].asString();
   const auto& toName = args["to"].asString();
   const auto params = ConnectionParams{
     args["width"].asNumber(), args["height"].asNumber(), args["offset"].asNumber()};
 
-  const auto rooms = collectBuiltRooms(worldNode);
+  const auto layout = layoutOf(worldNode);
+  const auto& rooms = layout.rooms;
+  const auto& shapes = layout.shapes;
   const auto& from = roomToConnect(context, rooms, fromName);
   const auto& to = roomToConnect(context, rooms, toName);
+  const auto what =
+    fmt::format("the corridor between rooms \"{}\" and \"{}\"", fromName, toName);
+  const auto instances = corridorEnds(from, to, layout);
+  if (!instances)
+  {
+    throw cutsLinkedRoom(
+      context.opName, what, *roomAcrossBoundary(from, to, layout).carrier());
+  }
+  for (const auto* room : {&from, &to})
+  {
+    checkInstancesUnlocked(context, room->carriers(), "cut its walls");
+  }
+  auto& parent = connectionParent(context, instances->linkedCopy.group);
   checkNotConnected(context, fromName, toName);
-  const auto shapes = shapesOf(rooms);
   const auto corridor = corridorBetween(
-    context.opName, shapes.at(from.carrier), shapes.at(to.carrier), params);
-  checkNoOverlap(
-    context.opName,
-    fmt::format("the corridor between rooms \"{}\" and \"{}\"", fromName, toName),
-    corridorShell(corridor),
-    carrierObstacles(worldNode),
-    "move the rooms apart or the corridor along the wall");
+    context.opName, shapes.at(instances->from), shapes.at(instances->to), params);
+  // the linked copies of the rooms get a copy of the corridor
+  const auto shell = corridorShell(corridor);
+  auto shells = std::vector<vm::bbox3d>{shell};
+  for (const auto& copy : linkedCopiesOf(*instances->from, from.carriers(), shell))
+  {
+    shells.push_back(copy.box);
+  }
+  const auto obstacles = carrierObstacles(worldNode);
+  for (const auto& each : shells)
+  {
+    checkNoOverlap(
+      context.opName,
+      what,
+      each,
+      obstacles,
+      "move the rooms apart or the corridor along the wall");
+  }
 
   auto interiors = interiorsOf(rooms, shapes);
   interiors.insert(interiors.begin(), corridor.interior);
@@ -2496,9 +3256,9 @@ void connect(OpContext& context)
     },
     lowerSlabs(corridorSlabs(corridor), interiors));
 
-  cutOpening(context, from, corridor.interior);
-  cutOpening(context, to, corridor.interior);
-  addCarrierGroup(context, layer, std::move(group));
+  cutOpening(context, *instances->from, corridor.interior);
+  cutOpening(context, *instances->to, corridor.interior);
+  addCarrierGroup(context, parent, std::move(group));
 }
 
 void checkConnectArgs(const Json& args)
@@ -2521,7 +3281,8 @@ void editRoom(OpContext& context)
   const auto& args = context.args;
   const auto opName = context.opName;
   auto plan = RebuildPlan{context.map.worldNode()};
-  const auto& room = findRoom(opName, "edit", plan.layout.rooms, args["room"].asString());
+  const auto& layout = plan.layout;
+  const auto& room = findRoom(opName, "edit", layout.rooms, args["room"].asString());
 
   auto params = *room.params;
   if (const auto* size = args.find("size"))
@@ -2533,15 +3294,15 @@ void editRoom(OpContext& context)
     params.wall = wall->asNumber();
   }
 
-  // a room that is not placed, or whose placement is stale, keeps its minimum
-  const auto& before = plan.layout.shapes.at(room.carrier).interior;
-  auto interior = vm::bbox3d{before.min, before.min + params.size};
+  // the instance to rebuild, and where its interior goes
+  const auto* carrier = room.carrier();
+  auto interior = std::optional<vm::bbox3d>{};
   if (const auto* place = args.find("place"))
   {
     params.place = placementFromJson(*place);
     const auto& reference =
-      findRoom(opName, "place against", plan.layout.rooms, params.place->room);
-    if (&reference == &room || isPlacedAgainst(plan.layout.rooms, reference, room))
+      findRoom(opName, "place against", layout.rooms, params.place->room);
+    if (&reference == &room || isPlacedAgainst(layout.rooms, reference, room))
     {
       throw opFailed(
         opName,
@@ -2549,27 +3310,36 @@ void editRoom(OpContext& context)
           "cannot place room \"{}\" against room \"{}\", which is placed against it",
           room.name,
           reference.name),
-        nodePath(*room.carrier));
+        nodePath(*room.carrier()));
     }
-    interior = placedInterior(
-      plan.layout.shapes.at(reference.carrier).interior, params.size, *params.place);
+    // a room inside the same linked copy as an instance of the reference is rebuilt in
+    // the instance next to it
+    const auto& instance = referenceInstance(context, reference, room.carrier(), layout);
+    if (
+      const auto* inside = instanceWith(room, instance, layout);
+      inside && layout.shapes.contains(inside))
+    {
+      carrier = inside;
+    }
+    interior =
+      placedInterior(layout.shapes.at(&instance).interior, params.size, *params.place);
   }
   else if (params.place)
   {
-    const auto* reference = uniqueRoom(plan.layout.rooms, params.place->room);
-    const auto referenceShape =
-      reference ? plan.layout.shapes.find(reference->carrier) : plan.layout.shapes.end();
-    const auto replaced = referenceShape != plan.layout.shapes.end()
-                            ? replacedInterior(
-                                before,
-                                params.size,
-                                *params.place,
-                                referenceShape->second.interior,
-                                referenceShape->second.interior)
-                            : std::nullopt;
-    if (replaced)
+    const auto* reference = uniqueRoom(layout.rooms, params.place->room);
+    if (
+      const auto instances =
+        reference ? standingInstances(room, *reference, *params.place, layout.shapes)
+                  : std::nullopt)
     {
-      interior = *replaced;
+      carrier = instances->first;
+      const auto& referenceInterior = layout.shapes.at(instances->second).interior;
+      interior = replacedInterior(
+        layout.shapes.at(carrier).interior,
+        params.size,
+        *params.place,
+        referenceInterior,
+        referenceInterior);
     }
     else
     {
@@ -2577,8 +3347,16 @@ void editRoom(OpContext& context)
     }
   }
 
-  plan.after.at(room.carrier) = RoomShape{room.name, interior, params.wall};
-  plan.rebuildRoom(room, params);
+  // a room that is not placed, or whose placement is stale, keeps its minimum
+  const auto& before = layout.shapes.at(carrier).interior;
+  plan.standAfter(
+    room,
+    *carrier,
+    RoomShape{
+      room.name,
+      interior.value_or(vm::bbox3d{before.min, before.min + params.size}),
+      params.wall});
+  plan.rebuildRoom(room, *carrier, params);
   moveDependents(opName, plan, {&room});
   executeRebuild(context, plan, args["force"].asBool());
 }
@@ -2598,6 +3376,7 @@ void checkEditRoomArgs(const Json& args)
     }
   }
   checkPositiveArgIfGiven("edit_room", "wall", args);
+  checkInstanceArg("edit_room", args);
 }
 
 void editConnection(OpContext& context)
@@ -2622,7 +3401,7 @@ void editConnection(OpContext& context)
     params.offset = offset->asNumber();
   }
 
-  rebuildConnection(opName, plan, connection, params);
+  rebuildConnection(opName, plan, connection, params, *connection.carrier());
   executeRebuild(context, plan, args["force"].asBool());
 }
 
@@ -2640,14 +3419,15 @@ void detach(OpContext& context)
   const auto rooms = collectBuiltRooms(worldNode);
   const auto connections = collectConnections(worldNode);
   const auto* room = args.find("room");
-  const auto* carrier =
-    room ? findNamedRoom(context.opName, "detach", rooms, room->asString()).carrier
+  const auto instances =
+    room ? findNamedRoom(context.opName, "detach", rooms, room->asString()).carriers()
          : findConnection(
              context.opName, "detach", connections, args["connection"].asString())
-             .carrier;
+             .instances;
+  checkInstancesUnlocked(context, instances, "detach it");
 
+  const auto* carrier = instances.front();
   const auto what = describeCarrier(*carrier);
-  checkUnlocked(context, *carrier, what, "detach it");
 
   auto entity = carrier->entity();
   auto properties = std::vector<mdl::EntityProperty>{};

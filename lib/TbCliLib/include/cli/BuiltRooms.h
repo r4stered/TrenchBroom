@@ -104,16 +104,36 @@ enum class RoomStatus
   HandEdited,
 };
 
-/** A built room as the map holds it. */
-struct BuiltRoom
+/** One linked copy of a built room: its carrier and the group that wraps it. */
+struct RoomInstance
 {
   const mdl::EntityNode* carrier = nullptr;
+  /** The group `built_room:<name>` that wraps the carrier, if it is still there. */
+  const mdl::GroupNode* group = nullptr;
+};
+
+/**
+ * A built room as the map holds it. Carriers that share a name and sit at the same place
+ * in linked copies of a group are one room with several instances, since the editor
+ * keeps them alike; a write to one instance reaches all of them.
+ */
+struct BuiltRoom
+{
   std::string name;
   /** Unset if the carrier's parameter keys are missing or malformed. */
   std::optional<RoomParams> params;
   RoomStatus status = RoomStatus::HandEdited;
-  /** The group `built_room:<name>` that wraps the carrier, if it is still there. */
-  const mdl::GroupNode* group = nullptr;
+  /** Every instance, in file order; there is at least one. */
+  std::vector<RoomInstance> instances;
+
+  /** The carrier of the first instance. */
+  const mdl::EntityNode* carrier() const { return instances.front().carrier; }
+
+  /** The group `built_room:<name>` that wraps the first instance's carrier, if any. */
+  const mdl::GroupNode* group() const { return instances.front().group; }
+
+  /** The carriers of every instance, in file order. */
+  std::vector<const mdl::EntityNode*> carriers() const;
 };
 
 /** `{size, wall, place?}`, as describe and show write a room's parameters. */
@@ -127,32 +147,34 @@ std::vector<BuiltRoom> collectBuiltRooms(const mdl::WorldNode& worldNode);
 
 /**
  * The room among the given ones whose carrier, or the group that wraps it, the node is,
- * if there is one.
+ * in any of its instances, if there is one.
  */
 const BuiltRoom* builtRoomOf(const mdl::Node& node, const std::vector<BuiltRoom>& rooms);
 
 /**
  * `{name, kind, params, status, instances, group}`: `params` is `{size, wall, place?}`,
- * or null if the carrier's keys are malformed; `group` is null if it has none.
- * `instances` lists the room's group, or its carrier if it has no group. It is a list
- * because a room inside linked groups has one instance per linked copy; until linked
- * built rooms are recognised as one room, it always has one entry.
+ * or null if the carrier's keys are malformed; `group` is the first instance's group, or
+ * null if it has none. `instances` lists the group of each instance, or its carrier if
+ * it has no group: a room inside linked groups has one instance per linked copy.
  */
 Json builtRoomToJson(const BuiltRoom& room);
 
 /**
- * `add_room {name, size, min | place, wall, as?}`: a sealed rectangular room whose
- * interior has the given size, with walls, floor and ceiling `wall` thick around it,
- * placed at `min` or next to another built room. Relative placement puts it `gap` away
- * from the other room's interior on the given side, centred on the other horizontal
- * axis, with the same floor height. The room is created in the default layer.
+ * `add_room {name, size, min | place, wall, instance?, as?}`: a sealed rectangular room
+ * whose interior has the given size, with walls, floor and ceiling `wall` thick around
+ * it, placed at `min` or next to another built room. Relative placement puts it `gap`
+ * away from the other room's interior on the given side, centred on the other
+ * horizontal axis, with the same floor height. A room with several instances is placed
+ * against the one that `instance` names, by its group or carrier; only the relation is
+ * stored. The room is created in the default layer.
  *
  * @throw CliError `layout_overlap` if its walls would overlap another built room's or
  * a connection's brushes, `node_not_found` if the room to place it against does not
  * exist, `ambiguous_room_name` if several rooms have its name, `locked` if the default
  * layer is locked, without --allow-locked, and `op_failed` if the room to place it
- * against has no brushes or malformed parameter keys, or a room with the new name
- * exists already
+ * against has no brushes or malformed parameter keys, or has several instances and no
+ * `instance` names one of them, or `instance` names none of its instances, or a room
+ * with the new name exists already
  */
 void addRoom(OpContext& context);
 
@@ -160,8 +182,8 @@ void addRoom(OpContext& context);
  * Checks the arguments of `add_room`.
  *
  * @throw CliError `invalid_argument` if the name is not made of letters, digits and
- * underscores, a size or the wall thickness is not greater than 0, or not exactly one of
- * min and place is given
+ * underscores, a size or the wall thickness is not greater than 0, not exactly one of
+ * min and place is given, or instance is given without place
  */
 void checkAddRoomArgs(const Json& args);
 
@@ -174,7 +196,9 @@ void checkAddRoomArgs(const Json& args);
  * around the opening, keeping their materials, and their fingerprints are updated so
  * that they stay rebuildable. The corridor's carrier keeps the parameters in
  * `_tbcli_from`, `_tbcli_to`, `_tbcli_width`, `_tbcli_height` and `_tbcli_offset`, and
- * is wrapped in a group `connection:<from>-<to>` in the default layer.
+ * is wrapped in a group `connection:<from>-<to>` in the default layer, or, if the rooms
+ * are inside the same linked copy of a group, inside that copy, so that every copy gets
+ * the corridor.
  *
  * @throw CliError `layout_corridor_does_not_fit` if the rooms do not stand side by side,
  * their walls touch, or the corridor reaches beyond the wall that they share,
@@ -182,8 +206,9 @@ void checkAddRoomArgs(const Json& args);
  * `layout_corridor_too_tall` if the corridor would reach above a room's ceiling,
  * `layout_overlap` if it would overlap another built room or connection,
  * `node_not_found` if a room does not exist, `locked` if a room or the default layer is
- * locked, without --allow-locked, `connect_cuts_linked_room` if a room is inside a
- * linked group, `hand_edited` if a room's brushes no longer match what its parameters
+ * locked, without --allow-locked, `connect_cuts_linked_room` if the rooms are not
+ * inside the same linked groups, so that the corridor would cut a wall across a linked
+ * boundary, `hand_edited` if a room's brushes no longer match what its parameters
  * build, `ambiguous_room_name` if several rooms have a name, and `op_failed` if a
  * connection joins the rooms already, or a room has no brushes or malformed parameter
  * keys
@@ -199,26 +224,32 @@ void connect(OpContext& context);
 void checkConnectArgs(const Json& args);
 
 /**
- * `edit_room {room, size?, wall?, place?, force?}`: changes a built room's parameters
- * and rebuilds it and everything that depends on it. The room keeps the minimum of its
- * interior, where its brushes are now, unless it is placed against another room: then
- * it is placed against that room again with its new size, keeping how far it was moved
- * along the other room's wall. `place` places it against another room anew. Rooms that
- * are placed against a room whose interior moves or changes size are placed against it
- * again, and so on; a room that no longer stands where its placement puts it, at the
- * gap on that side and on the same floor, stays where it is and is listed under
+ * `edit_room {room, size?, wall?, place?, instance?, force?}`: changes a built room's
+ * parameters and rebuilds it and everything that depends on it. The room keeps the
+ * minimum of its interior, where its brushes are now, unless it is placed against
+ * another room: then it is placed against that room again with its new size, keeping
+ * how far it was moved along the other room's wall. `place` places it against another
+ * room anew, against the instance that `instance` names if that room has several. Rooms
+ * that are placed against a room whose interior moves or changes size are placed
+ * against it again, and so on, against the instance that they stand next to; a room
+ * that stands next to no instance of that room where its placement puts it, at the gap
+ * on that side and on the same floor, stays where it is and is listed under
  * `stale_placements` with the warning `stale_placement`. Every connection that joins a
- * room that moves or changes is rebuilt, and the walls of the rooms that it joins are cut
- * again. Rebuilt brushes take the materials of the old brushes on the same side.
+ * room that moves or changes is rebuilt, and the walls of the rooms that it joins are
+ * cut again. Rebuilt brushes take the materials of the old brushes on the same side. A
+ * room with several instances is rebuilt in one of them, and the editor's linked update
+ * rebuilds the others; their groups are listed under `instances_affected`.
  *
  * @throw CliError `hand_edited` if the brushes of a room or connection that would be
  * rebuilt no longer match what its parameters build, without `force`, `locked` if one
  * of them is locked, without --allow-locked, `node_not_found` and
  * `ambiguous_room_name` if the room or a room it is placed against or joined to is
  * missing or ambiguous, the layout errors of `add_room` and `connect`,
- * `connect_cuts_linked_room` if the walls of a room inside a linked group would be cut,
- * and `op_failed` if `place` names the room itself or a room placed against it, or a
- * room or connection has no brushes or malformed parameter keys
+ * `connect_cuts_linked_room` if a connection that would be rebuilt or cut again is not
+ * inside the same linked groups as the rooms that it joins, and `op_failed` if `place`
+ * names the room itself or a room placed against it, `instance` is missing or wrong as
+ * for `add_room`, the rebuild would edit two linked copies of a group, or a room or
+ * connection has no brushes or malformed parameter keys
  */
 void editRoom(OpContext& context);
 
@@ -226,7 +257,8 @@ void editRoom(OpContext& context);
  * Checks the arguments of `edit_room`.
  *
  * @throw CliError `invalid_argument` if the room name is not made of letters, digits and
- * underscores, or a size or the wall thickness is not greater than 0
+ * underscores, a size or the wall thickness is not greater than 0, or instance is given
+ * without place
  */
 void checkEditRoomArgs(const Json& args);
 
@@ -249,15 +281,16 @@ void checkEditConnectionArgs(const Json& args);
 
 /**
  * `detach {room | connection}`: strips the `_tbcli_*` keys from the carrier of a built
- * room or connection, leaving plain brushes in a plain func_group that tbcli no longer
- * rebuilds. The wrapping group keeps its name, which does not make a built room, since
- * built rooms are identified by their carriers. The rooms that a detached connection
- * joined stay rebuildable, but rebuilding them closes the opening; a room joined to a
- * detached room cannot be rebuilt until the connection is detached too.
+ * room or connection, in every instance, leaving plain brushes in a plain func_group
+ * that tbcli no longer rebuilds. The wrapping group keeps its name, which does not make
+ * a built room, since built rooms are identified by their carriers. The rooms that a
+ * detached connection joined stay rebuildable, but rebuilding them closes the opening;
+ * a room joined to a detached room cannot be rebuilt until the connection is detached
+ * too.
  *
  * @throw CliError `node_not_found` or `ambiguous_room_name` if the name means no room
- * or connection, or several, and `locked` if the carrier is locked, without
- * --allow-locked
+ * or connection, or several, and `locked` if the carrier of an instance is locked,
+ * without --allow-locked
  */
 void detach(OpContext& context);
 

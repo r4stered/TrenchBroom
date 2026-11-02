@@ -88,8 +88,9 @@ struct TargetRules
    */
   bool expandsToBrushes = false;
   /**
-   * Whether locked nodes are refused unless locked nodes may be edited. Only `lock`
-   * accepts locked nodes, so that locking a locked layer changes nothing.
+   * Whether locked nodes are refused unless locked nodes may be edited. `lock` accepts
+   * locked nodes, so that locking a locked layer changes nothing, and so do arguments
+   * that only point at a node that the op does not edit, such as `instance`.
    */
   bool refusesLocked = true;
 };

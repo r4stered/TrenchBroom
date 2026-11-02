@@ -923,6 +923,22 @@ ArgDef brushParentArg(const std::string_view description)
     {{TargetKind::Layer, TargetKind::Group, TargetKind::BrushEntity}}};
 }
 
+/**
+ * The optional NodePath argument `instance` of the ops that place a built room against
+ * another: the group or carrier of the instance to place against.
+ */
+ArgDef roomInstanceArg()
+{
+  return ArgDef{
+    "instance",
+    ArgType::NodePath,
+    "the group or carrier of the instance to place against, if the room to place "
+    "against is inside linked groups and has several; not stored",
+    false,
+    std::nullopt,
+    {{TargetKind::Group, TargetKind::BrushEntity}, false, false}};
+}
+
 /** What CSG ops accept: brushes, and containers for the brushes inside them. */
 const auto CsgTargetRules = TargetRules{{TargetKind::Brush}, true};
 
@@ -1582,8 +1598,10 @@ std::vector<OpDef> makeOpDefs()
       "carrier that keeps its parameters, wrapped in a group built_room:<name>. Place "
       "it at min, or next to another built room with place: it then stands gap units "
       "from the other room's interior on the given side, centred on the other "
-      "horizontal axis, with the same floor height. Fails with layout_overlap if its "
-      "walls would overlap another built room's. The faces have no material.",
+      "horizontal axis, with the same floor height; a room with several linked "
+      "instances is placed against the one that instance names. Fails with "
+      "layout_overlap if its walls would overlap another built room's. The faces have "
+      "no material.",
       {
         ArgDef{
           "name",
@@ -1611,6 +1629,7 @@ std::vector<OpDef> makeOpDefs()
           "the thickness of the walls, floor and ceiling, in units; greater than 0",
           false,
           Json{16}},
+        roomInstanceArg(),
         ArgDef{"as", ArgType::Binding, "binds the room's group to this name"},
       },
       addRoom,
@@ -1629,9 +1648,11 @@ std::vector<OpDef> makeOpDefs()
       "that they share, "
       "layout_floor_mismatch if their floors are at different heights, "
       "layout_corridor_too_tall if it is taller than a room, and layout_overlap if it "
-      "would overlap another built room or connection. Rooms inside linked groups, rooms "
-      "whose brushes were edited by hand and rooms that are joined already are "
-      "refused.",
+      "would overlap another built room or connection. Rooms inside the same linked "
+      "copy of a group get the corridor inside it, so that every copy gets it; rooms "
+      "that are not inside the same linked groups are refused with "
+      "connect_cuts_linked_room, as are rooms whose brushes were edited by hand and "
+      "rooms that are joined already.",
       {
         ArgDef{"from", ArgType::String, "the name of one built room", true},
         ArgDef{"to", ArgType::String, "the name of the other built room", true},
@@ -1669,8 +1690,11 @@ std::vector<OpDef> makeOpDefs()
       "where it is and is listed under stale_placements. Rebuilt brushes keep the "
       "materials of the old ones on the same side. Fails with hand_edited if the "
       "brushes of a room or connection that would be rebuilt no longer match what its "
-      "parameters build, unless force is given, and with the layout errors of add_room "
-      "and connect.",
+      "parameters build, unless force is given, with connect_cuts_linked_room if a "
+      "corridor would cut a wall across a linked boundary, and with the layout errors "
+      "of add_room and connect. A room with linked instances is rebuilt in one of them "
+      "and the editor's linked update rebuilds the others, which are listed under "
+      "instances_affected.",
       {
         ArgDef{"room", ArgType::String, "the name of the built room", true},
         ArgDef{
@@ -1687,6 +1711,7 @@ std::vector<OpDef> makeOpDefs()
           ArgType::Placement,
           "the built room to place it next to anew, the side and the gap between the "
           "interiors"},
+        roomInstanceArg(),
         ArgDef{
           "force",
           ArgType::Bool,
