@@ -52,6 +52,7 @@ TEST_CASE("CliError")
       T{ErrorCode::LayoutCorridorTooTall, 1},
       T{ErrorCode::HandEdited, 1},
       T{ErrorCode::ConnectCutsLinkedRoom, 1},
+      T{ErrorCode::AmbiguousRoomName, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);
@@ -92,6 +93,20 @@ TEST_CASE("CliError")
       == parseJsonLiteral(R"({"error": {"code": "map_leaks", "message": "leaks"}})"));
     CHECK(withIssue.toJson() == parseJsonLiteral(R"({"error": {
         "code": "map_leaks", "message": "leaks", "issue": {"type": "leak"}
+      }})"));
+  }
+
+  SECTION("withCandidates")
+  {
+    const auto error = CliError{ErrorCode::AmbiguousRoomName, "which A?"};
+    const auto withCandidates =
+      error.withCandidates({"layer:0/group:0/entity:0", "layer:0/group:1/entity:0"});
+    CHECK(error.toJson() == parseJsonLiteral(R"({"error": {
+        "code": "ambiguous_room_name", "message": "which A?"
+      }})"));
+    CHECK(withCandidates.toJson() == parseJsonLiteral(R"({"error": {
+        "code": "ambiguous_room_name", "message": "which A?",
+        "candidates": ["layer:0/group:0/entity:0", "layer:0/group:1/entity:0"]
       }})"));
   }
 

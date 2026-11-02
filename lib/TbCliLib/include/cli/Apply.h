@@ -51,14 +51,15 @@ struct ApplyOptions
  * Runs the given ops against the loaded map, all or nothing, and writes the map once,
  * atomically. Returns the `tbcli.apply/1` result
  * `{schema, rev, ops: [{ok, created, modified, removed, warnings, issues_introduced,
- * instances_affected?}], bindings, warnings?}`, where
+ * instances_affected?, stale_placements?}], bindings, warnings?}`, where
  * `rev` is the rev of the written (or, with `dryRun`, would-be) file, `created`,
  * `modified` and the bindings are paths in that rev, and `removed` are paths in the
  * input rev. When an op edits the inside of a linked group, the edit reaches the
  * group's linked copies: what changed in them is listed under `modified` and `removed`
  * too, and `instances_affected` lists the edited group and its copies (see
- * LinkedGroupSnapshot). The top-level `warnings` is `["lossy_load"]` if the load was
- * lossy.
+ * LinkedGroupSnapshot). `stale_placements` lists the carriers of built rooms that a
+ * rebuild left in place because their placement could no longer be matched. The
+ * top-level `warnings` is `["lossy_load"]` if the load was lossy.
  * `issues_introduced` lists the issues an op introduced (see IssueTracker) whose nodes
  * are in the new rev, with the severities and suppressions of `verifyConfig`.
  *

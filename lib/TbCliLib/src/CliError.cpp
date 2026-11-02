@@ -88,6 +88,8 @@ std::string_view toString(const ErrorCode code)
     return "hand_edited";
   case ErrorCode::ConnectCutsLinkedRoom:
     return "connect_cuts_linked_room";
+  case ErrorCode::AmbiguousRoomName:
+    return "ambiguous_room_name";
   case ErrorCode::InternalError:
     return "internal_error";
   }
@@ -155,6 +157,13 @@ CliError CliError::withIssue(Json issue) const
   return result;
 }
 
+CliError CliError::withCandidates(std::vector<std::string> candidates) const
+{
+  auto result = *this;
+  result.m_candidates = std::move(candidates);
+  return result;
+}
+
 Json CliError::toJson() const
 {
   auto error = Json::object();
@@ -175,6 +184,15 @@ Json CliError::toJson() const
   if (m_issue)
   {
     error.set("issue", *m_issue);
+  }
+  if (!m_candidates.empty())
+  {
+    auto candidates = Json::array();
+    for (const auto& candidate : m_candidates)
+    {
+      candidates.push(candidate);
+    }
+    error.set("candidates", std::move(candidates));
   }
 
   auto result = Json::object();

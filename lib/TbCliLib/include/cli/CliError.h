@@ -24,6 +24,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace tb::cli
 {
@@ -98,11 +99,19 @@ enum class ErrorCode
   LayoutFloorMismatch,
   /** `connect` would build a corridor taller than one of the rooms */
   LayoutCorridorTooTall,
-  /** `connect` would cut the walls of a room whose brushes no longer match what tbcli
-   * built */
+  /**
+   * `connect`, `edit_room` or `edit_connection` would rebuild or cut a room or
+   * connection whose brushes no longer match what its parameters build, without
+   * `force`
+   */
   HandEdited,
-  /** `connect` would cut the walls of a room inside a linked group */
+  /** `connect` or a rebuild would cut the walls of a room inside a linked group */
   ConnectCutsLinkedRoom,
+  /**
+   * several unlinked carriers share the name of the room or connection that an op acts
+   * on; the error lists every candidate
+   */
+  AmbiguousRoomName,
   /** an unexpected failure inside tbcli */
   InternalError,
 };
@@ -111,7 +120,8 @@ std::string_view toString(ErrorCode code);
 
 /**
  * A failed command, rendered as the error envelope
- * `{"error": {"code", "message", "node"?, "line"?, "op_index"?, "issue"?}}` on stdout.
+ * `{"error": {"code", "message", "node"?, "line"?, "op_index"?, "issue"?,
+ * "candidates"?}}` on stdout.
  *
  * Commands throw this and run() turns it into output and an exit code, so that every
  * failure, however deep, reaches the caller in the same shape.
@@ -124,6 +134,7 @@ private:
   std::optional<size_t> m_line;
   std::optional<size_t> m_opIndex;
   std::shared_ptr<const Json> m_issue;
+  std::vector<std::string> m_candidates;
 
 public:
   CliError(
@@ -143,6 +154,12 @@ public:
 
   /** This error, carrying the given issue record, such as the `leak` issue. */
   CliError withIssue(Json issue) const;
+
+  /**
+   * This error, listing the paths of the nodes that an ambiguous name could mean, as
+   * `candidates`.
+   */
+  CliError withCandidates(std::vector<std::string> candidates) const;
 
   Json toJson() const;
 };

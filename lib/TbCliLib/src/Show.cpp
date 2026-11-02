@@ -81,9 +81,17 @@ Json groupInFullToJson(const mdl::GroupNode& groupNode, const mdl::WorldNode& wo
  * `instance_of` (the room's name), `instances` (their number, one until linked built
  * rooms are recognised), `params` (or null if malformed) and `status`.
  */
-void addBuiltRoom(Json& json, const mdl::Node& node)
+void addBuiltRoom(Json& json, const mdl::Node& node, const mdl::WorldNode& worldNode)
 {
-  if (const auto room = builtRoomOf(node))
+  if (
+    !dynamic_cast<const mdl::EntityNode*>(&node)
+    && !dynamic_cast<const mdl::GroupNode*>(&node))
+  {
+    return;
+  }
+  // statuses depend on the other rooms and the connections
+  const auto rooms = collectBuiltRooms(worldNode);
+  if (const auto* room = builtRoomOf(node, rooms))
   {
     json.set("instance_of", room->name);
     json.set("instances", 1);
@@ -119,7 +127,7 @@ Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bo
       },
       [&](const mdl::BrushNode& brushNode) { return brushToJson(brushNode, raw); },
       [](const mdl::PatchNode& patchNode) { return patchSummaryToJson(patchNode); }));
-  addBuiltRoom(result, node);
+  addBuiltRoom(result, node, worldNode);
   return result;
 }
 

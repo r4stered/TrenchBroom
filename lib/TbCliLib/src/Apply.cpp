@@ -260,6 +260,10 @@ Json apply(
       opResult.set(
         "instances_affected", newPaths(outcome.instancesAffected, targets, paths));
     }
+    if (!outcome.stalePlacements.empty())
+    {
+      opResult.set("stale_placements", newPaths(outcome.stalePlacements, targets, paths));
+    }
     opResults.push(std::move(opResult));
   }
 

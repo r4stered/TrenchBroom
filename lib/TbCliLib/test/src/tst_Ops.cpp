@@ -42,7 +42,7 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 40);
+    REQUIRE(json["ops"].size() == 43);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
     const auto opNamed = [&](const std::string_view name) -> const Json& {
       const auto& ops = json["ops"].asArray();
@@ -155,6 +155,17 @@ TEST_CASE("ops command")
     CHECK(connect["properties"]["width"]["default"] == Json{128});
     CHECK(connect["properties"]["height"]["default"] == Json{128});
     CHECK(connect["properties"]["offset"]["default"] == Json{0});
+
+    const auto& editRoom = opNamed("edit_room")["schema"];
+    CHECK(editRoom["required"] == parseJsonLiteral(R"(["op", "room"])"));
+    CHECK(editRoom["properties"]["force"]["default"] == Json{false});
+    CHECK(editRoom["properties"]["place"]["oneOf"].size() == 4);
+
+    const auto& editConnection = opNamed("edit_connection")["schema"];
+    CHECK(editConnection["required"] == parseJsonLiteral(R"(["op", "connection"])"));
+    CHECK(editConnection["properties"]["force"]["default"] == Json{false});
+
+    CHECK(opNamed("detach")["schema"]["required"] == parseJsonLiteral(R"(["op"])"));
 
     const auto& setSpawnflag = opNamed("set_spawnflag");
     CHECK(setSpawnflag["schema"]["properties"]["flag"]["oneOf"] == parseJsonLiteral(R"([

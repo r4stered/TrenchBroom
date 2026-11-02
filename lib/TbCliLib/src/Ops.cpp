@@ -1659,6 +1659,100 @@ std::vector<OpDef> makeOpDefs()
       connect,
       checkConnectArgs,
     },
+    OpDef{
+      "edit_room",
+      "Changes a built room's parameters and rebuilds it and everything that depends "
+      "on it: rooms placed against it are placed against it again, and its "
+      "connections are rebuilt and cut into the walls again. The room keeps where its "
+      "brushes are now; a room placed against another is placed against it again with "
+      "its new size. A room that no longer stands where its placement puts it stays "
+      "where it is and is listed under stale_placements. Rebuilt brushes keep the "
+      "materials of the old ones on the same side. Fails with hand_edited if the "
+      "brushes of a room or connection that would be rebuilt no longer match what its "
+      "parameters build, unless force is given, and with the layout errors of add_room "
+      "and connect.",
+      {
+        ArgDef{"room", ArgType::String, "the name of the built room", true},
+        ArgDef{
+          "size",
+          ArgType::Vec3,
+          "the new size of the interior, in units; greater than 0 on every axis"},
+        ArgDef{
+          "wall",
+          ArgType::Number,
+          "the new thickness of the walls, floor and ceiling, in units; greater than "
+          "0"},
+        ArgDef{
+          "place",
+          ArgType::Placement,
+          "the built room to place it next to anew, the side and the gap between the "
+          "interiors"},
+        ArgDef{
+          "force",
+          ArgType::Bool,
+          "rebuild rooms and connections whose brushes were edited by hand, losing "
+          "those edits",
+          false,
+          Json{false}},
+      },
+      editRoom,
+      checkEditRoomArgs,
+    },
+    OpDef{
+      "edit_connection",
+      "Changes a connection's parameters, rebuilds its corridor and cuts the walls of "
+      "the rooms that it joins again. Fails with hand_edited if the brushes of the "
+      "connection or of a room it joins no longer match what their parameters build, "
+      "unless force is given, and with the layout errors of connect.",
+      {
+        ArgDef{
+          "connection",
+          ArgType::String,
+          "the connection, named by the rooms it joins as \"A-B\"",
+          true},
+        ArgDef{
+          "width",
+          ArgType::Number,
+          "the new width of the corridor's interior, in units; greater than 0"},
+        ArgDef{
+          "height",
+          ArgType::Number,
+          "the new height of the corridor's interior, in units; greater than 0"},
+        ArgDef{
+          "offset",
+          ArgType::Number,
+          "the new distance of the corridor from the middle of the shared wall, in "
+          "units, towards greater coordinates"},
+        ArgDef{
+          "force",
+          ArgType::Bool,
+          "rebuild the connection and its rooms even if their brushes were edited by "
+          "hand, losing those edits",
+          false,
+          Json{false}},
+      },
+      editConnection,
+      checkEditConnectionArgs,
+    },
+    OpDef{
+      "detach",
+      "Strips the _tbcli_* keys from the carrier of a built room or connection, "
+      "leaving plain brushes in a plain func_group that tbcli no longer rebuilds; the "
+      "group keeps its name. Rebuilding a room that a detached connection joined "
+      "closes the opening; a room joined to a detached room cannot be rebuilt until the "
+      "connection is detached too.",
+      {
+        ArgDef{
+          "room", ArgType::String, "the name of the built room; give room or connection"},
+        ArgDef{
+          "connection",
+          ArgType::String,
+          "the connection, named by the rooms it joins as \"A-B\"; give room or "
+          "connection"},
+      },
+      detach,
+      checkDetachArgs,
+    },
   };
 }
 
