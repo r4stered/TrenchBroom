@@ -25,6 +25,11 @@
 #                         A's west wall, recorded as tbcli rooms runs qbsp
 #   rooms_sky.map         rooms_prt1.map with a sky ceiling, recorded as tbcli rooms runs
 #                         qbsp
+#   rooms_openings.map    rooms_prt1.map whose dividing wall has an L-shaped gap (a
+#                         doorway, closed by a func_door, beside a window) and a
+#                         separate window, and a sealed third room that a
+#                         trigger_teleport in room A leads to; recorded as tbcli rooms
+#                         runs qbsp
 #   rooms_prt2_water_keepprt
 #                         rooms_prt2_water.map recorded as verify runs qbsp, which
 #                         writes a PRT2 file of clusters
@@ -47,6 +52,7 @@ mdl="$(git -C "$here" rev-parse --show-toplevel)/lib/TbMdlLib/test/fixture/mdl/C
 "$record" --qbsp-args "-nodetail -forceprt1" "$mdl/rooms_prt2_water.map" "$here/rooms_prt2_water"
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_slot.map" "$here/rooms_slot"
 "$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_sky.map" "$here/rooms_sky"
+"$record" --qbsp-args "-nodetail -forceprt1" "$here/rooms_openings.map" "$here/rooms_openings"
 # recorded under the name that the test build copies the map to
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

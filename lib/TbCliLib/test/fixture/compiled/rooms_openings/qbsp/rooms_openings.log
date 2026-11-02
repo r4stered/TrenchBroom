@@ -1,0 +1,105 @@
+---- qbsp / ericw-tools 2.0.0-alpha11-9-g36eec1da ----
+
+--- Options Summary ---
+    "nodetail" was set to "1" (from command line)
+    "forceprt1" was set to "1" (from command line)
+
+Input file: ${WORKDIR}\rooms_openings.map
+Output file: ${WORKDIR}\rooms_openings.bsp
+
+INFO: using built-in palette.
+WARNING: No wad or _wad key exists in the worldmodel
+     7 entities
+     6 unique textures
+    31 texinfos
+    58 unique planes
+
+INFO: world extents calculated to 1256 units
+     21 brushes
+    126 sides
+
+            0 texture frames added
+WARNING: unable to find texture skip
+WARNING: unable to find texture ground1_6
+WARNING: unable to find texture ceiling1_1
+WARNING: unable to find texture wall1_1
+WARNING: unable to find texture door02_1
+WARNING: unable to find texture trigger
+Processing hull 0...
+    19 SOLID brushes
+    19 brushes total
+    114 visible sides
+INFO: calculating BSP for 19 brushes with 114 sides
+     19 brushes
+    114 visible faces
+    57 nodes
+    57 expensive split nodes
+    58 leaves
+    35 EMPTY leafs
+    23 SOLID leafs
+    58 leafs total
+    11 max tree height
+     8 avg tree height
+    263 tree portals
+    29 outside leaves
+    0 detail filled leafs
+    19 brushes
+    35 visible faces
+    79 non-visible faces
+    57 nodes
+    34 non-visible nodes
+    57 expensive split nodes
+    58 leaves
+    35 EMPTY leafs
+    23 SOLID leafs
+    58 leafs total
+    11 max tree height
+     8 avg tree height
+    263 tree portals
+    29 outside leaves
+    0 detail filled leafs
+    263 tree portals
+    82 sides visible
+    41 makefaces
+     1 merged
+    28 subdivided
+    36 nodes pruned
+    6 player-occupiable leaves
+    6 clusters of leaves
+    7 vis portals
+    16 SOLID leafs
+     6 EMPTY leafs
+    22 leafs total
+    11 max tree height
+     7 avg tree height
+     48 edges added by tjunctions
+     68 faces optimized through MWT
+    184 triangles computed from MWT
+     10 faces created via optimization of MWT triangles
+    170 edges
+     78 faces
+Processing hull 1...
+Processing hull 2...
+Writing rooms_openings.bsp as Quake BSP bsp29
+Wrote rooms_openings.bsp
+
+count   lump name    byte size 
+      3 models              192
+     48 planes              960
+    104 vertexes           1248
+     33 nodes               792
+     20 texinfos            800
+     90 faces              1800
+     75 clipnodes           600
+     21 leafs               588
+     91 marksurfaces        182
+    195 edges               780
+    388 surfedges          1552
+      6 textures             28
+        lightdata             0
+        visdata               0
+        entdata             423
+
+0.021s seconds elapsed
+
+

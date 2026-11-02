@@ -123,7 +123,8 @@ TEST_CASE("rooms")
   SECTION("cuts two rooms at the doorway between them")
   {
     // room B, east of the doorway, has the lowest leaf; the doorway's own leaf joins it
-    CHECK(RoomsFixture{}.json()["rooms"] == parseJsonLiteral(R"({
+    const auto json = RoomsFixture{}.json();
+    CHECK(json["rooms"] == parseJsonLiteral(R"({
         "items": [
           {
             "id": 0,
@@ -133,7 +134,7 @@ TEST_CASE("rooms")
             "contents": "empty",
             "entities": ["layer:0/entity:1"],
             "key_entities": [],
-            "openings": []
+            "openings": [0]
           },
           {
             "id": 1,
@@ -143,12 +144,34 @@ TEST_CASE("rooms")
             "contents": "empty",
             "entities": ["layer:0/entity:0"],
             "key_entities": ["layer:0/entity:0"],
-            "openings": []
+            "openings": [0]
           }
         ],
         "total": 2,
         "truncated": false
       })"));
+
+    // the west side of the doorway, framed by the floor, the walls beside it and the
+    // lintel above it
+    CHECK(json["openings"] == parseJsonLiteral(R"([
+        {
+          "id": 0,
+          "rooms": [0, 1],
+          "center": [0, 0, 48],
+          "normal": [-1, 0, 0],
+          "bounds": {"min": [0, -32, 0], "max": [0, 32, 96]},
+          "area": 6144,
+          "width": 64,
+          "height": 96,
+          "brushes": [
+            "layer:0/brush:0", "layer:0/brush:6", "layer:0/brush:7", "layer:0/brush:8"
+          ],
+          "gated_by": []
+        }
+      ])"));
+    CHECK(
+      json["summary"]
+      == parseJsonLiteral(R"({"rooms": 2, "openings": 1, "components": 1})"));
   }
 
   SECTION("cuts at a liquid's surface, but not around a pillar")
@@ -181,6 +204,150 @@ TEST_CASE("rooms")
       == parseJsonLiteral(R"({"min": [-256, -128, 0], "max": [0, 128, 128]})"));
     CHECK(roomA["entities"] == parseJsonLiteral(R"(["layer:0/entity:1"])"));
     CHECK(roomA["key_entities"] == parseJsonLiteral(R"(["layer:0/entity:1"])"));
+  }
+
+  SECTION("openings")
+  {
+    SECTION("the water's faces are liquid surfaces, one per plane")
+    {
+      const auto json = RoomsFixture{"rooms_prt2_water"}.json();
+      CHECK(
+        json["summary"]
+        == parseJsonLiteral(R"({"rooms": 3, "openings": 6, "components": 1})"));
+      CHECK(
+        json["rooms"]["items"][0]["openings"]
+        == parseJsonLiteral(R"([0, 1, 2, 3, 4, 5])"));
+      CHECK(
+        json["rooms"]["items"][1]["openings"] == parseJsonLiteral(R"([0, 1, 2, 3, 4])"));
+      CHECK(json["rooms"]["items"][2]["openings"] == parseJsonLiteral(R"([5])"));
+
+      const auto& openings = json["openings"].asArray();
+      REQUIRE(openings.size() == 6);
+      for (size_t i = 0; i < 5; ++i)
+      {
+        CHECK(openings[i]["kind"] == Json{"liquid_surface"});
+        CHECK(openings[i]["rooms"] == parseJsonLiteral(R"([0, 1])"));
+      }
+      // the surface on top points down from the air into the water; the water brush
+      // frames it
+      CHECK(openings[2] == parseJsonLiteral(R"({
+          "id": 2,
+          "kind": "liquid_surface",
+          "rooms": [0, 1],
+          "center": [144, 0, 48],
+          "normal": [0, 0, -1],
+          "bounds": {"min": [80, -96, 48], "max": [208, 96, 48]},
+          "area": 24576,
+          "width": 128,
+          "height": 192,
+          "brushes": ["layer:0/brush:9"],
+          "gated_by": []
+        })"));
+      // a doorway has no kind
+      CHECK(openings[5].find("kind") == nullptr);
+      CHECK(openings[5]["rooms"] == parseJsonLiteral(R"([0, 2])"));
+      CHECK(openings[5]["area"] == Json{6144});
+    }
+
+    SECTION("merges the portals of one gap, and keeps separate gaps apart")
+    {
+      const auto json = RoomsFixture{"rooms_openings"}.json();
+      // room B, room C and room A
+      CHECK(
+        json["summary"]
+        == parseJsonLiteral(R"({"rooms": 3, "openings": 2, "components": 1})"));
+      CHECK(json["rooms"]["items"][0]["openings"] == parseJsonLiteral(R"([0, 1])"));
+      CHECK(json["rooms"]["items"][1]["openings"] == Json::array());
+      CHECK(json["rooms"]["items"][2]["openings"] == parseJsonLiteral(R"([0, 1])"));
+
+      // the separate window, then the doorway and the window beside it, whose door
+      // gates the opening
+      CHECK(json["openings"] == parseJsonLiteral(R"([
+          {
+            "id": 0,
+            "rooms": [0, 2],
+            "center": [0, 88, 64],
+            "normal": [-1, 0, 0],
+            "bounds": {"min": [0, 64, 32], "max": [0, 112, 96]},
+            "area": 3072,
+            "width": 48,
+            "height": 64,
+            "brushes": [
+              "layer:0/brush:9",
+              "layer:0/brush:10",
+              "layer:0/brush:11",
+              "layer:0/brush:12"
+            ],
+            "gated_by": []
+          },
+          {
+            "id": 1,
+            "rooms": [0, 2],
+            "center": [0, -38.4, 54.4],
+            "normal": [-1, 0, 0],
+            "bounds": {"min": [0, -96, 0], "max": [0, 32, 96]},
+            "area": 10240,
+            "width": 128,
+            "height": 96,
+            "brushes": [
+              "layer:0/brush:0",
+              "layer:0/brush:6",
+              "layer:0/brush:7",
+              "layer:0/brush:8",
+              "layer:0/brush:9"
+            ],
+            "gated_by": ["layer:0/entity:3"]
+          }
+        ])"));
+    }
+
+    SECTION("any brush entity whose bounds overlap an opening gates it")
+    {
+      // a trigger reaching through the separate window, not flush with it
+      auto fixture = RoomsFixture{"rooms_openings"};
+      fixture.env.writeFile(
+        "rooms_openings.map", fixture.env.readFile("rooms_openings.map") + R"(// entity 6
+{
+"classname" "trigger_multiple"
+// brush 0
+{
+( -8 64 32 ) ( -8 65 32 ) ( -8 64 33 ) trigger [ 0 -1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -8 64 32 ) ( -8 64 33 ) ( -7 64 32 ) trigger [ 1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( -8 64 32 ) ( -7 64 32 ) ( -8 65 32 ) trigger [ -1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 24 112 96 ) ( 24 113 96 ) ( 25 112 96 ) trigger [ 1 0 0 0 ] [ 0 -1 0 0 ] 0 1 1
+( 24 112 96 ) ( 25 112 96 ) ( 24 112 97 ) trigger [ -1 0 0 0 ] [ 0 0 -1 0 ] 0 1 1
+( 24 112 96 ) ( 24 112 97 ) ( 24 113 96 ) trigger [ 0 1 0 0 ] [ 0 0 -1 0 ] 0 1 1
+}
+}
+)");
+      const auto openings = fixture.json()["openings"];
+      CHECK(openings[0]["gated_by"] == parseJsonLiteral(R"(["layer:0/entity:6"])"));
+      CHECK(openings[1]["gated_by"] == parseJsonLiteral(R"(["layer:0/entity:3"])"));
+    }
+
+    SECTION("--raw adds the polygons of the cell portals")
+    {
+      const auto fixture = RoomsFixture{"rooms_openings"};
+      CHECK(fixture.json()["openings"][1].find("polygons") == nullptr);
+      CHECK(fixture.json({"--raw"})["openings"][1]["polygons"] == parseJsonLiteral(R"([
+          [[0, -32, 32], [0, -32, 96], [0, 32, 96], [0, 32, 32]],
+          [[0, -96, 0], [0, -96, 96], [0, -32, 96], [0, -32, 0]]
+        ])"));
+    }
+
+    SECTION("a teleporter joins the room it leads to")
+    {
+      auto fixture = RoomsFixture{"rooms_openings"};
+      CHECK(fixture.json()["summary"]["components"] == Json{1});
+
+      // without its target, the teleporter leads nowhere and room C is cut off
+      auto map = fixture.env.readFile("rooms_openings.map");
+      const auto target = std::string{"\"target\" \"dest\"\n"};
+      REQUIRE(map.find(target) != std::string::npos);
+      map.erase(map.find(target), target.size());
+      fixture.env.writeFile("rooms_openings.map", map);
+      CHECK(fixture.json()["summary"]["components"] == Json{2});
+    }
   }
 
   SECTION("leaves out sky leafs")
@@ -235,6 +402,10 @@ TEST_CASE("rooms")
     {
       const auto json = RoomsFixture{}.json({"--cells"});
       CHECK(json.find("rooms") == nullptr);
+      CHECK(json.find("openings") == nullptr);
+      CHECK(
+        json["summary"]
+        == parseJsonLiteral(R"({"rooms": 2, "openings": 1, "components": 1})"));
 
       const auto& cells = json["cells"];
       CHECK(cells["total"] == Json{7});
@@ -294,16 +465,30 @@ TEST_CASE("rooms")
     CHECK(idsOf(rooms) == std::vector<size_t>{1, 2});
     CHECK(rooms["truncated"] == Json{false});
 
-    rooms = fixture.json({"--room", "2"})["rooms"];
-    CHECK(idsOf(rooms) == std::vector<size_t>{2});
-    CHECK(rooms["total"] == Json{1});
-    CHECK(fixture.json({"--room", "7"})["rooms"]["total"] == Json{0});
+    auto json = fixture.json({"--room", "2"});
+    CHECK(idsOf(json["rooms"]) == std::vector<size_t>{2});
+    CHECK(json["rooms"]["total"] == Json{1});
+    // the openings of the listed rooms, and the summary of the whole map
+    CHECK(json["openings"].size() == 1);
+    CHECK(json["openings"][0]["id"] == Json{5});
+    CHECK(json["summary"]["openings"] == Json{6});
+
+    json = fixture.json({"--room", "7"});
+    CHECK(json["rooms"]["total"] == Json{0});
+    CHECK(json["openings"] == Json::array());
+
+    // the openings of the rooms on the page
+    json = fixture.json({"--limit", "1", "--offset", "1"});
+    CHECK(idsOf(json["rooms"]) == std::vector<size_t>{1});
+    CHECK(json["openings"].size() == 5);
 
     // room A, within 0.01 of the box, and the water
     rooms = fixture.json({"--within", "-256.005,-128,0,0,128,128"})["rooms"];
     CHECK(idsOf(rooms) == std::vector<size_t>{2});
     rooms = fixture.json({"--within", "64,-128,0,256,128,64"})["rooms"];
     CHECK(idsOf(rooms) == std::vector<size_t>{1});
+    // the water's surfaces
+    CHECK(fixture.json({"--within", "64,-128,0,256,128,64"})["openings"].size() == 5);
 
     const auto cells = fixture.json({"--cells", "--room", "2", "--limit", "2"})["cells"];
     CHECK(idsOf(cells) == std::vector<size_t>{7, 8});

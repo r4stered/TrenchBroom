@@ -52,6 +52,8 @@ struct RoomsOptions
   std::optional<size_t> room;
   /** List only the rooms, or cells, whose bounds lie inside this box. */
   std::optional<vm::bbox3d> within;
+  /** Add the cell portals' polygons to each opening. */
+  bool raw = false;
   /** Read the `.bsp`, `.prt` and sidecar of `verify --compile --artifacts` from here. */
   std::optional<std::filesystem::path> fromArtifacts;
   /** Replaces qbsp's timeout from the configuration. */
@@ -60,8 +62,9 @@ struct RoomsOptions
 
 /**
  * The `tbcli.rooms/1` result `{schema, rev, heuristic: true, method: {name:
- * "constriction", split_ratio}, rooms: {items, total, truncated}}`, or with
- * `options.cells`, `{..., cells: {items, total, truncated}, portals: [...]}`.
+ * "constriction", split_ratio}, summary: {rooms, openings, components}, rooms: {items,
+ * total, truncated}, openings: [...]}`, or with `options.cells`, `{..., summary, cells:
+ * {items, total, truncated}, portals: [...]}`.
  *
  * Runs qbsp only, with the configured compiler and timeout, on the map's bytes in a
  * temporary directory, or reads the artifacts of `verify --compile --artifacts`. qbsp
@@ -84,7 +87,27 @@ struct RoomsOptions
  * A room is `{id, bounds, volume, leaves, contents, entities, key_entities, openings}`;
  * bounds and volume are those of its leafs' bounding boxes. Ids are ordered by the
  * lowest leaf of each room, and point entities belong to the room of the leaf that holds
- * their origin. `openings` stays empty for now.
+ * their origin. `openings` lists the ids of the room's openings.
+ *
+ * An opening is the coplanar merge of the cut portals between two rooms: portals in one
+ * plane that share part of an edge merge, and separate gaps stay separate openings. It
+ * is `{id, kind?, rooms: [a, b], center, normal, bounds, area, width, height, brushes,
+ * gated_by}`, with `polygons` (the cell portals) under `options.raw`. `kind` is
+ * `liquid_surface` where the contents change, and absent otherwise. `rooms` are
+ * ascending, and `normal` points from the first room into the second. `center` is the
+ * centroid of the portals. `width` and `height` are the extents of the portals in the
+ * plane, horizontally and along the plane's slope (along x and y for a horizontal
+ * plane). `brushes` are the world brushes (of worldspawn, func_group and func_detail and
+ * its variants, which `-nodetail` builds into the world) whose bounds touch the
+ * opening's boundary within 0.01; `gated_by` are the other brush entities, such as
+ * doors, whose bounds overlap the portals. Openings are numbered by their rooms, then by
+ * their first portal in the file. The openings of the listed rooms are listed in full,
+ * unpaged.
+ *
+ * The summary counts the rooms, the openings and the connected components of the whole
+ * map, unfiltered. Components join rooms through their openings and through teleporters:
+ * a trigger_teleport joins the rooms its bounds overlap to the room of each
+ * info_teleport_destination it targets.
  *
  * @throw CliError `map_leaks` with the `leak` issue if the map leaks, `compile_failed`
  * if qbsp fails or writes no usable output, `stale_artifact` if the artifacts are

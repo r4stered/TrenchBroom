@@ -123,7 +123,8 @@ options:
                         (spatial filters compare bounding boxes and tolerate
                         0.01 units, so boxes that only touch intersect; a box
                         is "x1,y1,z1,x2,y2,z2")
-  --raw                 show: add the plane points of faces
+  --raw                 show: add the plane points of faces; rooms: add the
+                        polygons of each opening's cell portals
   --type <types>        verify: list only issues of these comma-separated types
   --min-severity <s>    verify: list only issues of at least severity s
                         (error, warning or info)
@@ -206,7 +207,7 @@ bool isMutatingCommand(const std::string_view command)
   return command == "apply" || findOpDef(command) != nullptr;
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 31>{{
+constexpr auto CommandOptions = std::array<CommandOption, 32>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -220,6 +221,7 @@ constexpr auto CommandOptions = std::array<CommandOption, 31>{{
   {"--intersects", "query"},
   {"--touching", "query"},
   {"--raw", "show"},
+  {"--raw", "rooms"},
   {"--type", "verify"},
   {"--min-severity", "verify"},
   {"--target", "verify"},
@@ -854,6 +856,7 @@ CommandResult runCommand(
     auto options = arguments.roomsOptions;
     options.paging = arguments.paging;
     options.within = arguments.queryOptions.within;
+    options.raw = arguments.raw;
     options.timeout = arguments.compileOptions.timeout;
     if (options.fromArtifacts && options.timeout)
     {
