@@ -31,6 +31,7 @@
 #include "mdl/Issue.h"
 #include "mdl/IssueType.h"
 #include "mdl/LayerNode.h"
+#include "mdl/Map.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/WorldNode.h"
@@ -341,6 +342,11 @@ void DegenerateBrushValidator::doValidate(
       return;
     }
   }
+}
+
+MaterialCheck materialCheckOf(const mdl::Map& map)
+{
+  return map.gamePath().empty() ? MaterialCheck::Off : MaterialCheck::On;
 }
 
 std::vector<std::unique_ptr<mdl::Validator>> makeCliValidators(

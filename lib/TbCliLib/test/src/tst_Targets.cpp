@@ -180,6 +180,27 @@ TEST_CASE("Targets")
     mdl::removeNodes(map, {brushNode});
     CHECK(!isInMap(*brushNode, worldNode));
   }
+
+  SECTION("nodeAndDescendants")
+  {
+    const auto pathsOf = [&](const std::vector<mdl::Node*>& nodes) {
+      auto result = std::vector<std::string>{};
+      for (const auto* node : nodes)
+      {
+        result.push_back(nodePath(*node));
+      }
+      return result;
+    };
+
+    auto* group = resolveNodePath(worldNode, "layer:0/group:0").node;
+    CHECK(
+      pathsOf(nodeAndDescendants(*group))
+      == std::vector<std::string>{
+        "layer:0/group:0", "layer:0/group:0/brush:0", "layer:0/group:0/brush:1"});
+
+    auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
+    CHECK(nodeAndDescendants(*brush) == std::vector<mdl::Node*>{brush});
+  }
 }
 
 TEST_CASE("TargetResolver")

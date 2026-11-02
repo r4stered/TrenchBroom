@@ -100,6 +100,8 @@ struct OpContext
    */
   const std::map<std::string, std::vector<NodeOrFace>, std::less<>>& nodes;
   OpOutcome& outcome;
+  /** Whether ops may edit locked nodes (--allow-locked). */
+  bool allowLocked = false;
 
   /**
    * The node of the NodePath argument with the given name, which must be given or have
@@ -122,6 +124,11 @@ struct OpDef
   std::vector<ArgDef> args;
   /** Carries out the op. Throws CliError if the op fails. */
   std::function<void(OpContext&)> execute;
+  /**
+   * Checks the op's arguments beyond their types before the map is loaded, if set.
+   * Throws CliError `invalid_argument` if they are malformed.
+   */
+  std::function<void(const Json& args)> checkArgs = nullptr;
 };
 
 /** The flags of an op's subcommand, as `(name, value)` with the leading dashes removed.

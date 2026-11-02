@@ -22,6 +22,7 @@
 namespace tb::cli
 {
 
+class Json;
 struct OpContext;
 
 /**
@@ -40,5 +41,22 @@ void createBox(OpContext& context);
  * left empty is removed with them and is reported as removed after the targets.
  */
 void deleteNode(OpContext& context);
+
+/**
+ * `fix {issue_type, fix, target?}`: applies the quick-fix of the map library's validator
+ * to the issues of the type on the target and the nodes inside it, or to every issue of
+ * the type in the map. Issues on locked nodes are left out unless locked nodes may be
+ * edited; suppressions do not apply. Fixing nothing is not an error; the op then warns
+ * `nothing_to_fix`.
+ */
+void fixIssues(OpContext& context);
+
+/**
+ * Checks the arguments of `fix`.
+ *
+ * @throw CliError `invalid_argument` if the issue type is unknown, or has no quick-fix
+ * with the given id
+ */
+void checkFixArgs(const Json& args);
 
 } // namespace tb::cli

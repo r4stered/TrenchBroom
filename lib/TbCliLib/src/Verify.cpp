@@ -292,6 +292,16 @@ public:
    */
   void collect(mdl::Node& node)
   {
+    collectNode(node);
+    for (auto* child : node.children())
+    {
+      collect(*child);
+    }
+  }
+
+  /** Collects the issues of the given node only. */
+  void collectNode(mdl::Node& node)
+  {
     auto issues = std::vector<std::unique_ptr<mdl::Issue>>{};
     for (const auto* validator : m_validators)
     {
@@ -300,10 +310,6 @@ public:
     for (const auto& issue : issues)
     {
       add(node, *issue);
-    }
-    for (auto* child : node.children())
-    {
-      collect(*child);
     }
   }
 
@@ -315,6 +321,7 @@ private:
     const auto* faceIssue = dynamic_cast<const mdl::BrushFaceIssue*>(&issue);
     const auto faceIndex =
       faceIssue ? std::optional{faceIssue->faceIndex()} : std::nullopt;
+    const auto* propertyIssue = dynamic_cast<const mdl::EntityPropertyIssue*>(&issue);
     const auto line = issue.lineNumber();
     m_issues.push_back(
       VerifyIssue{
@@ -325,6 +332,9 @@ private:
         .message = issue.description(),
         .node = onNode ? &node : nullptr,
         .faceIndex = onNode ? faceIndex : std::nullopt,
+        .propertyKey = onNode && propertyIssue
+                         ? std::optional{propertyIssue->propertyKey()}
+                         : std::nullopt,
         .line = onNode && line > 0 ? std::optional{line} : std::nullopt,
       });
   }
@@ -403,6 +413,8 @@ Selection selectTarget(mdl::Map& map, const std::string& target)
                             : selectionOf(queryMatches(map, target));
 }
 
+} // namespace
+
 void applyConfig(
   mdl::Map& map, const VerifyConfig& config, std::vector<VerifyIssue>& issues)
 {
@@ -432,6 +444,9 @@ void applyConfig(
     }
   }
 }
+
+namespace
+{
 
 template <typename P>
 bool hasUnsuppressedIssue(const std::vector<VerifyIssue>& issues, const P& predicate)
@@ -493,6 +508,8 @@ void setLocation(Json& result, const VerifyIssue& issue)
       }));
 }
 
+} // namespace
+
 Json issueToJson(
   const VerifyIssue& issue,
   const std::unordered_map<const mdl::Node*, std::string>& paths)
@@ -523,6 +540,9 @@ Json issueToJson(
   result.set("fixes", fixIdsJson(*issue.type));
   return result;
 }
+
+namespace
+{
 
 /** The unsuppressed issues the list filters keep, in file order. */
 std::vector<const VerifyIssue*> filterIssues(
@@ -563,9 +583,7 @@ IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
       .collect(worldNode);
   });
 
-  // materials can only be found if they could be loaded, which needs a game path
-  const auto materialCheck =
-    map.gamePath().empty() ? MaterialCheck::Off : MaterialCheck::On;
+  const auto materialCheck = materialCheckOf(map);
   const auto cliMs = timed([&] {
     const auto cliValidators = makeCliValidators(materialCheck);
     ValidatorIssueCollector{pointers(cliValidators), keys, result.issues}.collect(
@@ -595,6 +613,33 @@ IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config)
     result.stages.back().unchecked.push_back(findIssueType("missing_material"));
   }
   return result;
+}
+
+struct NodeIssueCollector::Impl
+{
+  KeyMaker keys;
+  std::vector<VerifyIssue> collected;
+  ValidatorIssueCollector collector;
+
+  Impl(LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators)
+    : keys{loadedMap.map->worldNode(), *loadedMap.taskManager}
+    , collector{std::move(validators), keys, collected}
+  {
+  }
+};
+
+NodeIssueCollector::NodeIssueCollector(
+  LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators)
+  : m_impl{std::make_unique<Impl>(loadedMap, std::move(validators))}
+{
+}
+
+NodeIssueCollector::~NodeIssueCollector() = default;
+
+std::vector<VerifyIssue> NodeIssueCollector::collect(mdl::Node& node)
+{
+  m_impl->collector.collectNode(node);
+  return std::exchange(m_impl->collected, {});
 }
 
 void setIssueCounts(Json& object, const std::vector<VerifyIssue>& issues)

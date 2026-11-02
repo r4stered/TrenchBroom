@@ -24,6 +24,7 @@
 
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -54,7 +55,8 @@ TEST_CASE("apply")
       "created": ["layer:0/brush:2"],
       "modified": [],
       "removed": [],
-      "warnings": []
+      "warnings": [],
+      "issues_introduced": []
     }])"));
     CHECK(json["bindings"] == Json::object());
     CHECK(json.find("warnings") == nullptr);
@@ -681,6 +683,92 @@ TEST_CASE("apply")
     SECTION("--allow-lossy is refused by other commands")
     {
       checkError(runCli({"describe", lossyMap, "--allow-lossy"}), "usage", 2);
+    }
+  }
+
+  SECTION("issues_introduced")
+  {
+    // a box with non-integer vertices
+    constexpr auto OffGridBoxOp = std::string_view{
+      R"({"op": "create_box", "min": [0.5, 0, 0], "max": [16, 16, 16], "material": "a"})"};
+
+    SECTION("lists the issues on the nodes an op created, as verify reports them")
+    {
+      const auto json = parseOutput(fixture.apply(fmt::format("[{}]", OffGridBoxOp)));
+      const auto& issues = json["ops"][0]["issues_introduced"];
+      REQUIRE(issues.size() == 1);
+
+      const auto verified = runJson({"verify", map, "--type", "non_integer_vertices"});
+      REQUIRE(verified["issues"]["items"].size() == 1);
+      auto expected = verified["issues"]["items"][0];
+      // the lines of the new rev are not known when the op runs
+      expected.set("line", nullptr);
+      CHECK(issues[0] == expected);
+      CHECK(issues[0]["node"] == Json{"layer:0/brush:2"});
+      CHECK(issues[0]["fixes"] == parseJsonLiteral(R"(["snap_vertices"])"));
+    }
+
+    SECTION("each op lists only the issues it introduced")
+    {
+      const auto json =
+        parseOutput(fixture.apply(fmt::format("[{}, {}]", OffGridBoxOp, CreateBoxOp)));
+      CHECK(json["ops"][0]["issues_introduced"].size() == 1);
+      CHECK(json["ops"][1]["issues_introduced"] == Json::array());
+    }
+
+    SECTION("issues on nodes that a later op removes are left out")
+    {
+      const auto json = parseOutput(fixture.apply(
+        fmt::format(
+          R"([{}, {{"op": "delete", "target": "$box"}}])",
+          R"({"op": "create_box", "min": [0.5, 0, 0], "max": [16, 16, 16], )"
+          R"("material": "a", "as": "$box"})")));
+      CHECK(json["ops"][0]["issues_introduced"] == Json::array());
+    }
+
+    SECTION("an entity that a new brush encloses is reported")
+    {
+      // the player start is at 0 80 24
+      const auto json = parseOutput(fixture.apply(R"([
+        {"op": "create_box", "min": [-16, 64, 0], "max": [16, 96, 48], "material": "a"}
+      ])"));
+      const auto& issues = json["ops"][0]["issues_introduced"];
+      REQUIRE(issues.size() == 1);
+      CHECK(issues[0]["type"] == Json{"entity_inside_solid"});
+      CHECK(issues[0]["node"] == Json{"layer:0/entity:0"});
+    }
+
+    SECTION("issues that were in the map before are not reported")
+    {
+      auto verifyFixture = EditFixture{"maps/verify.map"};
+      const auto json =
+        parseOutput(verifyFixture.apply(fmt::format("[{}]", CreateBoxOp)));
+      CHECK(json["ops"][0]["issues_introduced"] == Json::array());
+    }
+
+    SECTION("map-wide issues are left out")
+    {
+      const auto json = runJson({"delete", map, "--target", "layer:0/entity:0"});
+      CHECK(json["ops"][0]["issues_introduced"] == Json::array());
+      CHECK(
+        runJson({"verify", map, "--type", "no_player_start"})["issues"]["total"]
+        == Json{1});
+    }
+
+    SECTION("tbcli.json sets severities and suppresses issues")
+    {
+      auto config = quakeConfig();
+      config.set(
+        "verify", parseJsonLiteral(R"({"severity": {"non_integer_vertices": "error"}})"));
+      fixture.env.writeConfig({}, config);
+      auto json = parseOutput(fixture.apply(fmt::format("[{}]", OffGridBoxOp)));
+      CHECK(json["ops"][0]["issues_introduced"][0]["severity"] == Json{"error"});
+
+      config.set(
+        "verify", parseJsonLiteral(R"({"ignore": [{"type": "non_integer_vertices"}]})"));
+      fixture.env.writeConfig({}, config);
+      json = parseOutput(fixture.apply(fmt::format("[{}]", OffGridBoxOp)));
+      CHECK(json["ops"][0]["issues_introduced"] == Json::array());
     }
   }
 }

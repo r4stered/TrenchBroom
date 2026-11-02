@@ -165,10 +165,66 @@ TEST_CASE("IssueTypes")
       == validators.size());
   }
 
+  SECTION("fixes")
+  {
+    // every quick-fix of every registered validator has exactly one id, in order
+    auto logger = NullLogger{};
+    const auto loadedMap = loadFixtureMap("maps/simple.map", logger);
+    for (const auto* validator : loadedMap.map->worldNode().registeredValidators())
+    {
+      CAPTURE(validator->description());
+      const auto* type = findIssueType(*validator);
+      REQUIRE(type != nullptr);
+
+      auto descriptions = std::vector<std::string>{};
+      for (const auto* quickFix : validator->quickFixes())
+      {
+        descriptions.push_back(quickFix->description());
+      }
+      auto tableDescriptions = std::vector<std::string>{};
+      for (const auto& fix : type->fixes)
+      {
+        tableDescriptions.emplace_back(fix.description);
+      }
+      CHECK(tableDescriptions == descriptions);
+    }
+
+    // ids are snake_case and unique per type, and other types have no fixes
+    for (const auto& type : issueTypes())
+    {
+      CAPTURE(type.id);
+      auto ids = std::set<std::string_view>{};
+      for (const auto& fix : type.fixes)
+      {
+        CHECK(std::ranges::all_of(fix.id, [](const char c) {
+          return (c >= 'a' && c <= 'z') || c == '_';
+        }));
+        ids.insert(fix.id);
+      }
+      CHECK(ids.size() == type.fixes.size());
+      if (type.source != IssueSource::Validator)
+      {
+        CHECK(type.fixes.empty());
+      }
+    }
+  }
+
+  SECTION("findQuickFix")
+  {
+    const auto& type = *findIssueType("long_property_value");
+    const auto* fix = findQuickFix(type, "truncate_property_value");
+    REQUIRE(fix != nullptr);
+    CHECK(fix->description == "Truncate Property Values");
+    CHECK(findQuickFix(type, "delete_objects") == nullptr);
+    CHECK(findQuickFix(*findIssueType("load_error"), "delete_objects") == nullptr);
+  }
+
   SECTION("fixIdsJson")
   {
-    // no quick-fix has an id yet
-    CHECK(fixIdsJson(*findIssueType("empty_group")) == Json::array());
+    CHECK(
+      fixIdsJson(*findIssueType("long_property_value"))
+      == parseJsonLiteral(R"(["delete_property", "truncate_property_value"])"));
+    CHECK(fixIdsJson(*findIssueType("mixed_brush_contents")) == Json::array());
   }
 
   SECTION("issueTypesJson")
@@ -178,7 +234,7 @@ TEST_CASE("IssueTypes")
     CHECK(
       json[1]
       == parseJsonLiteral(
-        R"({"type": "missing_classname", "severity": "error", "fixes": []})"));
+        R"({"type": "missing_classname", "severity": "error", "fixes": ["delete_objects"]})"));
   }
 }
 

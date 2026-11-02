@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <set>
 #include <utility>
 
@@ -222,6 +223,16 @@ Json queryTargetFromFlags(
 bool isInMap(const mdl::Node& node, const mdl::WorldNode& worldNode)
 {
   return &node == &worldNode || node.isDescendantOf(worldNode);
+}
+
+std::vector<mdl::Node*> nodeAndDescendants(mdl::Node& node)
+{
+  auto result = std::vector<mdl::Node*>{&node};
+  for (auto* child : node.children())
+  {
+    std::ranges::move(nodeAndDescendants(*child), std::back_inserter(result));
+  }
+  return result;
 }
 
 bool isTarget(const Json& value)

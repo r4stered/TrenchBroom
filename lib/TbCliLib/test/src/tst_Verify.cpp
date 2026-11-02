@@ -18,6 +18,13 @@
  */
 
 #include "CliTestUtils.h"
+#include "base/Logger.h"
+#include "cli/IssueTypes.h"
+#include "cli/NodePath.h"
+#include "cli/Verify.h"
+#include "mdl/LayerNode.h"
+#include "mdl/Map.h"
+#include "mdl/WorldNode.h"
 
 #include <map>
 #include <string>
@@ -165,7 +172,7 @@ TEST_CASE("verify")
       "node": "layer:0/entity:3",
       "line": 55,
       "origin": [32, 32, 32],
-      "fixes": []
+      "fixes": ["delete_objects"]
     })"));
   }
 
@@ -607,6 +614,35 @@ TEST_CASE("verify")
       CHECK(result.exitCode == 4);
       CHECK(parseOutput(result)["ok"] == Json{false});
     }
+  }
+}
+
+TEST_CASE("NodeIssueCollector")
+{
+  SECTION("collect")
+  {
+    auto logger = NullLogger{};
+    auto loadedMap = loadFixtureMap("maps/verify.map", logger);
+    auto& worldNode = loadedMap.map->worldNode();
+    auto collector = NodeIssueCollector{loadedMap, worldNode.registeredValidators()};
+
+    // the light's issues, but not those of the nodes below the layer
+    auto* light = resolveNodePath(worldNode, "layer:0/entity:1").node;
+    auto issues = collector.collect(*light);
+    REQUIRE(issues.size() == 3);
+    CHECK(issues[0].node == light);
+    CHECK(collector.collect(*worldNode.defaultLayer()).empty());
+
+    // property issues carry their property
+    auto properties = std::vector<std::string>{};
+    for (const auto& issue : issues)
+    {
+      if (issue.type->id == "empty_property_value")
+      {
+        properties.push_back(issue.propertyKey.value_or(""));
+      }
+    }
+    CHECK(properties == std::vector<std::string>{"message", "noise"});
   }
 }
 

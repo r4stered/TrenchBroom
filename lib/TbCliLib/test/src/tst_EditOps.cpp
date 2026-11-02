@@ -22,6 +22,8 @@
 #include <fmt/format.h>
 
 #include <string>
+#include <tuple>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -167,7 +169,12 @@ TEST_CASE("delete")
   {
     const auto json = runJson({"delete", map, "--target", "layer:0/brush:0"});
     CHECK(json["ops"] == parseJsonLiteral(R"([{
-      "ok": true, "created": [], "modified": [], "removed": ["layer:0/brush:0"], "warnings": []
+      "ok": true,
+      "created": [],
+      "modified": [],
+      "removed": ["layer:0/brush:0"],
+      "warnings": [],
+      "issues_introduced": []
     }])"));
     CHECK(json["rev"] == Json{revOf(map)});
     CHECK(brushCount(map) == 2);
@@ -204,6 +211,216 @@ TEST_CASE("delete")
     CAPTURE(target);
     checkError(runCli({"delete", map, "--target", target}), "wrong_node_kind", 1, 0);
     CHECK(fixture.unchanged());
+  }
+}
+
+namespace
+{
+
+/** The nodes of the issues of the given type that verify lists for the given map. */
+std::vector<std::string> issueNodes(const std::string& map, const std::string& type)
+{
+  auto result = std::vector<std::string>{};
+  const auto json = runJson({"verify", map, "--type", type});
+  for (const auto& issue : json["issues"]["items"].asArray())
+  {
+    result.push_back(issue["node"].asString());
+  }
+  return result;
+}
+
+} // namespace
+
+TEST_CASE("fix")
+{
+  SECTION("on maps/verify.map")
+  {
+    auto fixture = EditFixture{"maps/verify.map"};
+    const auto& map = fixture.map;
+
+    SECTION("fixes the issues of a type on the target")
+    {
+      const auto json = runJson(
+        {"fix",
+         map,
+         "--issue-type",
+         "empty_property_value",
+         "--fix",
+         "delete_property",
+         "--target",
+         "layer:0/entity:1"});
+      // the light keeps its other issues, which are not new
+      CHECK(json["ops"] == parseJsonLiteral(R"([{
+        "ok": true,
+        "created": [],
+        "modified": ["layer:0/entity:1"],
+        "removed": [],
+        "warnings": [],
+        "issues_introduced": []
+      }])"));
+      CHECK(issueNodes(map, "empty_property_value") == std::vector<std::string>{"world"});
+      CHECK(
+        issueNodes(map, "link_target") == std::vector<std::string>{"layer:0/entity:1"});
+    }
+
+    SECTION("without a target, fixes every issue of the type")
+    {
+      const auto json = parseOutput(fixture.apply(R"([
+        {"op": "fix", "issue_type": "empty_property_value", "fix": "delete_property"}
+      ])"));
+      CHECK(
+        json["ops"][0]["modified"]
+        == parseJsonLiteral(R"(["world", "layer:0/entity:1"])"));
+      CHECK(issueNodes(map, "empty_property_value").empty());
+    }
+
+    SECTION("delete_objects removes the nodes with the issues")
+    {
+      const auto json =
+        runJson({"fix", map, "--issue-type", "empty_group", "--fix", "delete_objects"});
+      CHECK(json["ops"][0]["modified"] == Json::array());
+      CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:0/group:0"])"));
+      CHECK(issueNodes(map, "empty_group").empty());
+    }
+
+    SECTION("a face target fixes the issue on that face only")
+    {
+      const auto json = runJson(
+        {"fix",
+         map,
+         "--issue-type",
+         "invalid_uv_scale",
+         "--fix",
+         "reset_uv_scale",
+         "--target",
+         "layer:0/entity:2/brush:0/face:0"});
+      CHECK(
+        json["ops"][0]["modified"]
+        == parseJsonLiteral(R"(["layer:0/entity:2/brush:0"])"));
+      CHECK(issueNodes(map, "invalid_uv_scale").empty());
+    }
+
+    SECTION("a target without issues of the type fixes nothing and warns")
+    {
+      const auto target = GENERATE("layer:0/brush:0", "layer:0/entity:2/brush:0/face:1");
+      CAPTURE(target);
+      const auto json = runJson(
+        {"fix",
+         map,
+         "--issue-type",
+         "invalid_uv_scale",
+         "--fix",
+         "reset_uv_scale",
+         "--target",
+         target});
+      CHECK(json["ops"][0]["modified"] == Json::array());
+      CHECK(json["ops"][0]["warnings"] == parseJsonLiteral(R"(["nothing_to_fix"])"));
+      CHECK(issueNodes(map, "invalid_uv_scale").size() == 1);
+    }
+
+    SECTION("snap_vertices snaps the vertices of the brushes with the issue")
+    {
+      const auto json = runJson(
+        {"fix", map, "--issue-type", "non_integer_vertices", "--fix", "snap_vertices"});
+      CHECK(json["ops"][0]["modified"] == parseJsonLiteral(R"(["layer:0/brush:1"])"));
+      CHECK(issueNodes(map, "non_integer_vertices").empty());
+    }
+
+    SECTION("an unknown issue type or fix is refused before anything runs")
+    {
+      using Case = std::tuple<std::string, std::string, std::string>;
+      const auto [type, fix, message] = GENERATE(
+        Case{"no_such_type", "delete_objects", "unknown issue type \"no_such_type\""},
+        Case{
+          "long_property_value",
+          "delete_objects",
+          "unknown fix \"delete_objects\" for issue type \"long_property_value\", which "
+          "has \"delete_property\", \"truncate_property_value\""},
+        Case{
+          "mixed_brush_contents",
+          "delete_objects",
+          "issue type \"mixed_brush_contents\" has no quick-fixes"});
+      CAPTURE(type, fix);
+
+      const auto subcommand = runCli({"fix", map, "--issue-type", type, "--fix", fix});
+      checkError(subcommand, "invalid_argument", 2);
+      CHECK_THAT(
+        parseOutput(subcommand)["error"]["message"].asString(),
+        ContainsSubstring(message));
+
+      const auto batch = fixture.apply(
+        fmt::format(
+          R"([{{"op": "delete", "target": "layer:0/brush:0"}},
+            {{"op": "fix", "issue_type": "{}", "fix": "{}"}}])",
+          type,
+          fix));
+      checkError(batch, "invalid_argument", 2, 1);
+      CHECK(fixture.unchanged());
+    }
+  }
+
+  SECTION("on maps/fix.map")
+  {
+    auto fixture = EditFixture{"maps/fix.map"};
+    const auto& map = fixture.map;
+
+    SECTION("move_brushes_to_world reports the brushes it moved as modified")
+    {
+      const auto json = runJson(
+        {"fix",
+         map,
+         "--issue-type",
+         "point_entity_with_brushes",
+         "--fix",
+         "move_brushes_to_world"});
+      CHECK(json["ops"][0]["modified"] == parseJsonLiteral(R"(["layer:0/brush:1"])"));
+      // the light is left without brushes, which removes it
+      CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:0/entity:1"])"));
+      CHECK(issueNodes(map, "point_entity_with_brushes").empty());
+    }
+
+    SECTION("issues on locked nodes are left out unless --allow-locked")
+    {
+      const auto args = std::vector<std::string>{
+        "fix", map, "--issue-type", "empty_property_value", "--fix", "delete_property"};
+
+      const auto json = runJson(args);
+      CHECK(json["ops"][0]["warnings"] == parseJsonLiteral(R"(["nothing_to_fix"])"));
+      CHECK(issueNodes(map, "empty_property_value").size() == 1);
+
+      auto allowLocked = args;
+      allowLocked.emplace_back("--allow-locked");
+      CHECK(
+        runJson(allowLocked)["ops"][0]["modified"]
+        == parseJsonLiteral(R"(["layer:1/entity:0"])"));
+      CHECK(issueNodes(map, "empty_property_value").empty());
+    }
+
+    SECTION("a locked target is refused")
+    {
+      checkError(
+        runCli(
+          {"fix",
+           map,
+           "--issue-type",
+           "empty_property_value",
+           "--fix",
+           "delete_property",
+           "--target",
+           "layer:1/entity:0"}),
+        "locked",
+        1,
+        0);
+      CHECK(fixture.unchanged());
+    }
+  }
+
+  SECTION("--help describes the arguments")
+  {
+    const auto result = runCli({"fix", "--help"});
+    CHECK_THAT(result.out, ContainsSubstring("--issue-type <string>"));
+    CHECK_THAT(result.out, ContainsSubstring("--fix <string>"));
+    CHECK_THAT(result.out, ContainsSubstring("--target <path>"));
   }
 }
 

@@ -24,6 +24,11 @@
 #include <memory>
 #include <vector>
 
+namespace tb::mdl
+{
+class Map;
+}
+
 /*
  * The validators of verify's CLI checks: mistakes that agents commonly make and that the
  * editor's validators do not catch. They depend only on the map library, so that they
@@ -119,6 +124,12 @@ enum class MaterialCheck
   Off,
   On,
 };
+
+/**
+ * Whether the map's materials can be checked: only if they could be loaded, which needs
+ * a game path.
+ */
+MaterialCheck materialCheckOf(const mdl::Map& map);
 
 /**
  * The validators of the CLI check types of the issue-type table, in its order. Missing

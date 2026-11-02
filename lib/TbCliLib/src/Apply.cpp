@@ -21,11 +21,13 @@
 
 #include "cli/CliError.h"
 #include "cli/FileUtils.h"
+#include "cli/IssueTracker.h"
 #include "cli/Json.h"
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
 #include "cli/Targets.h"
+#include "cli/Verify.h"
 #include "mdl/Map.h"
 #include "mdl/WorldNode.h"
 
@@ -128,9 +130,31 @@ Json newPaths(
   return result;
 }
 
+/**
+ * The given issues whose nodes are still in the map, with their paths in the new rev.
+ */
+Json issuesJson(
+  const std::vector<VerifyIssue>& issues,
+  const std::unordered_map<const mdl::Node*, std::string>& paths)
+{
+  auto result = Json::array();
+  for (const auto& issue : issues)
+  {
+    if (paths.contains(issue.node))
+    {
+      result.push(issueToJson(issue, paths));
+    }
+  }
+  return result;
+}
+
 } // namespace
 
-Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions& options)
+Json apply(
+  LoadedMap& loadedMap,
+  const std::vector<Op>& ops,
+  const ApplyOptions& options,
+  const VerifyConfig& verifyConfig)
 {
   if (options.expectRev && *options.expectRev != loadedMap.rev)
   {
@@ -158,17 +182,21 @@ Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions&
     resolved.push_back(attributeToOp(i, [&]() { return resolveArgs(targets, ops[i]); }));
   }
 
+  auto issueTracker = IssueTracker{loadedMap, verifyConfig};
   auto outcomes = std::vector<OpOutcome>(ops.size());
+  auto introduced = std::vector<std::vector<VerifyIssue>>(ops.size());
   for (size_t i = 0; i < ops.size(); ++i)
   {
     attributeToOp(i, [&]() {
       const auto nodes = argNodes(targets, ops[i], resolved[i]);
-      auto context = OpContext{map, ops[i].args, nodes, outcomes[i]};
+      auto& outcome = outcomes[i];
+      auto context = OpContext{map, ops[i].args, nodes, outcome, options.allowLocked};
       ops[i].def->execute(context);
       if (const auto binding = ops[i].binding())
       {
-        targets.bind(*binding, outcomes[i].created);
+        targets.bind(*binding, outcome.created);
       }
+      introduced[i] = issueTracker.introduced(outcome);
     });
   }
 
@@ -208,6 +236,7 @@ Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions&
     opResult.set("modified", newPaths(outcome.modified, paths));
     opResult.set("removed", std::move(removed));
     opResult.set("warnings", std::move(warnings));
+    opResult.set("issues_introduced", issuesJson(introduced[i], paths));
     opResults.push(std::move(opResult));
   }
 

@@ -624,7 +624,7 @@ struct CommandResult
 Json runOps(const Arguments& arguments, const std::vector<Op>& ops, Logger& logger)
 {
   auto [loadedMap, config] = loadMapArgument(arguments, logger);
-  return apply(loadedMap, ops, arguments.applyOptions);
+  return apply(loadedMap, ops, arguments.applyOptions, config.verify);
 }
 
 CommandResult runCommand(

@@ -71,6 +71,15 @@ enum class IssueScope
   Map,
 };
 
+/** A quick-fix of an issue type, which the `fix` op applies. */
+struct QuickFixDef
+{
+  /** The stable snake_case id that the `fix` op and issue records name it by. */
+  std::string_view id;
+  /** The description of the validator's quick-fix, which identifies it. */
+  std::string_view description;
+};
+
 /** One row of the issue-type table. */
 struct IssueTypeDef
 {
@@ -83,6 +92,8 @@ struct IssueTypeDef
   IssueScope scope = IssueScope::Node;
   /** For a CLI check type, creates the validator that reports the issues. */
   std::unique_ptr<mdl::Validator> (*createValidator)() = nullptr;
+  /** The quick-fixes of the type's validator, in the validator's order. */
+  std::vector<QuickFixDef> fixes = {};
 };
 
 /**
@@ -97,6 +108,9 @@ const IssueTypeDef* findIssueType(std::string_view id);
 
 /** The issue type of the issues that the given validator reports, or nullptr. */
 const IssueTypeDef* findIssueType(const mdl::Validator& validator);
+
+/** The quick-fix of the given type with the given id, or nullptr. */
+const QuickFixDef* findQuickFix(const IssueTypeDef& type, std::string_view id);
 
 /** The ids of the quick-fixes for issues of the given type, as a JSON array. */
 Json fixIdsJson(const IssueTypeDef& type);

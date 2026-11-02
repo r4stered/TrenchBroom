@@ -42,7 +42,7 @@ TEST_CASE("ops command")
   {
     const auto json = runJson({"ops", "--json"});
     CHECK(json["schema"] == Json{"tbcli.ops/1"});
-    REQUIRE(json["ops"].size() == 2);
+    REQUIRE(json["ops"].size() == 3);
     CHECK(json["ops"][0]["name"] == Json{"create_box"});
     CHECK(json["ops"][1] == parseJsonLiteral(R"json({
       "name": "delete",
@@ -93,6 +93,15 @@ TEST_CASE("ops command")
       createBox["properties"]["parent"]["x-node-kinds"]
       == parseJsonLiteral(R"(["layer", "group", "brush_entity"])"));
     CHECK(createBox["properties"]["as"]["pattern"].isString());
+
+    const auto& fix = json["ops"][2];
+    CHECK(fix["name"] == Json{"fix"});
+    CHECK(
+      fix["schema"]["required"] == parseJsonLiteral(R"(["op", "issue_type", "fix"])"));
+    CHECK(
+      fix["schema"]["properties"]["target"]["x-node-kinds"]
+      == parseJsonLiteral(
+        R"(["world", "layer", "group", "point_entity", "brush_entity", "brush", "patch", "face"])"));
   }
 
   SECTION("lists the issue types")
@@ -118,7 +127,12 @@ TEST_CASE("ops command")
     CHECK(
       entry("empty_group")
       == parseJsonLiteral(
-        R"({"type": "empty_group", "severity": "warning", "fixes": []})"));
+        R"({"type": "empty_group", "severity": "warning", "fixes": ["delete_objects"]})"));
+    CHECK(entry("long_property_value") == parseJsonLiteral(R"({
+        "type": "long_property_value",
+        "severity": "warning",
+        "fixes": ["delete_property", "truncate_property_value"]
+      })"));
     CHECK(
       entry("no_player_start")
       == parseJsonLiteral(
@@ -135,6 +149,7 @@ TEST_CASE("ops command")
     const auto result = runCli({"--help"});
     CHECK_THAT(result.out, ContainsSubstring("  create_box\n"));
     CHECK_THAT(result.out, ContainsSubstring("  delete\n"));
+    CHECK_THAT(result.out, ContainsSubstring("  fix\n"));
   }
 }
 
@@ -196,6 +211,24 @@ TEST_CASE("Ops")
       ])"));
       REQUIRE(ops.size() == 2);
       CHECK(ops[1].bindingReferences() == std::vector<std::string>{"$b"});
+    }
+
+    SECTION("runs an op's own argument check")
+    {
+      const auto batch = parseJsonLiteral(R"([
+        {"op": "delete", "target": "layer:0/brush:0"},
+        {"op": "fix", "issue_type": "no_such_type", "fix": "delete_objects"}
+      ])");
+      try
+      {
+        parseBatch(batch);
+        FAIL("parseBatch accepted an unknown issue type");
+      }
+      catch (const CliError& e)
+      {
+        CHECK(e.code() == ErrorCode::InvalidArgument);
+        CHECK(e.opIndex() == 1);
+      }
     }
   }
 

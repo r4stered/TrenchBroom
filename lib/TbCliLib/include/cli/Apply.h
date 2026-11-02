@@ -30,6 +30,7 @@ namespace tb::cli
 class Json;
 struct LoadedMap;
 struct Op;
+struct VerifyConfig;
 
 /** The options that every mutating command accepts. */
 struct ApplyOptions
@@ -49,11 +50,13 @@ struct ApplyOptions
 /**
  * Runs the given ops against the loaded map, all or nothing, and writes the map once,
  * atomically. Returns the `tbcli.apply/1` result
- * `{schema, rev, ops: [{ok, created, modified, removed, warnings}], bindings,
- * warnings?}`, where
+ * `{schema, rev, ops: [{ok, created, modified, removed, warnings, issues_introduced}],
+ * bindings, warnings?}`, where
  * `rev` is the rev of the written (or, with `dryRun`, would-be) file, `created`,
  * `modified` and the bindings are paths in that rev, and `removed` are paths in the
  * input rev. The top-level `warnings` is `["lossy_load"]` if the load was lossy.
+ * `issues_introduced` lists the issues an op introduced (see IssueTracker) whose nodes
+ * are in the new rev, with the severities and suppressions of `verifyConfig`.
  *
  * Node paths and query targets are resolved against the input rev before the first op
  * runs, so that earlier ops cannot shift what later ops address; bindings name the nodes
@@ -65,6 +68,10 @@ struct ApplyOptions
  * first failing op, with its `op_index`; `write_failed` if the write cannot be
  * confirmed. Nothing is written in any of these cases.
  */
-Json apply(LoadedMap& loadedMap, const std::vector<Op>& ops, const ApplyOptions& options);
+Json apply(
+  LoadedMap& loadedMap,
+  const std::vector<Op>& ops,
+  const ApplyOptions& options,
+  const VerifyConfig& verifyConfig);
 
 } // namespace tb::cli

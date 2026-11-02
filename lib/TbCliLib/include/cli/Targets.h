@@ -107,6 +107,9 @@ Json queryTargetFromFlags(
 /** Whether the given node is the world or below it, i.e. not removed from the map. */
 bool isInMap(const mdl::Node& node, const mdl::WorldNode& worldNode);
 
+/** The given node and everything below it, depth first, in file order. */
+std::vector<mdl::Node*> nodeAndDescendants(mdl::Node& node);
+
 /** The binding names that the given target refers to. */
 std::vector<std::string> bindingReferences(const Json& target);
 

@@ -257,6 +257,10 @@ Json checkArgs(const OpDef& def, const Json& given)
       result.set(arg.name, *arg.defaultValue);
     }
   }
+  if (def.checkArgs)
+  {
+    def.checkArgs(result);
+  }
   return result;
 }
 
@@ -402,6 +406,35 @@ std::vector<OpDef> makeOpDefs()
             TargetKind::Patch}}},
       },
       deleteNode,
+    },
+    OpDef{
+      "fix",
+      "Applies a quick-fix to the issues of one type on the target and inside it, or, "
+      "without a target, to every issue of that type. tbcli ops --json lists the fix "
+      "ids of each issue type. Issues on locked nodes are left out unless "
+      "--allow-locked; issues that tbcli.json's verify.ignore suppresses are fixed "
+      "too.",
+      {
+        ArgDef{"issue_type", ArgType::String, "the issue type, as verify names it", true},
+        ArgDef{"fix", ArgType::String, "the id of the quick-fix", true},
+        ArgDef{
+          "target",
+          ArgType::Target,
+          "the nodes and faces whose issues to fix, with the nodes inside them; every "
+          "issue of the type if not given",
+          false,
+          std::nullopt,
+          {{TargetKind::World,
+            TargetKind::Layer,
+            TargetKind::Group,
+            TargetKind::PointEntity,
+            TargetKind::BrushEntity,
+            TargetKind::Brush,
+            TargetKind::Patch,
+            TargetKind::Face}}},
+      },
+      fixIssues,
+      checkFixArgs,
     },
   };
 }

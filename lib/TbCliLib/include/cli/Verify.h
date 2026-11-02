@@ -24,14 +24,18 @@
 #include "cli/Json.h"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace tb::mdl
 {
+class Map;
 class Node;
-}
+class Validator;
+} // namespace tb::mdl
 
 namespace tb::cli
 {
@@ -56,6 +60,8 @@ struct VerifyIssue
   mdl::Node* node = nullptr;
   /** Set if the issue is on a face of `node`, which is then a brush. */
   std::optional<size_t> faceIndex;
+  /** Set if the issue is about a property of `node`, which is then an entity. */
+  std::optional<std::string> propertyKey;
   std::optional<size_t> line;
   /** Whether a `verify.ignore` entry suppresses the issue. */
   bool suppressed = false;
@@ -89,6 +95,45 @@ struct IssueReport
  * @throw CliError if a validator is not in the issue-type table
  */
 IssueReport collectIssues(LoadedMap& loadedMap, const VerifyConfig& config);
+
+/**
+ * The issue record `{type, severity, key, message, node, line, origin? | bounds?,
+ * fixes}`, with the node's path taken from the given paths, which must contain it.
+ */
+Json issueToJson(
+  const VerifyIssue& issue,
+  const std::unordered_map<const mdl::Node*, std::string>& paths);
+
+/**
+ * Collects the issues of single nodes as verify does, with their keys. Keys tell
+ * otherwise alike issues apart by the order in which they are collected.
+ */
+class NodeIssueCollector
+{
+private:
+  struct Impl;
+  std::unique_ptr<Impl> m_impl;
+
+public:
+  /**
+   * @throw CliError if a validator is not in the issue-type table
+   */
+  NodeIssueCollector(LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators);
+  ~NodeIssueCollector();
+
+  NodeIssueCollector(const NodeIssueCollector&) = delete;
+  NodeIssueCollector& operator=(const NodeIssueCollector&) = delete;
+
+  /** The issues the validators find on the given node only, not below it. */
+  std::vector<VerifyIssue> collect(mdl::Node& node);
+};
+
+/**
+ * Applies the severities of the given configuration to the issues, and marks the issues
+ * that it suppresses.
+ */
+void applyConfig(
+  mdl::Map& map, const VerifyConfig& config, std::vector<VerifyIssue>& issues);
 
 /**
  * Sets `counts: {<type>: n, ..., suppressed: n}` and `by_severity: {error, warning,

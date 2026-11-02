@@ -52,6 +52,12 @@ namespace tb::cli
 namespace
 {
 
+// the quick-fixes that several of the map library's validators offer
+constexpr auto DeleteObjects = QuickFixDef{"delete_objects", "Delete Objects"};
+constexpr auto DeleteProperty = QuickFixDef{"delete_property", "Delete Property"};
+constexpr auto ReplaceDoubleQuotes =
+  QuickFixDef{"replace_double_quotes", "Replace \" with '"};
+
 /** A type whose issues the validator of class T reports. */
 template <typename T>
 IssueTypeDef typeOfValidator(
@@ -64,9 +70,13 @@ IssueTypeDef typeOfValidator(
 }
 
 template <typename T>
-IssueTypeDef validatorType(const std::string_view id, const Severity severity)
+IssueTypeDef validatorType(
+  const std::string_view id, const Severity severity, std::vector<QuickFixDef> fixes = {})
 {
-  return typeOfValidator<T>(IssueSource::Validator, id, severity, IssueScope::Node);
+  auto result =
+    typeOfValidator<T>(IssueSource::Validator, id, severity, IssueScope::Node);
+  result.fixes = std::move(fixes);
+  return result;
 }
 
 template <typename T>
@@ -115,30 +125,50 @@ const std::vector<IssueTypeDef>& issueTypes()
   using enum Severity;
   static const auto types = std::vector<IssueTypeDef>{
     {"load_error", Error, IssueSource::LoadDiagnostics},
-    validatorType<mdl::MissingClassnameValidator>("missing_classname", Error),
-    validatorType<mdl::MissingDefinitionValidator>("missing_definition", Warning),
-    validatorType<mdl::MissingModValidator>("missing_mod", Warning),
-    validatorType<mdl::EmptyGroupValidator>("empty_group", Warning),
-    validatorType<mdl::EmptyBrushEntityValidator>("empty_brush_entity", Warning),
+    validatorType<mdl::MissingClassnameValidator>(
+      "missing_classname", Error, {DeleteObjects}),
+    validatorType<mdl::MissingDefinitionValidator>(
+      "missing_definition", Warning, {DeleteObjects}),
+    validatorType<mdl::MissingModValidator>(
+      "missing_mod", Warning, {{"remove_mod", "Remove Mod"}}),
+    validatorType<mdl::EmptyGroupValidator>("empty_group", Warning, {DeleteObjects}),
+    validatorType<mdl::EmptyBrushEntityValidator>(
+      "empty_brush_entity", Warning, {DeleteObjects}),
     validatorType<mdl::PointEntityWithBrushesValidator>(
-      "point_entity_with_brushes", Warning),
-    validatorType<mdl::LinkSourceValidator>("link_source", Warning),
-    validatorType<mdl::LinkTargetValidator>("link_target", Warning),
-    validatorType<mdl::NonIntegerVerticesValidator>("non_integer_vertices", Info),
+      "point_entity_with_brushes",
+      Warning,
+      {{"move_brushes_to_world", "Move Brushes to World"}}),
+    validatorType<mdl::LinkSourceValidator>("link_source", Warning, {DeleteProperty}),
+    validatorType<mdl::LinkTargetValidator>("link_target", Warning, {DeleteProperty}),
+    validatorType<mdl::NonIntegerVerticesValidator>(
+      "non_integer_vertices", Info, {{"snap_vertices", "Snap Vertices"}}),
     validatorType<mdl::MixedBrushContentsValidator>("mixed_brush_contents", Warning),
-    validatorType<mdl::WorldBoundsValidator>("world_bounds", Error),
-    validatorType<mdl::SoftMapBoundsValidator>("soft_map_bounds", Info),
-    validatorType<mdl::EmptyPropertyKeyValidator>("empty_property_key", Warning),
-    validatorType<mdl::EmptyPropertyValueValidator>("empty_property_value", Warning),
-    validatorType<mdl::LongPropertyKeyValidator>("long_property_key", Warning),
-    validatorType<mdl::LongPropertyValueValidator>("long_property_value", Warning),
+    validatorType<mdl::WorldBoundsValidator>("world_bounds", Error, {DeleteObjects}),
+    validatorType<mdl::SoftMapBoundsValidator>("soft_map_bounds", Info, {DeleteObjects}),
+    validatorType<mdl::EmptyPropertyKeyValidator>(
+      "empty_property_key", Warning, {DeleteProperty}),
+    validatorType<mdl::EmptyPropertyValueValidator>(
+      "empty_property_value", Warning, {DeleteProperty}),
+    validatorType<mdl::LongPropertyKeyValidator>(
+      "long_property_key", Warning, {DeleteProperty}),
+    validatorType<mdl::LongPropertyValueValidator>(
+      "long_property_value",
+      Warning,
+      {DeleteProperty, {"truncate_property_value", "Truncate Property Values"}}),
     validatorType<mdl::PropertyKeyWithDoubleQuotationMarksValidator>(
-      "property_key_with_double_quotation_marks", Warning),
+      "property_key_with_double_quotation_marks",
+      Warning,
+      {DeleteProperty, ReplaceDoubleQuotes}),
     validatorType<mdl::PropertyValueWithDoubleQuotationMarksValidator>(
-      "property_value_with_double_quotation_marks", Warning),
+      "property_value_with_double_quotation_marks",
+      Warning,
+      {DeleteProperty, ReplaceDoubleQuotes}),
     validatorType<mdl::WorldNodePathSeparatorValidator>(
-      "world_node_path_separator", Warning),
-    validatorType<mdl::InvalidUvScaleValidator>("invalid_uv_scale", Warning),
+      "world_node_path_separator",
+      Warning,
+      {{"replace_backslashes", "Replace \\ with /"}}),
+    validatorType<mdl::InvalidUvScaleValidator>(
+      "invalid_uv_scale", Warning, {{"reset_uv_scale", "Reset UV Scale"}}),
     cliCheckType<MissingMaterialValidator>("missing_material", Warning),
     cliCheckType<FgdPropertyTypeValidator>("fgd_property_type", Warning),
     cliCheckType<EntityInsideSolidValidator>("entity_inside_solid", Error),
@@ -163,10 +193,20 @@ const IssueTypeDef* findIssueType(const mdl::Validator& validator)
   return it != types.end() ? &*it : nullptr;
 }
 
-Json fixIdsJson(const IssueTypeDef&)
+const QuickFixDef* findQuickFix(const IssueTypeDef& type, const std::string_view id)
 {
-  // quick-fix ids come with the fix op
-  return Json::array();
+  const auto it = std::ranges::find(type.fixes, id, &QuickFixDef::id);
+  return it != type.fixes.end() ? &*it : nullptr;
+}
+
+Json fixIdsJson(const IssueTypeDef& type)
+{
+  auto result = Json::array();
+  for (const auto& fix : type.fixes)
+  {
+    result.push(fix.id);
+  }
+  return result;
 }
 
 Json issueTypesJson()

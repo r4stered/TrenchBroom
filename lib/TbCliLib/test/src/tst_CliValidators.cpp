@@ -20,7 +20,9 @@
 #include "CliTestUtils.h"
 #include "base/Logger.h"
 #include "cli/CliValidators.h"
+#include "cli/Config.h"
 #include "cli/IssueTypes.h"
+#include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
@@ -280,6 +282,24 @@ TEST_CASE("makeCliValidators")
       "no_player_start",
       "degenerate_brush",
     });
+}
+
+TEST_CASE("materialCheckOf")
+{
+  auto logger = NullLogger{};
+
+  // without a Quake directory, there is no game path to load materials from
+  CHECK(
+    materialCheckOf(*loadFixtureMap("maps/simple.map", logger).map)
+    == MaterialCheck::Off);
+
+  auto config = Config{};
+  config.gameConfig = quakeGameConfigPath();
+  config.fgd = {quakeFgdPath()};
+  config.quakeDir = texturesFixturePath();
+  CHECK(
+    materialCheckOf(*loadMap(fixturePath("maps/simple.map"), config, logger).map)
+    == MaterialCheck::On);
 }
 
 } // namespace tb::cli

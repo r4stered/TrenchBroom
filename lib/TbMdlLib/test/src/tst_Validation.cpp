@@ -33,8 +33,11 @@
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Entities.h"
+#include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/PatchNode.h"
+#include "mdl/PointEntityWithBrushesValidator.h"
+#include "mdl/TestFactory.h"
 #include "mdl/TestUtils.h"
 #include "mdl/WorldNode.h"
 #include "mdl/WorldNodePathSeparatorValidator.h"
@@ -154,6 +157,29 @@ TEST_CASE("Validation")
 
     // The fix should have deleted the property
     CHECK(!entityNode->entity().hasProperty(""));
+  }
+
+  SECTION("PointEntityWithBrushesValidator")
+  {
+    auto* entityNode = createPointEntity(map, pointEntityDefinition, vm::vec3d{0, 0, 0});
+    auto* brushNode = createBrushNode(map);
+    addNodes(map, {{entityNode, {brushNode}}});
+    REQUIRE(brushNode->parent() == entityNode);
+
+    auto validator = std::make_unique<PointEntityWithBrushesValidator>();
+    auto validators = std::vector<const Validator*>{validator.get()};
+
+    const auto issues = collectIssues(map.worldNode(), validators);
+    REQUIRE(issues.size() == 1);
+
+    auto fixes = map.worldNode().quickFixes(issues.front()->type());
+    REQUIRE(fixes.size() == 1);
+    fixes.front()->apply(map, issues);
+
+    // the brush is moved out, which leaves the entity empty, so that it is removed
+    CHECK(brushNode->parent() == &parentForNodes(map));
+    CHECK(!entityNode->isDescendantOf(map.worldNode()));
+    CHECK(map.selection().nodes == std::vector<Node*>{brushNode});
   }
 
   SECTION("WorldNodePathSeparatorValidator")
