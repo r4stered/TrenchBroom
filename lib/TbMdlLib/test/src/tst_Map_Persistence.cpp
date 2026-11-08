@@ -19,6 +19,7 @@
 
 #include "Observer.h"
 #include "fs/TestEnvironment.h"
+#include "fs/TestUtils.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
@@ -33,10 +34,12 @@
 
 #include <fmt/format.h>
 
+#include <filesystem>
 #include <memory>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_range_equals.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::mdl
 {
@@ -124,6 +127,14 @@ TEST_CASE("Map_Persistence")
 
     auto env = fs::TestEnvironment{};
 
+    // a failed write leaves the document modified and keeps its path
+    REQUIRE(map.modified());
+    const auto originalPath = map.path();
+    CHECK(map.saveAs(env.dir() / "missing" / "test.map").is_error());
+    CHECK(mapWasSaved.notifications.empty());
+    CHECK(map.modified());
+    CHECK(map.path() == originalPath);
+
     const auto path = env.dir() / "test.map";
     REQUIRE(map.saveAs(path));
 
@@ -145,6 +156,49 @@ TEST_CASE("Map_Persistence")
 "key" "value"
 }
 )");
+  }
+
+  SECTION("saveTo")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+    addNode(
+      map, parentForNodes(map), std::make_unique<EntityNode>(Entity{{{"key", "value"}}}));
+
+    auto env = fs::TestEnvironment{};
+
+    SECTION("replaces an existing file and leaves no other files behind")
+    {
+      env.createFile("test.map", "original");
+
+      REQUIRE(map.saveTo(env.dir() / "test.map"));
+
+      CHECK_THAT(
+        env.loadFile("test.map"), Catch::Matchers::ContainsSubstring(R"("key" "value")"));
+      CHECK(env.directoryContents("") == std::vector<std::filesystem::path>{"test.map"});
+    }
+
+    SECTION("returns an error if the directory does not exist")
+    {
+      CHECK(map.saveTo(env.dir() / "missing" / "test.map").is_error());
+      CHECK(!env.directoryExists("missing"));
+    }
+
+    SECTION("returns an error and keeps the original if the target is read-only")
+    {
+      env.createFile("test.map", "original");
+      {
+        const auto setPermissions = fs::SetPermissions{
+          env.dir() / "test.map",
+          std::filesystem::perms::owner_read | std::filesystem::perms::group_read
+            | std::filesystem::perms::others_read};
+
+        CHECK(map.saveTo(env.dir() / "test.map").is_error());
+      }
+
+      CHECK(env.loadFile("test.map") == "original");
+      CHECK(env.directoryContents("") == std::vector<std::filesystem::path>{"test.map"});
+    }
   }
 
   SECTION("exportAs")

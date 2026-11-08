@@ -25,12 +25,16 @@
 #include "fs/TraversalMode.h"
 
 #include "kd/contracts.h"
+#include "kd/invoke.h"
 #include "kd/path_utils.h"
 #include "kd/string_format.h"
 #include "kd/string_utils.h"
 
 #include <fmt/format.h>
 #include <fmt/std.h>
+
+#include <exception>
+#include <fstream>
 
 namespace tb::fs::Disk
 {
@@ -306,6 +310,85 @@ Result<void> renameDirectory(
   {
     return Error{fmt::format(
       "Failed to rename {} to {}: {}", sourcePath, destPath, error.message())};
+  }
+
+  return kdl::void_success;
+}
+
+Result<void> writeFileAtomically(
+  const std::filesystem::path& path,
+  const std::function<void(std::ostream&)>& writeContents)
+{
+  // replace the file that a symlink points to rather than the symlink itself
+  const auto fixedPath = fixPath(path);
+  auto statusError = std::error_code{}; // a missing file is not an error
+  const auto isSymlink =
+    std::filesystem::is_symlink(std::filesystem::symlink_status(fixedPath, statusError));
+
+  auto canonicalError = std::error_code{};
+  const auto targetPath =
+    isSymlink ? std::filesystem::canonical(fixedPath, canonicalError) : fixedPath;
+  if (canonicalError)
+  {
+    return Error{fmt::format("Failed to write {}: {}", path, canonicalError.message())};
+  }
+
+  const auto targetStatus = std::filesystem::status(targetPath, statusError);
+  const auto targetExists = std::filesystem::exists(targetStatus);
+  if (std::filesystem::is_directory(targetStatus))
+  {
+    return Error{fmt::format("Failed to write {}: path denotes a directory", path)};
+  }
+
+  // renaming over a read-only file succeeds on some platforms, so check first; opening
+  // in append mode leaves the file unchanged
+  if (targetExists && !std::ofstream{targetPath, std::ios::app})
+  {
+    return Error{fmt::format("Failed to write {}: cannot open it for writing", path)};
+  }
+
+  auto tempFilename = targetPath.filename();
+  tempFilename += "." + kdl::str_make_random(8) + ".tmp";
+  const auto tempPath = targetPath.parent_path() / tempFilename;
+
+  const auto removeTempFile = kdl::invoke_later{[&]() {
+    auto removeError = std::error_code{};
+    std::filesystem::remove(tempPath, removeError);
+  }};
+
+  try
+  {
+    auto stream = std::ofstream{tempPath};
+    if (!stream)
+    {
+      return Error{fmt::format("Failed to write {}: cannot create {}", path, tempPath)};
+    }
+
+    writeContents(stream);
+    stream.close();
+    if (!stream)
+    {
+      return Error{fmt::format("Failed to write {}: cannot write {}", path, tempPath)};
+    }
+  }
+  catch (const std::exception& e)
+  {
+    return Error{fmt::format("Failed to write {}: {}", path, e.what())};
+  }
+
+  if (targetExists)
+  {
+    // keep the original file's permissions on a best effort basis
+    auto permissionsError = std::error_code{};
+    std::filesystem::permissions(tempPath, targetStatus.permissions(), permissionsError);
+  }
+
+  auto renameError = std::error_code{};
+  std::filesystem::rename(tempPath, targetPath, renameError);
+  if (renameError)
+  {
+    return Error{fmt::format(
+      "Failed to write {}: cannot rename {}: {}", path, tempPath, renameError.message())};
   }
 
   return kdl::void_success;

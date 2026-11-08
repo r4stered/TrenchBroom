@@ -27,6 +27,8 @@
 #include <fmt/std.h>
 
 #include <filesystem>
+#include <functional>
+#include <iosfwd>
 #include <memory>
 
 namespace tb::fs
@@ -61,6 +63,23 @@ Result<void> moveFile(
 
 Result<void> renameDirectory(
   const std::filesystem::path& sourcePath, const std::filesystem::path& destPath);
+
+/**
+ * Writes a file by passing a text mode stream to the given function, all or nothing.
+ *
+ * The contents go to a temporary file in the same directory, which then replaces the file
+ * at the given path. If anything fails, including the function throwing or leaving the
+ * stream in a failed state, an error is returned and an existing file at the path is left
+ * as it was. A read-only file is not replaced. A symlink at the path is kept and the file
+ * it points to is replaced; a dangling symlink is an error.
+ *
+ * The file is replaced, not rewritten, so only its permissions carry over: hard links to
+ * it, its owner, ACLs and other attributes do not. The data is not synced to the device
+ * before the rename.
+ */
+Result<void> writeFileAtomically(
+  const std::filesystem::path& path,
+  const std::function<void(std::ostream&)>& writeContents);
 
 std::filesystem::path resolvePath(
   const std::vector<std::filesystem::path>& searchPaths,

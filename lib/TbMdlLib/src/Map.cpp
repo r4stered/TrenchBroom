@@ -956,11 +956,12 @@ Result<void> Map::saveTo(const std::filesystem::path& path) const
 
   m_logger.info() << "Saving document to " << path;
 
-  kdl::with_ostream(path, [&](auto& stream) { saveTo(stream); })
-    | kdl::transform_error(
-      [&](const auto& e) { m_logger.error() << "Could not save document: " << e.msg; });
-
-  return Result<void>{};
+  auto result =
+    fs::Disk::writeFileAtomically(path, [&](auto& stream) { saveTo(stream); });
+  result | kdl::transform_error([&](const auto& e) {
+    m_logger.error() << "Could not save document: " << e.msg;
+  });
+  return result;
 }
 
 void Map::saveTo(std::ostream& stream) const

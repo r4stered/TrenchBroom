@@ -21,6 +21,7 @@
 #include "fs/File.h"
 #include "fs/PathInfo.h"
 #include "fs/TestEnvironment.h"
+#include "fs/TestUtils.h"
 #include "fs/TraversalMode.h"
 
 #include "kd/filesystem_utils.h"
@@ -29,10 +30,12 @@
 #include <fmt/std.h>
 
 #include <filesystem>
-#include <iostream>
+#include <functional>
 #include <iterator>
+#include <stdexcept>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_vector.hpp>
 
 namespace tb::fs
@@ -41,35 +44,6 @@ using namespace Catch::Matchers;
 
 namespace
 {
-class SetPermissions
-{
-private:
-  std::filesystem::path m_path;
-  std::filesystem::perms m_permissions;
-
-public:
-  explicit SetPermissions(
-    std::filesystem::path path, const std::filesystem::perms permissions)
-    : m_path{std::move(path)}
-    , m_permissions{std::filesystem::status(m_path).permissions()}
-  {
-    std::filesystem::permissions(m_path, permissions);
-  }
-
-  ~SetPermissions()
-  {
-    try
-    {
-      std::filesystem::permissions(m_path, m_permissions);
-    }
-    catch (const std::filesystem::filesystem_error& e)
-    {
-      std::cout << "Could not reset file permissions for " << m_path << ": " << e.what()
-                << "\n";
-    }
-  }
-};
-
 TestEnvironment makeTestEnvironment()
 {
   return TestEnvironment{[](TestEnvironment& env) {
@@ -629,6 +603,103 @@ TEST_CASE("DiskIO")
         CHECK(fs::Disk::pathInfo(env.dir() / "anotherDir") == fs::PathInfo::Directory);
 #endif
       }
+    }
+  }
+
+  SECTION("writeFileAtomically")
+  {
+    const auto writeNew = [](std::ostream& stream) { stream << "new content"; };
+    const auto readFile = [&](const std::filesystem::path& path) {
+      return kdl::with_istream(env.dir() / path, readAll).value();
+    };
+
+    SECTION("creates a new file")
+    {
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "anotherDir/new.txt", writeNew)
+        == Result<void>{});
+
+      CHECK(readFile("anotherDir/new.txt") == "new content");
+      CHECK(
+        env.directoryContents("anotherDir")
+        == std::vector<std::filesystem::path>{
+          "anotherDir/new.txt", "anotherDir/subDirTest", "anotherDir/test3.map"});
+    }
+
+    SECTION("replaces an existing file")
+    {
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "anotherDir/test3.map", writeNew)
+        == Result<void>{});
+
+      CHECK(readFile("anotherDir/test3.map") == "new content");
+      CHECK(
+        env.directoryContents("anotherDir")
+        == std::vector<std::filesystem::path>{
+          "anotherDir/subDirTest", "anotherDir/test3.map"});
+    }
+
+    SECTION("writes through a symlink to its target")
+    {
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "linkedTest2.map", writeNew)
+        == Result<void>{});
+
+      CHECK(std::filesystem::is_symlink(env.dir() / "linkedTest2.map"));
+      CHECK(readFile("test2.map") == "new content");
+    }
+
+    SECTION("fails if the directory does not exist")
+    {
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "missing/new.txt", writeNew)
+          .is_error());
+      CHECK(fs::Disk::pathInfo(env.dir() / "missing") == fs::PathInfo::Unknown);
+    }
+
+    SECTION("fails if the path denotes a directory")
+    {
+      CHECK(fs::Disk::writeFileAtomically(env.dir() / "anotherDir", writeNew).is_error());
+      CHECK(fs::Disk::pathInfo(env.dir() / "anotherDir") == fs::PathInfo::Directory);
+    }
+
+    SECTION("fails and leaves the original if the target is read-only")
+    {
+      const auto setPermissions = SetPermissions{
+        env.dir() / "anotherDir/test3.map",
+        std::filesystem::perms::owner_read | std::filesystem::perms::group_read
+          | std::filesystem::perms::others_read};
+
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "anotherDir/test3.map", writeNew)
+          .is_error());
+      CHECK(readFile("anotherDir/test3.map") == "//yet another test file\n{}");
+      CHECK(
+        env.directoryContents("anotherDir")
+        == std::vector<std::filesystem::path>{
+          "anotherDir/subDirTest", "anotherDir/test3.map"});
+    }
+
+    SECTION("fails and leaves the original if writing fails midway")
+    {
+      const auto writeFails = GENERATE(
+        std::function<void(std::ostream&)>{[](std::ostream& stream) {
+          stream << "partial";
+          stream.setstate(std::ios::badbit);
+        }},
+        std::function<void(std::ostream&)>{[](std::ostream& stream) {
+          stream << "partial";
+          throw std::runtime_error{"disk full"};
+        }});
+
+      CHECK(
+        fs::Disk::writeFileAtomically(env.dir() / "anotherDir/test3.map", writeFails)
+          .is_error());
+      CHECK(readFile("anotherDir/test3.map") == "//yet another test file\n{}");
+      CHECK(
+        env.directoryContents("anotherDir")
+        == std::vector<std::filesystem::path>{
+          "anotherDir/subDirTest", "anotherDir/test3.map"});
     }
   }
 

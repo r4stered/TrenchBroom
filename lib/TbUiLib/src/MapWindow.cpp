@@ -1011,11 +1011,7 @@ bool MapWindow::saveDocument()
            })
            | kdl::transform_error([&](const auto& e) {
                QMessageBox::critical(
-                 this,
-                 "",
-                 QString::fromStdString(
-                   fmt::format("Error while saving {}: {}", map.path(), e.msg)),
-                 QMessageBox::Ok);
+                 this, "", QString::fromStdString(e.msg), QMessageBox::Ok);
              })
            | kdl::is_success();
   }
@@ -1051,11 +1047,7 @@ bool MapWindow::saveDocumentAs()
          })
          | kdl::transform_error([&](const auto& e) {
              QMessageBox::critical(
-               this,
-               "",
-               QString::fromStdString(
-                 fmt::format("Error while saving {}: ", path, e.msg)),
-               QMessageBox::Ok);
+               this, "", QString::fromStdString(e.msg), QMessageBox::Ok);
            })
          | kdl::is_success();
 }

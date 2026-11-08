@@ -25,11 +25,33 @@
 #include "kd/filesystem_utils.h"
 #include "kd/result.h"
 
+#include <iostream>
 #include <iterator>
 #include <string>
 
 namespace tb::fs
 {
+
+SetPermissions::SetPermissions(
+  std::filesystem::path path, const std::filesystem::perms permissions)
+  : m_path{std::move(path)}
+  , m_permissions{std::filesystem::status(m_path).permissions()}
+{
+  std::filesystem::permissions(m_path, permissions);
+}
+
+SetPermissions::~SetPermissions()
+{
+  try
+  {
+    std::filesystem::permissions(m_path, m_permissions);
+  }
+  catch (const std::filesystem::filesystem_error& e)
+  {
+    std::cout << "Could not reset file permissions for " << m_path << ": " << e.what()
+              << "\n";
+  }
+}
 
 std::string readTextFile(const std::filesystem::path& path)
 {

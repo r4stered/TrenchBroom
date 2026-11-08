@@ -41,6 +41,21 @@ auto openFS(const std::filesystem::path& path)
          | kdl::value();
 }
 
+/** Sets the permissions of a path and restores the original ones when destroyed. */
+class SetPermissions
+{
+private:
+  std::filesystem::path m_path;
+  std::filesystem::perms m_permissions;
+
+public:
+  explicit SetPermissions(std::filesystem::path path, std::filesystem::perms permissions);
+  ~SetPermissions();
+
+  SetPermissions(const SetPermissions&) = delete;
+  SetPermissions& operator=(const SetPermissions&) = delete;
+};
+
 std::string readTextFile(const std::filesystem::path& path);
 Result<std::string> readTextFile(const FileSystem& fs, const std::filesystem::path& path);
 
