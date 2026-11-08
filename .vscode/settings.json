@@ -1,5 +1,78 @@
 {
     "githubPullRequests.ignoredPullRequestBranches": [
         "master"
-    ]
+    ],
+
+    // --- CMake Tools -------------------------------------------------------
+    // Ninja, not a Visual Studio generator: tinyxml2 9.0.0 emits its
+    // pkg-config file with a per-config generator expression, which no
+    // multi-config generator can satisfy. CI uses Ninja too (CI-windows.bat).
+    "cmake.generator": "Ninja",
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.defaultBuildTarget": "TrenchBroom",
+    "cmake.buildArgs": [
+        "--parallel"
+    ],
+    "cmake.configureSettings": {
+        "CMAKE_PREFIX_PATH": "C:/Qt/6.12.0/msvc2022_64",
+        "CMAKE_MAKE_PROGRAM": "C:/Qt/Tools/Ninja/ninja.exe",
+        "TB_ENABLE_PCH": "0",
+        // Generates build/compile_commands.json, which is what clangd reads.
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        // CPM's patch command is `patch -p1 < file` with no -N, and the git
+        // update step it depends on always re-runs, so a second configure of
+        // an existing build tree fails with "Reversed (or previously applied)
+        // patch detected!" on assimp. This skips dependency
+        // download/update/patch once the sources are populated.
+        //
+        // Because of this, the FIRST configure must come from the script, not
+        // from CMake Tools:  build-windows.bat clean
+        // Likewise re-run that after bumping a version in cmake/dependencies/.
+        "FETCHCONTENT_FULLY_DISCONNECTED": "ON"
+    },
+    // Configuring is not free here, so don't do it behind your back on open.
+    "cmake.configureOnOpen": false,
+    "cmake.configureOnEdit": false,
+
+    // --- IntelliSense: clangd ----------------------------------------------
+    // NOTE: vscode-clangd 0.6.0 does NOT expand ${workspaceFolder} in
+    // clangd.path or clangd.arguments (verified against its bundle), so these
+    // must be absolute paths.
+    "clangd.path": "C:/Program Files/LLVM/bin/clangd.exe",
+    "clangd.arguments": [
+        // build/compile_commands.json, written because of
+        // CMAKE_EXPORT_COMPILE_COMMANDS above. clangd would also find this by
+        // searching parent dirs, but being explicit keeps it working when a
+        // subfolder is opened rather than the repo root.
+        "--compile-commands-dir=D:/TrenchBroom/build",
+        "--background-index",
+        // Surfaces the repo's own /.clang-tidy checks inline.
+        "--clang-tidy",
+        "--completion-style=detailed"
+    ],
+    "clangd.onConfigChanged": "restart",
+
+    // clangd replaces the Microsoft IntelliSense engine. Running both gives
+    // duplicate completions and diagnostics. cpptools stays installed and
+    // enabled for the cppvsdbg debugger that launch.json uses.
+    "C_Cpp.intelliSenseEngine": "disabled",
+
+    // clangd formats via the repo's /.clang-format.
+    "[cpp]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "[c]": {
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+
+    // --- Noise -------------------------------------------------------------
+    "files.associations": {
+        "*.fgd": "plaintext",
+        "*.def": "plaintext"
+    },
+    "search.exclude": {
+        "**/build*/": true,
+        "**/cmakebuild*/": true,
+        "**/.cache/": true
+    }
 }

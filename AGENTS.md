@@ -49,3 +49,17 @@
 - Prefer changes that read like a clean transformation from the original state to the desired result.
 - When creating a series of commits, keep each commit coherent, buildable, and with the relevant tests passing when practical.
 - When asked to write commit messages, explain why the change was made in the context of a feature or bug fix, not just what changed.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are local markdown files under `.scratch/`; wayfinding maps live under `.wayfinder/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five-role vocabulary, recorded as `Status:` lines in issue files. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` and `docs/adr/`, created lazily. See `docs/agents/domain.md`.
