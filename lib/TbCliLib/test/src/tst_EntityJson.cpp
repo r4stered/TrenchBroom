@@ -32,6 +32,7 @@
 
 #include "kd/result.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,8 +47,8 @@ namespace
 mdl::EntityNode& addEntity(
   mdl::WorldNode& worldNode, std::vector<mdl::EntityProperty> properties)
 {
-  auto* entityNode = new mdl::EntityNode{mdl::Entity{std::move(properties)}};
-  worldNode.defaultLayer()->addChild(entityNode);
+  auto* entityNode = &worldNode.defaultLayer()->addChild(
+    std::make_unique<mdl::EntityNode>(mdl::Entity{std::move(properties)}));
   return *entityNode;
 }
 
@@ -103,7 +104,8 @@ TEST_CASE("EntityJson")
       auto& entityNode = addEntity(worldNode, {{"classname", "func_door"}});
       const auto builder = mdl::BrushBuilder{mdl::MapFormat::Valve, vm::bbox3d{8192.0}};
       entityNode.addChild(
-        new mdl::BrushNode{builder.createCube(64.0, "material") | kdl::value()});
+        std::make_unique<mdl::BrushNode>(
+          builder.createCube(64.0, "material") | kdl::value()));
 
       CHECK(entityToJson(entityNode)["aabb"] == parseJsonLiteral(R"(
         {"min": [-32, -32, -32], "max": [32, 32, 32]})"));

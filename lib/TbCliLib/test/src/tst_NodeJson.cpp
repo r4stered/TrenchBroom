@@ -38,6 +38,7 @@
 #include "kd/result.h"
 
 #include <algorithm>
+#include <memory>
 #include <string>
 
 #include <catch2/catch_test_macros.hpp>
@@ -56,39 +57,39 @@ TEST_CASE("NodeJson")
   auto& defaultLayer = *worldNode.defaultLayer();
 
   // faces in the order left, right, front, back, top, bottom
-  auto* brush = new mdl::BrushNode{
-    builder.createCuboid(
-      vm::bbox3d{{0, 0, 0}, {64, 32, 16}}, "a", "a", "a", "a", "top", "a")
-    | kdl::value()};
-  defaultLayer.addChild(brush);
+  auto* brush = &defaultLayer.addChild(
+    std::make_unique<mdl::BrushNode>(
+      builder.createCuboid(
+        vm::bbox3d{{0, 0, 0}, {64, 32, 16}}, "a", "a", "a", "a", "top", "a")
+      | kdl::value()));
 
-  auto* customLayer = new mdl::LayerNode{mdl::Layer{"Custom"}};
+  auto* customLayer =
+    &worldNode.addChild(std::make_unique<mdl::LayerNode>(mdl::Layer{"Custom"}));
   customLayer->setPersistentId(3);
-  worldNode.addChild(customLayer);
 
-  auto* group = new mdl::GroupNode{mdl::Group{"Room"}};
+  auto* group =
+    &customLayer->addChild(std::make_unique<mdl::GroupNode>(mdl::Group{"Room"}));
   group->setPersistentId(7);
-  customLayer->addChild(group);
-  auto* brushEntity = new mdl::EntityNode{mdl::Entity{{{"classname", "func_door"}}}};
-  group->addChild(brushEntity);
-  auto* entityBrush = new mdl::BrushNode{
-    builder.createCuboid(vm::bbox3d{{0, 0, 100}, {8, 8, 200}}, "door") | kdl::value()};
-  brushEntity->addChild(entityBrush);
+  auto* brushEntity = &group->addChild(
+    std::make_unique<mdl::EntityNode>(mdl::Entity{{{"classname", "func_door"}}}));
+  auto* entityBrush = &brushEntity->addChild(
+    std::make_unique<mdl::BrushNode>(
+      builder.createCuboid(vm::bbox3d{{0, 0, 100}, {8, 8, 200}}, "door") | kdl::value()));
 
-  auto* patch = new mdl::PatchNode{mdl::BezierPatch{
-    3,
-    3,
-    {{0, 0, 0, 0, 0},
-     {1, 0, 0, 0, 0},
-     {2, 0, 0, 0, 0},
-     {0, 1, 0, 0, 0},
-     {1, 1, 0, 0, 0},
-     {2, 1, 0, 0, 0},
-     {0, 2, 1, 0, 0},
-     {1, 2, 1, 0, 0},
-     {2, 2, 1, 0, 0}},
-    "patch"}};
-  defaultLayer.addChild(patch);
+  auto* patch = &defaultLayer.addChild(
+    std::make_unique<mdl::PatchNode>(mdl::BezierPatch{
+      3,
+      3,
+      {{0, 0, 0, 0, 0},
+       {1, 0, 0, 0, 0},
+       {2, 0, 0, 0, 0},
+       {0, 1, 0, 0, 0},
+       {1, 1, 0, 0, 0},
+       {2, 1, 0, 0, 0},
+       {0, 2, 1, 0, 0},
+       {1, 2, 1, 0, 0},
+       {2, 2, 1, 0, 0}},
+      "patch"}));
 
   const auto& faces = brush->brush().faces();
   const auto topFaceIt = std::ranges::find_if(

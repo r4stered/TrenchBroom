@@ -73,7 +73,7 @@ std::optional<NodeKind> kindFromName(const std::string_view name)
 std::string segment(const mdl::Node& node, const mdl::Node& parent)
 {
   const auto kind = kindOf(node);
-  const auto& siblings = parent.children();
+  auto siblings = parent.children();
   const auto end = std::ranges::find(siblings, &node);
   const auto index = std::count_if(
     siblings.begin(), end, [&](const auto* sibling) { return kindOf(*sibling) == kind; });

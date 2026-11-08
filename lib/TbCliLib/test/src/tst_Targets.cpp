@@ -28,6 +28,8 @@
 #include "mdl/Map_Nodes.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/ranges/to.h"
+
 #include <memory>
 #include <string>
 #include <tuple>
@@ -280,7 +282,7 @@ TEST_CASE("TargetResolver")
     CHECK(targets.inputPath(*brush.node) == "layer:0/group:0/brush:1");
 
     // a node that was not in the input rev has no path in it
-    const auto copy = std::unique_ptr<mdl::Node>{brush.node->clone(map.worldBounds())};
+    const auto copy = brush.node->clone(map.worldBounds());
     CHECK(targets.inputPath(*copy) == std::nullopt);
   }
 
@@ -322,7 +324,7 @@ TEST_CASE("TargetResolver")
     auto targets = TargetResolver{map, false};
     const auto resolved = targets.resolve(Json{"$pair"});
     auto* groupNode = resolveNodePath(worldNode, "layer:0/group:0").node;
-    targets.bind("$pair", groupNode->children());
+    targets.bind("$pair", groupNode->children() | kdl::ranges::to<std::vector>());
     CHECK(
       paths(targets.nodes(resolved, anyKind, "op: target"))
       == std::vector<std::string>{"layer:0/group:0/brush:0", "layer:0/group:0/brush:1"});
@@ -335,8 +337,7 @@ TEST_CASE("TargetResolver")
 
     auto* layer = resolveNodePath(worldNode, "layer:0").node;
     auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
-    auto* copy = brush->clone(map.worldBounds());
-    mdl::addNodes(map, {{layer, {copy}}});
+    auto* copy = mdl::addNode(map, *layer, brush->clone(map.worldBounds()));
     mdl::removeNodes(map, {brush});
     targets.replace({{brush, copy}});
 
@@ -350,8 +351,8 @@ TEST_CASE("TargetResolver")
   {
     auto targets = TargetResolver{map, false};
     auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
-    const auto copy = std::unique_ptr<mdl::Node>{brush->clone(map.worldBounds())};
-    const auto copyOfCopy = std::unique_ptr<mdl::Node>{brush->clone(map.worldBounds())};
+    const auto copy = brush->clone(map.worldBounds());
+    const auto copyOfCopy = brush->clone(map.worldBounds());
     CHECK(targets.current(brush) == brush);
 
     targets.replace({{brush, copy.get()}});

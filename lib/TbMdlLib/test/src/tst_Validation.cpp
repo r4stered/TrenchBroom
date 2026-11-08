@@ -161,25 +161,45 @@ TEST_CASE("Validation")
 
   SECTION("PointEntityWithBrushesValidator")
   {
-    auto* entityNode = createPointEntity(map, pointEntityDefinition, vm::vec3d{0, 0, 0});
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{entityNode, {brushNode}}});
-    REQUIRE(brushNode->parent() == entityNode);
+    auto entityNode1Ptr = std::make_unique<EntityNode>(
+      Entity{{{EntityPropertyKeys::Classname, pointEntityDefinition.name}}});
+    auto* entityNode1 = entityNode1Ptr.get();
+    auto* brushNode1 = &entityNode1->addChild(createBrushNode(map));
 
-    auto validator = std::make_unique<PointEntityWithBrushesValidator>();
-    auto validators = std::vector<const Validator*>{validator.get()};
+    auto entityNode2Ptr = std::make_unique<EntityNode>(
+      Entity{{{EntityPropertyKeys::Classname, pointEntityDefinition.name}}});
+    auto* entityNode2 = entityNode2Ptr.get();
+    auto* brushNode2 = &entityNode2->addChild(createBrushNode(map));
+
+    addNodes(
+      map,
+      parentForNodes(map),
+      kdl::vec_from<std::unique_ptr<Node>>(
+        std::move(entityNode1Ptr), std::move(entityNode2Ptr)));
+
+    auto pointEntityWithBrushesValidator =
+      std::make_unique<PointEntityWithBrushesValidator>();
+    auto validators =
+      std::vector<const Validator*>{pointEntityWithBrushesValidator.get()};
 
     const auto issues = collectIssues(map.worldNode(), validators);
-    REQUIRE(issues.size() == 1);
+    REQUIRE(issues.size() == 2);
 
-    auto fixes = map.worldNode().quickFixes(issues.front()->type());
+    auto fixes = map.worldNode().quickFixes(pointEntityWithBrushesValidator->type());
     REQUIRE(fixes.size() == 1);
-    fixes.front()->apply(map, issues);
 
-    // the brush is moved out, which leaves the entity empty, so that it is removed
-    CHECK(brushNode->parent() == &parentForNodes(map));
-    CHECK(!entityNode->isDescendantOf(map.worldNode()));
-    CHECK(map.selection().nodes == std::vector<Node*>{brushNode});
+    const auto* quickFix = fixes.at(0);
+    quickFix->apply(map, issues);
+
+    CHECK(entityNode1->parent() == &parentForNodes(map));
+    CHECK(entityNode2->parent() == &parentForNodes(map));
+    CHECK(brushNode1->parent() == &parentForNodes(map));
+    CHECK(brushNode2->parent() == &parentForNodes(map));
+    CHECK_THAT(
+      map.selection().nodes,
+      UnorderedRangeEquals(
+        std::vector<Node*>{entityNode1, brushNode1, entityNode2, brushNode2}));
+    CHECK(collectIssues(map.worldNode(), validators).empty());
   }
 
   SECTION("WorldNodePathSeparatorValidator")

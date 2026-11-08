@@ -45,6 +45,7 @@
 #include "mdl/Selection.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/ranges/to.h"
 #include "kd/result.h"
 
 #include "vm/vec.h"
@@ -54,6 +55,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -223,7 +225,7 @@ void group(OpContext& context)
   }
 
   context.outcome.created.push_back(groupNode);
-  context.outcome.modified = groupNode->children();
+  context.outcome.modified = groupNode->children() | kdl::ranges::to<std::vector>();
 }
 
 void ungroup(OpContext& context)
@@ -301,8 +303,9 @@ void createLayer(OpContext& context)
   layer.setSortIndex(
     !customLayers.empty() ? customLayers.back()->layer().sortIndex() + 1 : 0);
 
-  auto* layerNode = new mdl::LayerNode{std::move(layer)};
-  if (mdl::addNodes(map, {{&map.worldNode(), {layerNode}}}).empty())
+  auto* layerNode = mdl::addNode(
+    map, map.worldNode(), std::make_unique<mdl::LayerNode>(std::move(layer)));
+  if (!layerNode)
   {
     throw opFailed(context.opName, "cannot add the layer to the map");
   }

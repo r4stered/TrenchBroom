@@ -31,6 +31,7 @@
 #include "mdl/Validator.h"
 
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
 
 #include "vm/bbox.h"
 #include "vm/intersection.h"
@@ -92,12 +93,12 @@ double EntityNode::doGetProjectedArea(const vm::axis::type axis) const
   }
 }
 
-Node* EntityNode::doClone(const vm::bbox3d& /* worldBounds */) const
+std::unique_ptr<Node> EntityNode::doClone(const vm::bbox3d& /* worldBounds */) const
 {
   auto result = std::make_unique<EntityNode>(m_entity);
   cloneLinkId(*result);
   cloneAttributes(*result);
-  return result.release();
+  return result;
 }
 
 bool EntityNode::doCanAddChild(const Node& child) const
@@ -118,7 +119,7 @@ bool EntityNode::doCanRemoveChild(const Node&) const
 
 bool EntityNode::doRemoveIfEmpty() const
 {
-  return true;
+  return getPointEntityDefinition(m_entity.definition()) == nullptr;
 }
 
 bool EntityNode::doShouldAddToSpacialIndex() const
@@ -226,7 +227,7 @@ std::vector<Node*> EntityNode::nodesRequiredForViewSelection()
   if (hasChildren())
   {
     // Selecting a brush entity means selecting the children
-    return children();
+    return children() | kdl::ranges::to<std::vector>();
   }
   else
   {

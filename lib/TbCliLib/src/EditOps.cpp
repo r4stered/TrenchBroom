@@ -484,27 +484,28 @@ void addBrushes(OpContext& context, Result<std::vector<mdl::Brush>> brushes)
   }
 
   auto& map = context.map;
-  auto brushNodes = std::vector<std::unique_ptr<mdl::BrushNode>>{};
-  auto nodes = std::vector<mdl::Node*>{};
+  auto brushNodes = std::vector<mdl::BrushNode*>{};
+  auto nodes = std::vector<std::unique_ptr<mdl::Node>>{};
   for (auto& brush : brushes.value())
   {
-    brushNodes.push_back(std::make_unique<mdl::BrushNode>(std::move(brush)));
-    nodes.push_back(brushNodes.back().get());
+    auto brushNode = std::make_unique<mdl::BrushNode>(std::move(brush));
+    brushNodes.push_back(brushNode.get());
+    nodes.push_back(std::move(brushNode));
   }
-  if (mdl::addNodes(map, {{context.node("parent").node, nodes}}).empty())
+  if (mdl::addNodes(map, *context.node("parent").node, std::move(nodes)).empty())
   {
     throw CliError{
       ErrorCode::OpFailed, fmt::format("{}: cannot add the brush to the map", opName)};
   }
 
   auto missingMaterial = false;
-  for (auto& brushNode : brushNodes)
+  for (auto* brushNode : brushNodes)
   {
     missingMaterial = missingMaterial
                       || std::ranges::any_of(
                         brushNode->brush().faces(),
                         [&](const auto& face) { return isMaterialMissing(map, face); });
-    context.outcome.created.push_back(brushNode.release());
+    context.outcome.created.push_back(brushNode);
   }
   if (missingMaterial)
   {
@@ -683,14 +684,17 @@ void createPointEntity(OpContext& context)
   const auto* definition = checkedDefinition(context, mdl::EntityDefinitionType::Point);
   const auto& parent = context.node("parent");
 
-  auto entityNode = std::make_unique<mdl::EntityNode>(
-    newEntity(context, definition, vec3FromJson(context.args["origin"])));
-  if (mdl::addNodes(context.map, {{parent.node, {entityNode.get()}}}).empty())
+  auto* entityNode = mdl::addNode(
+    context.map,
+    *parent.node,
+    std::make_unique<mdl::EntityNode>(
+      newEntity(context, definition, vec3FromJson(context.args["origin"]))));
+  if (!entityNode)
   {
     throw CliError{
       ErrorCode::OpFailed, "create_point_entity: cannot add the entity to the map"};
   }
-  context.outcome.created.push_back(entityNode.release());
+  context.outcome.created.push_back(entityNode);
 }
 
 void checkCreatePointEntityArgs(const Json& args)
@@ -721,14 +725,15 @@ void createBrushEntity(OpContext& context)
   const auto ancestors = ancestorsOf(brushes);
   auto& parent = mdl::parentForNodes(map, brushes);
 
-  auto entityNode =
-    std::make_unique<mdl::EntityNode>(newEntity(context, definition, std::nullopt));
-  if (mdl::addNodes(map, {{&parent, {entityNode.get()}}}).empty())
+  auto* entity = mdl::addNode(
+    map,
+    parent,
+    std::make_unique<mdl::EntityNode>(newEntity(context, definition, std::nullopt)));
+  if (!entity)
   {
     throw CliError{
       ErrorCode::OpFailed, "create_brush_entity: cannot add the entity to the map"};
   }
-  auto* entity = entityNode.release();
   if (!mdl::reparentNodes(map, {{entity, brushes}}))
   {
     throw CliError{

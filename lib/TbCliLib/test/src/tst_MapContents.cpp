@@ -33,6 +33,7 @@
 
 #include "kd/result.h"
 
+#include <memory>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -44,41 +45,39 @@ TEST_CASE("MapContents")
 {
   const auto builder = mdl::BrushBuilder{mdl::MapFormat::Valve, vm::bbox3d{8192.0}};
   const auto makeBrush = [&](const vm::bbox3d& bounds) {
-    return new mdl::BrushNode{builder.createCuboid(bounds, "material") | kdl::value()};
+    return std::make_unique<mdl::BrushNode>(
+      builder.createCuboid(bounds, "material") | kdl::value());
   };
 
   auto worldNode =
     mdl::WorldNode{mdl::EntityPropertyConfig{}, mdl::Entity{}, mdl::MapFormat::Valve};
   auto& layer = *worldNode.defaultLayer();
 
-  auto* brush = makeBrush({{0, 0, 0}, {64, 64, 16}});
-  layer.addChild(brush);
+  auto* brush = &layer.addChild(makeBrush({{0, 0, 0}, {64, 64, 16}}));
 
-  auto* group = new mdl::GroupNode{mdl::Group{"group"}};
-  layer.addChild(group);
+  auto* group = &layer.addChild(std::make_unique<mdl::GroupNode>(mdl::Group{"group"}));
   // a point entity without a definition is 16 units wide
-  auto* pointEntity =
-    new mdl::EntityNode{mdl::Entity{{{"classname", "light"}, {"origin", "100 0 0"}}}};
-  group->addChild(pointEntity);
-  auto* brushEntity = new mdl::EntityNode{mdl::Entity{{{"classname", "func_door"}}}};
-  group->addChild(brushEntity);
-  auto* entityBrush = makeBrush({{0, 0, 100}, {8, 8, 200}});
-  brushEntity->addChild(entityBrush);
+  auto* pointEntity = &group->addChild(
+    std::make_unique<mdl::EntityNode>(
+      mdl::Entity{{{"classname", "light"}, {"origin", "100 0 0"}}}));
+  auto* brushEntity = &group->addChild(
+    std::make_unique<mdl::EntityNode>(mdl::Entity{{{"classname", "func_door"}}}));
+  auto* entityBrush = &brushEntity->addChild(makeBrush({{0, 0, 100}, {8, 8, 200}}));
 
-  auto* patch = new mdl::PatchNode{mdl::BezierPatch{
-    3,
-    3,
-    {{-50, 0, 0, 0, 0},
-     {-49, 0, 0, 0, 0},
-     {-48, 0, 0, 0, 0},
-     {-50, 1, 0, 0, 0},
-     {-49, 1, 0, 0, 0},
-     {-48, 1, 0, 0, 0},
-     {-50, 2, 0, 0, 0},
-     {-49, 2, 0, 0, 0},
-     {-48, 2, 0, 0, 0}},
-    "material"}};
-  layer.addChild(patch);
+  auto* patch = &layer.addChild(
+    std::make_unique<mdl::PatchNode>(mdl::BezierPatch{
+      3,
+      3,
+      {{-50, 0, 0, 0, 0},
+       {-49, 0, 0, 0, 0},
+       {-48, 0, 0, 0, 0},
+       {-50, 1, 0, 0, 0},
+       {-49, 1, 0, 0, 0},
+       {-48, 1, 0, 0, 0},
+       {-50, 2, 0, 0, 0},
+       {-49, 2, 0, 0, 0},
+       {-48, 2, 0, 0, 0}},
+      "material"}));
 
   SECTION("collectContents")
   {

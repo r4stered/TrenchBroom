@@ -142,8 +142,8 @@ TEST_CASE("Map")
     auto& map = fixture.create();
     CHECK(!map.modified());
 
-    auto* entityNode = new EntityNode{Entity{{{"key", "value"}}}};
-    addNodes(map, {{&parentForNodes(map), {entityNode}}});
+    addNode(
+      map, parentForNodes(map), std::make_unique<EntityNode>(Entity{{{"key", "value"}}}));
 
     CHECK(map.modified());
 
@@ -173,7 +173,7 @@ TEST_CASE("Map")
   {
     auto fixture = MapFixture{};
     auto& map = fixture.create();
-    addNodes(map, {{&parentForNodes(map), {createBrushNode(map)}}});
+    addNode(map, parentForNodes(map), createBrushNode(map));
 
     auto env = fs::TestEnvironment{};
     REQUIRE(map.saveTo(env.dir() / "test.map"));
@@ -191,10 +191,11 @@ TEST_CASE("Map")
 
     SECTION("brushFaces")
     {
-      auto* brushNode = createBrushNode(map);
+      auto brushNodePtr = createBrushNode(map);
+      auto* brushNode = brushNodePtr.get();
       CHECK(brushNode->logicalBounds().center() == vm::vec3d{0, 0, 0});
 
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      addNode(map, parentForNodes(map), std::move(brushNodePtr));
 
       const auto topFaceIndex = brushNode->brush().findFace(vm::vec3d{0, 0, 1});
       REQUIRE(topFaceIndex);
@@ -240,31 +241,38 @@ TEST_CASE("Map")
     {
       GIVEN("A document with multiple entity nodes in various configurations")
       {
-        auto* topLevelEntityNode = new EntityNode{Entity{}};
+        auto topLevelEntityNodePtr = std::make_unique<EntityNode>(Entity{});
+        auto* topLevelEntityNode = topLevelEntityNodePtr.get();
 
-        auto* emptyGroupNode = new GroupNode{Group{"empty"}};
-        auto* groupNodeWithEntity = new GroupNode{Group{"group"}};
-        auto* groupedEntityNode = new EntityNode{Entity{}};
-        groupNodeWithEntity->addChild(groupedEntityNode);
+        auto emptyGroupNodePtr = std::make_unique<GroupNode>(Group{"empty"});
+        auto* emptyGroupNode = emptyGroupNodePtr.get();
+        auto groupNodeWithEntityPtr = std::make_unique<GroupNode>(Group{"group"});
+        auto* groupNodeWithEntity = groupNodeWithEntityPtr.get();
+        auto* groupedEntityNode =
+          &groupNodeWithEntity->addChild(std::make_unique<EntityNode>(Entity{}));
 
-        auto* topLevelBrushNode = createBrushNode(map);
-        auto* topLevelPatchNode = createPatchNode();
+        auto topLevelBrushNodePtr = createBrushNode(map);
+        auto* topLevelBrushNode = topLevelBrushNodePtr.get();
+        auto topLevelPatchNodePtr = createPatchNode();
+        auto* topLevelPatchNode = topLevelPatchNodePtr.get();
 
-        auto* topLevelBrushEntityNode = new EntityNode{Entity{}};
-        auto* brushEntityBrushNode = createBrushNode(map);
-        auto* brushEntityPatchNode = createPatchNode();
-        topLevelBrushEntityNode->addChildren(
-          {brushEntityBrushNode, brushEntityPatchNode});
+        auto topLevelBrushEntityNodePtr = std::make_unique<EntityNode>(Entity{});
+        auto* topLevelBrushEntityNode = topLevelBrushEntityNodePtr.get();
+        auto* brushEntityBrushNode =
+          &topLevelBrushEntityNode->addChild(createBrushNode(map));
+        auto* brushEntityPatchNode =
+          &topLevelBrushEntityNode->addChild(createPatchNode());
 
         addNodes(
           map,
-          {{&parentForNodes(map),
-            {topLevelEntityNode,
-             topLevelBrushEntityNode,
-             topLevelBrushNode,
-             topLevelPatchNode,
-             emptyGroupNode,
-             groupNodeWithEntity}}});
+          parentForNodes(map),
+          kdl::vec_from<std::unique_ptr<Node>>(
+            std::move(topLevelEntityNodePtr),
+            std::move(topLevelBrushEntityNodePtr),
+            std::move(topLevelBrushNodePtr),
+            std::move(topLevelPatchNodePtr),
+            std::move(emptyGroupNodePtr),
+            std::move(groupNodeWithEntityPtr)));
 
         deselectAll(map);
 
@@ -410,62 +418,48 @@ TEST_CASE("Map")
 
     SECTION("allBrushes")
     {
-      auto* brushNodeInDefaultLayer = createBrushNode(map, "brushNodeInDefaultLayer");
-      auto* brushNodeInCustomLayer = createBrushNode(map, "brushNodeInCustomLayer");
-      auto* brushNodeInEntity = createBrushNode(map, "brushNodeInEntity");
-      auto* brushNodeInGroup = createBrushNode(map, "brushNodeInGroup");
-      auto* brushNodeInNestedGroup = createBrushNode(map, "brushNodeInNestedGroup");
+      auto& defaultLayerNode = *map.worldNode().defaultLayer();
+      auto* brushNodeInDefaultLayer =
+        addNode(map, defaultLayerNode, createBrushNode(map, "brushNodeInDefaultLayer"));
+      auto* brushEntityNode =
+        addNode(map, defaultLayerNode, std::make_unique<EntityNode>(Entity{}));
+      addNode(map, defaultLayerNode, std::make_unique<EntityNode>(Entity{}));
+      auto* outerGroupNode = addNode(
+        map, defaultLayerNode, std::make_unique<GroupNode>(Group{"outerGroupNode"}));
+      auto* customLayerNode = addNode(
+        map, map.worldNode(), std::make_unique<LayerNode>(Layer{"customLayerNode"}));
 
-      auto* customLayerNode = new LayerNode{Layer{"customLayerNode"}};
-      auto* brushEntityNode = new EntityNode{Entity{}};
-      auto* pointEntityNode = new EntityNode{Entity{}};
-      auto* outerGroupNode = new GroupNode{Group{"outerGroupNode"}};
-      auto* innerGroupNode = new GroupNode{Group{"outerGroupNode"}};
+      auto* brushNodeInCustomLayer =
+        addNode(map, *customLayerNode, createBrushNode(map, "brushNodeInCustomLayer"));
+      auto* innerGroupNode = addNode(
+        map, *outerGroupNode, std::make_unique<GroupNode>(Group{"outerGroupNode"}));
+      auto* brushNodeInGroup =
+        addNode(map, *outerGroupNode, createBrushNode(map, "brushNodeInGroup"));
+      auto* brushNodeInEntity =
+        addNode(map, *brushEntityNode, createBrushNode(map, "brushNodeInEntity"));
 
-      addNodes(
-        map,
-        {{map.worldNode().defaultLayer(),
-          {brushNodeInDefaultLayer, brushEntityNode, pointEntityNode, outerGroupNode}},
-         {&map.worldNode(), {customLayerNode}}});
+      auto* brushNodeInNestedGroup =
+        addNode(map, *innerGroupNode, createBrushNode(map, "brushNodeInNestedGroup"));
 
-      addNodes(
-        map,
-        {
-          {customLayerNode, {brushNodeInCustomLayer}},
-          {outerGroupNode, {innerGroupNode, brushNodeInGroup}},
-          {brushEntityNode, {brushNodeInEntity}},
-        });
-
-      addNodes(map, {{innerGroupNode, {brushNodeInNestedGroup}}});
-
-      const auto getPath = [&](const Node* node) {
-        return node->pathFrom(map.worldNode());
-      };
-      const auto resolvePaths = [&](const auto& paths) {
-        return paths | std::views::transform([&](const auto& path) {
-                 return map.worldNode().resolvePath(path);
-               })
-               | kdl::ranges::to<std::vector>();
+      // the nodes are recreated for every generated value, so the generator yields
+      // indices into this vector instead of the nodes themselves
+      const auto allBrushNodes = std::vector<BrushNode*>{
+        brushNodeInDefaultLayer,
+        brushNodeInCustomLayer,
+        brushNodeInEntity,
+        brushNodeInGroup,
+        brushNodeInNestedGroup,
       };
 
-      using T = std::vector<NodePath>;
+      using T = std::vector<size_t>;
+      const auto indices = GENERATE(values<T>({{}, {0}, {0, 1}, {0, 1, 2}, {3}, {3, 4}}));
 
-      // clang-format off
-      const auto 
-      paths = GENERATE_COPY(values<T>({
-      {},
-      {getPath(brushNodeInDefaultLayer)},
-      {getPath(brushNodeInDefaultLayer), getPath(brushNodeInCustomLayer)},
-      {getPath(brushNodeInDefaultLayer), getPath(brushNodeInCustomLayer), getPath(brushNodeInEntity)},
-      {getPath(brushNodeInGroup)},
-      {getPath(brushNodeInGroup), getPath(brushNodeInNestedGroup)},
-      }));
-      // clang-format on
+      const auto brushNodes =
+        indices
+        | std::views::transform([&](const auto index) { return allBrushNodes[index]; })
+        | kdl::ranges::to<std::vector>();
 
-      const auto nodes = resolvePaths(paths);
-      const auto brushNodes = kdl::vec_static_cast<BrushNode*>(nodes);
-
-      selectNodes(map, nodes);
+      selectNodes(map, kdl::vec_static_cast<Node*>(brushNodes));
 
       CHECK_THAT(map.selection().allBrushes(), UnorderedEquals(brushNodes));
     }
@@ -533,11 +527,11 @@ TEST_CASE("Map")
 
     SECTION("Grouped nodes")
     {
-      auto* entityNode = new EntityNode{Entity{}};
-      auto* brushNode = createBrushNode(map);
-      entityNode->addChild(brushNode);
+      auto entityNodePtr = std::make_unique<EntityNode>(Entity{});
+      auto* entityNode = entityNodePtr.get();
+      auto* brushNode = &entityNode->addChild(createBrushNode(map));
 
-      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      addNode(map, parentForNodes(map), std::move(entityNodePtr));
       selectNodes(map, {entityNode});
 
       auto* groupNode = groupSelectedNodes(map, "test");
@@ -584,8 +578,7 @@ TEST_CASE("Map")
 
     SECTION("Linked group")
     {
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {brushNode});
 
       auto* groupNode = groupSelectedNodes(map, "test");
@@ -602,8 +595,7 @@ TEST_CASE("Map")
 
     SECTION("Nodes in a linked group")
     {
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {brushNode});
 
       auto* groupNode = groupSelectedNodes(map, "test");
@@ -623,8 +615,7 @@ TEST_CASE("Map")
 
     SECTION("Groups in a linked group")
     {
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {brushNode});
 
       auto* innerGroupNode = groupSelectedNodes(map, "inner");
@@ -650,15 +641,13 @@ TEST_CASE("Map")
 
     SECTION("Nested groups")
     {
-      auto* innerBrushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {innerBrushNode}}});
+      auto* innerBrushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {innerBrushNode});
 
       auto* groupNode = groupSelectedNodes(map, "test");
       REQUIRE(groupNode != nullptr);
 
-      auto* outerBrushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {outerBrushNode}}});
+      auto* outerBrushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       deselectAll(map);
       selectNodes(map, {groupNode, outerBrushNode});
@@ -688,8 +677,7 @@ TEST_CASE("Map")
         outerBrushNode
       */
 
-      auto* innerBrushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {innerBrushNode}}});
+      auto* innerBrushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {innerBrushNode});
 
       auto* innerGroupNode = groupSelectedNodes(map, "inner");
@@ -703,8 +691,7 @@ TEST_CASE("Map")
 
       const auto linkedInnerBrushNode = getChildAs<BrushNode>(*linkedInnerGroupNode);
 
-      auto* outerBrushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {outerBrushNode}}});
+      auto* outerBrushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       deselectAll(map);
       selectNodes(map, {innerGroupNode, linkedInnerGroupNode, outerBrushNode});

@@ -24,77 +24,27 @@
 #include "mdl/Issue.h"
 #include "mdl/Validator.h"
 
-#include "kd/const_overload.h"
 #include "kd/contracts.h"
-#include "kd/range_utils.h"
-#include "kd/ranges/as_rvalue_view.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
-#include "kd/reflection_impl.h"
-#include "kd/vector_utils.h"
 
 #include <algorithm>
-#include <iterator>
 #include <ranges>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tb::mdl
 {
 
-kdl_reflect_impl(NodePath);
-
 Node::Node() = default;
 
-Node::~Node()
-{
-  clearChildren();
-}
+Node::~Node() = default;
 
 const std::string& Node::name() const
 {
   return doGetName();
-}
-
-NodePath Node::pathFrom(const Node& ancestor) const
-{
-  auto result = NodePath{};
-
-  auto* parent = m_parent;
-  auto* child = this;
-  while (parent && child != &ancestor)
-  {
-    const auto index = kdl::index_of(parent->children(), child);
-
-    result.indices.push_back(*index);
-    child = parent;
-    parent = parent->m_parent;
-  }
-
-  contract_assert(child == &ancestor);
-
-  std::ranges::reverse(result.indices);
-  return result;
-}
-
-Node* Node::resolvePath(const NodePath& path)
-{
-  return KDL_CONST_OVERLOAD(resolvePath(path));
-}
-
-const Node* Node::resolvePath(const NodePath& path) const
-{
-  const auto* node = this;
-  for (const auto index : path.indices)
-  {
-    if (index >= node->childCount())
-    {
-      return nullptr;
-    }
-
-    node = node->children()[index];
-  }
-  return node;
 }
 
 const vm::bbox3d& Node::logicalBounds() const
@@ -112,12 +62,12 @@ double Node::projectedArea(const vm::axis::type axis) const
   return doGetProjectedArea(axis);
 }
 
-Node* Node::clone(const vm::bbox3d& worldBounds) const
+std::unique_ptr<Node> Node::clone(const vm::bbox3d& worldBounds) const
 {
   return doClone(worldBounds);
 }
 
-Node* Node::cloneRecursively(const vm::bbox3d& worldBounds) const
+std::unique_ptr<Node> Node::cloneRecursively(const vm::bbox3d& worldBounds) const
 {
   return doCloneRecursively(worldBounds);
 }
@@ -126,25 +76,6 @@ void Node::cloneAttributes(Node& node) const
 {
   node.setVisibilityState(m_visibilityState);
   node.setLockState(m_lockState);
-}
-
-std::vector<Node*> Node::clone(
-  const vm::bbox3d& worldBounds, const std::vector<Node*>& nodes)
-{
-  auto clones = std::vector<Node*>{};
-  clones.reserve(nodes.size());
-  clone(worldBounds, std::begin(nodes), std::end(nodes), std::back_inserter(clones));
-  return clones;
-}
-
-std::vector<Node*> Node::cloneRecursively(
-  const vm::bbox3d& worldBounds, const std::vector<Node*>& nodes)
-{
-  auto clones = std::vector<Node*>{};
-  clones.reserve(nodes.size());
-  cloneRecursively(
-    worldBounds, std::begin(nodes), std::end(nodes), std::back_inserter(clones));
-  return clones;
 }
 
 size_t Node::depth() const
@@ -216,11 +147,6 @@ size_t Node::childCount() const
   return m_children.size();
 }
 
-const std::vector<Node*>& Node::children() const
-{
-  return m_children;
-}
-
 size_t Node::descendantCount() const
 {
   return m_descendantCount;
@@ -236,18 +162,23 @@ bool Node::shouldAddToSpacialIndex() const
   return doShouldAddToSpacialIndex();
 }
 
-void Node::addChildren(const std::vector<Node*>& children)
+void Node::addChildren(std::vector<std::unique_ptr<Node>> children)
 {
-  addChildren(std::begin(children), std::end(children), children.size());
-}
-
-Node& Node::addChild(Node* child)
-{
-  doAddChild(child);
-  incDescendantCount(child->descendantCount() + 1u);
-  incChildSelectionCount(child->selected() ? 1u : 0u);
-  incDescendantSelectionCount(child->descendantSelectionCount());
-  return *child;
+  m_children.reserve(m_children.size() + children.size());
+  auto descendantCountDelta = size_t(0);
+  auto childSelectionCountDelta = size_t(0);
+  auto descendantSelectionCountDelta = size_t(0);
+  for (auto& child : children)
+  {
+    auto* newChild = child.get();
+    doAddChild(std::move(child));
+    descendantCountDelta += newChild->descendantCount() + 1;
+    childSelectionCountDelta += newChild->selected() ? 1u : 0u;
+    descendantSelectionCountDelta += newChild->descendantSelectionCount();
+  }
+  incDescendantCount(descendantCountDelta);
+  incChildSelectionCount(childSelectionCountDelta);
+  incDescendantSelectionCount(descendantSelectionCountDelta);
 }
 
 std::vector<std::unique_ptr<Node>> Node::replaceChildren(
@@ -255,7 +186,7 @@ std::vector<std::unique_ptr<Node>> Node::replaceChildren(
 {
   // nodeWillChange();
 
-  for (auto* child : m_children)
+  for (const auto& child : m_children)
   {
     contract_assert(child != nullptr);
     contract_assert(child->parent() == this);
@@ -265,11 +196,7 @@ std::vector<std::unique_ptr<Node>> Node::replaceChildren(
     child->setParent(nullptr);
   }
 
-  auto oldChildren =
-    m_children
-    | std::views::transform([](auto* child) { return std::unique_ptr<Node>(child); })
-    | kdl::ranges::to<std::vector>();
-  m_children.clear();
+  auto oldChildren = std::exchange(m_children, {});
 
   for (auto& child : oldChildren)
   {
@@ -277,22 +204,67 @@ std::vector<std::unique_ptr<Node>> Node::replaceChildren(
   }
 
   decDescendantCount(descendantCount());
-  addChildren(
-    newChildren | kdl::views::as_rvalue
-    | std::views::transform([](auto&& child) { return child.release(); })
-    | kdl::ranges::to<std::vector>());
+  decChildSelectionCount(childSelectionCount());
+  decDescendantSelectionCount(descendantSelectionCount());
+  addChildren(std::move(newChildren));
 
   // nodeDidChange();
 
   return oldChildren;
 }
 
-void Node::removeChild(Node* child)
+std::vector<std::unique_ptr<Node>> Node::removeChildren(
+  const std::vector<Node*>& children)
 {
-  doRemoveChild(child);
-  decDescendantCount(child->descendantCount() + 1u);
-  decChildSelectionCount(child->selected() ? 1u : 0u);
-  decDescendantSelectionCount(child->descendantSelectionCount());
+  auto descendantCountDelta = size_t(0);
+  auto childSelectionCountDelta = size_t(0);
+  auto descendantSelectionCountDelta = size_t(0);
+  for (auto* child : children)
+  {
+    contract_pre(child != nullptr);
+    contract_pre(child->parent() == this);
+    contract_pre(canRemoveChild(*child));
+
+    childWillBeRemoved(*child);
+    child->setParent(nullptr);
+    descendantCountDelta += child->descendantCount() + 1;
+    childSelectionCountDelta += child->selected() ? 1u : 0u;
+    descendantSelectionCountDelta += child->descendantSelectionCount();
+  }
+
+  const auto removedRange = std::ranges::stable_partition(
+    m_children, [&](const auto& child) { return child->parent() == this; });
+
+  auto removedChildren = std::unordered_map<Node*, std::unique_ptr<Node>>{};
+  for (auto& child : removedRange)
+  {
+    auto* childPtr = child.get();
+    removedChildren.emplace(childPtr, std::move(child));
+  }
+  m_children.erase(removedRange.begin(), removedRange.end());
+
+  auto result = std::vector<std::unique_ptr<Node>>{};
+  result.reserve(children.size());
+  for (auto* child : children)
+  {
+    result.push_back(std::move(removedChildren.extract(child).mapped()));
+    childWasRemoved(*child);
+  }
+
+  decDescendantCount(descendantCountDelta);
+  decChildSelectionCount(childSelectionCountDelta);
+  decDescendantSelectionCount(descendantSelectionCountDelta);
+
+  return result;
+}
+
+std::unique_ptr<Node> Node::removeChild(Node* child)
+{
+  auto result = doRemoveChild(child);
+  decDescendantCount(result->descendantCount() + 1u);
+  decChildSelectionCount(result->selected() ? 1u : 0u);
+  decDescendantSelectionCount(result->descendantSelectionCount());
+  return result;
 }
 
 bool Node::canAddChild(const Node& child) const
@@ -305,22 +277,23 @@ bool Node::canRemoveChild(const Node& child) const
   return doCanRemoveChild(child);
 }
 
-void Node::doAddChild(Node* child)
+void Node::doAddChild(std::unique_ptr<Node> child)
 {
   contract_pre(child != nullptr);
   contract_pre(child->parent() == nullptr);
-  contract_pre(!kdl::ranges::contains(m_children, child));
+  contract_pre(!kdl::ranges::contains(children(), child.get()));
   contract_pre(canAddChild(*child));
 
-  childWillBeAdded(*child);
+  auto& newChild = *child;
+  childWillBeAdded(newChild);
   // nodeWillChange();
-  m_children.push_back(child);
-  child->setParent(this);
-  childWasAdded(*child);
+  m_children.push_back(std::move(child));
+  newChild.setParent(this);
+  childWasAdded(newChild);
   // nodeDidChange();
 }
 
-void Node::doRemoveChild(Node* child)
+std::unique_ptr<Node> Node::doRemoveChild(Node* child)
 {
   contract_pre(child != nullptr);
   contract_pre(child->parent() == this);
@@ -329,14 +302,14 @@ void Node::doRemoveChild(Node* child)
   childWillBeRemoved(*child);
   // nodeWillChange();
   child->setParent(nullptr);
-  m_children = kdl::vec_erase(std::move(m_children), child);
+  const auto it = std::ranges::find_if(
+    m_children, [&](const auto& existingChild) { return existingChild.get() == child; });
+  auto result = std::move(*it);
+  m_children.erase(it);
   childWasRemoved(*child);
   // nodeDidChange();
-}
 
-void Node::clearChildren()
-{
-  kdl::vec_clear_and_delete(m_children);
+  return result;
 }
 
 void Node::childWillBeAdded(Node& node)
@@ -455,7 +428,7 @@ void Node::parentDidChange()
 void Node::ancestorWillChange()
 {
   doAncestorWillChange();
-  for (auto* child : m_children)
+  for (const auto& child : m_children)
   {
     child->ancestorWillChange();
   }
@@ -465,7 +438,7 @@ void Node::ancestorWillChange()
 void Node::ancestorDidChange()
 {
   doAncestorDidChange();
-  for (auto* child : m_children)
+  for (const auto& child : m_children)
   {
     child->ancestorDidChange();
   }
@@ -870,9 +843,9 @@ const EntityPropertyConfig& Node::entityPropertyConfig() const
   return doGetEntityPropertyConfig();
 }
 
-Node* Node::doCloneRecursively(const vm::bbox3d& worldBounds) const
+std::unique_ptr<Node> Node::doCloneRecursively(const vm::bbox3d& worldBounds) const
 {
-  auto* clone = Node::clone(worldBounds);
+  auto clone = Node::clone(worldBounds);
   clone->addChildren(Node::cloneRecursively(worldBounds, children()));
   return clone;
 }

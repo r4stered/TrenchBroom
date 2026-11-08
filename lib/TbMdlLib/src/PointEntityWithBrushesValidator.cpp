@@ -27,7 +27,6 @@
 #include "mdl/Map.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
-#include "mdl/WorldNode.h"
 
 #include "kd/flat_map.h"
 #include "kd/vector_utils.h"
@@ -49,7 +48,7 @@ IssueQuickFix makeMoveBrushesToWorldQuickFix()
             for (const auto* issue : issues)
             {
               auto& node = issue->node();
-              nodesToReparent[node.parent()] = node.children();
+              kdl::vec_append(nodesToReparent[node.parent()], node.children());
 
               affectedNodes.push_back(&node);
               kdl::vec_append(affectedNodes, node.children());
@@ -57,11 +56,6 @@ IssueQuickFix makeMoveBrushesToWorldQuickFix()
 
             deselectAll(map);
             reparentNodes(map, nodesToReparent);
-
-            // an entity left without brushes is removed
-            std::erase_if(affectedNodes, [&](const auto* node) {
-              return !node->isDescendantOf(map.worldNode());
-            });
             selectNodes(map, affectedNodes);
           }};
 }

@@ -36,6 +36,7 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/overload.h"
+#include "kd/ranges/to.h"
 
 #include <vector>
 
@@ -48,9 +49,10 @@ constexpr auto MaxChildren = size_t{200};
 
 Json childPaths(const mdl::Node& node)
 {
-  return capped(node.children(), MaxChildren, [](const auto* child) {
-    return Json{nodePath(*child)};
-  });
+  return capped(
+    node.children() | kdl::ranges::to<std::vector>(), MaxChildren, [](const auto* child) {
+      return Json{nodePath(*child)};
+    });
 }
 
 /** A group with its children and, if it is linked, the paths of its siblings. */

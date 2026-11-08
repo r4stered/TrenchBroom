@@ -1231,9 +1231,11 @@ TEST_CASE("fix")
          "point_entity_with_brushes",
          "--fix",
          "move_brushes_to_world"});
-      CHECK(json["ops"][0]["modified"] == parseJsonLiteral(R"(["layer:0/brush:1"])"));
-      // the light is left without brushes, which removes it
-      CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"(["layer:0/entity:1"])"));
+      // the light is left without brushes, but a point entity is kept when it is empty
+      CHECK(
+        json["ops"][0]["modified"]
+        == parseJsonLiteral(R"(["layer:0/entity:1", "layer:0/brush:1"])"));
+      CHECK(json["ops"][0]["removed"] == parseJsonLiteral(R"([])"));
       CHECK(issueNodes(map, "point_entity_with_brushes").empty());
     }
 

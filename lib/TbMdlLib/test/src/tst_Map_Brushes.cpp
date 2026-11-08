@@ -106,8 +106,7 @@ TEST_CASE("Map_Brushes")
     {
       auto& map = fixture.create();
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       const size_t firstFaceIndex = 0u;
       const size_t secondFaceIndex = 1u;
@@ -238,8 +237,8 @@ TEST_CASE("Map_Brushes")
     {
       auto& map = fixture.create();
 
-      auto* brushNode = createBrushNode(map, "original");
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode =
+        addNode(map, parentForNodes(map), createBrushNode(map, "original"));
 
       for (const auto& face : brushNode->brush().faces())
       {
@@ -277,7 +276,7 @@ TEST_CASE("Map_Brushes")
       REQUIRE(map.editorContext().currentLayer() != nullptr);
 
       auto* lavabrush =
-        dynamic_cast<BrushNode*>(map.editorContext().currentLayer()->children().at(0));
+        dynamic_cast<BrushNode*>(map.editorContext().currentLayer()->children()[0]);
       REQUIRE(lavabrush);
       CHECK(getFace(*lavabrush, 0).surfaceAttributes().empty());
       CHECK(
@@ -285,7 +284,7 @@ TEST_CASE("Map_Brushes")
         == LavaFlag); // comes from the .wal texture
 
       auto* waterbrush =
-        dynamic_cast<BrushNode*>(map.editorContext().currentLayer()->children().at(1));
+        dynamic_cast<BrushNode*>(map.editorContext().currentLayer()->children()[1]);
       REQUIRE(waterbrush);
       CHECK(getFace(*waterbrush, 0).surfaceAttributes().empty());
       CHECK(
@@ -328,8 +327,7 @@ TEST_CASE("Map_Brushes")
     {
       auto& map = fixture.create(QuakeFixtureConfig);
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       selectNodes(map, {brushNode});
       CHECK(getFace(*brushNode, 0).surfaceAttributes().empty());
@@ -350,8 +348,7 @@ TEST_CASE("Map_Brushes")
 
       auto& map = fixture.create(fixtureConfig);
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       const size_t faceIndex = 0u;
       const auto initialX = getFace(*brushNode, faceIndex).uAxis();
@@ -389,8 +386,7 @@ TEST_CASE("Map_Brushes")
 
       auto& map = fixture.create();
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       selectNodes(map, {brushNode});
 
       auto* groupNode = groupSelectedNodes(map, "test");
@@ -410,7 +406,7 @@ TEST_CASE("Map_Brushes")
         // check that the brushes in both linked groups got a material
         for (auto* g : std::vector<GroupNode*>{groupNode, linkedGroupNode})
         {
-          auto* brush = dynamic_cast<BrushNode*>(g->children().at(0));
+          auto* brush = dynamic_cast<BrushNode*>(g->children()[0]);
           REQUIRE(brush != nullptr);
 
           CHECK(getFace(*brush, 0).materialName() == "abc");
@@ -422,8 +418,7 @@ TEST_CASE("Map_Brushes")
     {
       auto& map = fixture.create();
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
       const size_t faceIndex = 0u;
       deselectAll(map);
@@ -444,8 +439,7 @@ TEST_CASE("Map_Brushes")
     {
       auto& map = fixture.create();
 
-      auto* brushNode = createBrushNode(map);
-      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
       deselectAll(map);
 
       const auto originalFace = getFace(*brushNode, 1u);
@@ -464,8 +458,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto sourceFaceIndex = brushNode->brush().findFace(vm::vec3d{0, -1, 0});
     REQUIRE(sourceFaceIndex);
@@ -550,8 +543,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, 0, 1});
     REQUIRE(faceIndex);
@@ -625,8 +617,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     SECTION("accepts valid rotations")
     {
@@ -716,8 +707,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, 0, 1});
     REQUIRE(faceIndex);
@@ -781,8 +771,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, 0, 1});
     REQUIRE(faceIndex);
@@ -856,8 +845,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, -1, 0});
     REQUIRE(faceIndex);
@@ -925,8 +913,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, -1, 0});
     REQUIRE(faceIndex);
@@ -999,8 +986,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto faceIndex = brushNode->brush().findFace(vm::vec3d{0, -1, 0});
     REQUIRE(faceIndex);
@@ -1095,8 +1081,7 @@ TEST_CASE("Map_Brushes")
   {
     auto& map = fixture.create(QuakeFixtureConfig);
 
-    auto* brushNode = createBrushNode(map);
-    addNodes(map, {{&parentForNodes(map), {brushNode}}});
+    auto* brushNode = addNode(map, parentForNodes(map), createBrushNode(map));
 
     const auto iFront = *brushNode->brush().findFace(vm::vec3d{0, -1, 0});
     REQUIRE(iFront);

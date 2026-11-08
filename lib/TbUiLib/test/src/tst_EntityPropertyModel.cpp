@@ -29,6 +29,8 @@
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
 
+#include "kd/vector_utils.h"
+
 #include <catch2/catch_test_macros.hpp>
 
 namespace tb::ui
@@ -40,21 +42,22 @@ TEST_CASE("EntityPropertyModel")
   auto& document = fixture.create();
   auto& map = document.map();
 
-  auto* entityNode1 = new mdl::EntityNode{mdl::Entity{{
+  auto entityNode1Ptr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
     {"some_key", "some_value"},
-  }}};
+  }});
+  auto* entityNode1 = entityNode1Ptr.get();
 
-  auto* entityNode2 = new mdl::EntityNode{mdl::Entity{{
+  auto entityNode2Ptr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
     {"some_key", "some_other_value"},
     {"some_other_key", "yet_another_value"},
-  }}};
+  }});
+  auto* entityNode2 = entityNode2Ptr.get();
 
-  auto* groupedEntityNode = new mdl::EntityNode{mdl::Entity{{
-    {"some_key", "some_value"},
-  }}};
-
-  auto* groupNode = new mdl::GroupNode{mdl::Group{"group"}};
-  groupNode->addChild(groupedEntityNode);
+  auto groupNode = std::make_unique<mdl::GroupNode>(mdl::Group{"group"});
+  auto* groupedEntityNode =
+    &groupNode->addChild(std::make_unique<mdl::EntityNode>(mdl::Entity{{
+      {"some_key", "some_value"},
+    }}));
 
   map.entityDefinitionManager().setDefinitions({
     {"source_entity",
@@ -93,34 +96,34 @@ TEST_CASE("EntityPropertyModel")
      }},
   });
 
-  auto* sourceEntity = new mdl::EntityNode{mdl::Entity{{
+  auto sourceEntityPtr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
     {"classname", "source_entity"},
     {"target", "some_target"},
-  }}};
+  }});
+  auto* sourceEntity = sourceEntityPtr.get();
 
-  auto* targetEntity = new mdl::EntityNode{mdl::Entity{{
+  auto targetEntityPtr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
     {"classname", "target_entity"},
     {"targetname", "some_target"},
-  }}};
+  }});
+  auto* targetEntity = targetEntityPtr.get();
 
-  auto* readonlyEntity = new mdl::EntityNode{mdl::Entity{{
+  auto readonlyEntityPtr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
     {"classname", "readonly_entity"},
     {"readonly", "some_value"},
-  }}};
+  }});
+  auto* readonlyEntity = readonlyEntityPtr.get();
 
   mdl::addNodes(
     map,
-    {
-      {&mdl::parentForNodes(map),
-       {
-         entityNode1,
-         entityNode2,
-         groupNode,
-         sourceEntity,
-         targetEntity,
-         readonlyEntity,
-       }},
-    });
+    mdl::parentForNodes(map),
+    kdl::vec_from<std::unique_ptr<mdl::Node>>(
+      std::move(entityNode1Ptr),
+      std::move(entityNode2Ptr),
+      std::move(groupNode),
+      std::move(sourceEntityPtr),
+      std::move(targetEntityPtr),
+      std::move(readonlyEntityPtr)));
 
   auto model = EntityPropertyModel{document};
 
@@ -424,19 +427,20 @@ TEST_CASE("EntityPropertyModel")
     {
       const auto specialKey = std::string{"name%with%specials"};
 
-      auto* literalKeyEntityNode = new mdl::EntityNode{mdl::Entity{{
+      auto literalKeyEntityNodePtr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
         {specialKey, "literal_value"},
-      }}};
-      auto* wildcardMatchedEntityNode = new mdl::EntityNode{mdl::Entity{{
+      }});
+      auto* literalKeyEntityNode = literalKeyEntityNodePtr.get();
+      auto wildcardMatchedEntityNodePtr = std::make_unique<mdl::EntityNode>(mdl::Entity{{
         {"name1with2specials", "wildcard_value"},
-      }}};
+      }});
+      auto* wildcardMatchedEntityNode = wildcardMatchedEntityNodePtr.get();
 
       mdl::addNodes(
         map,
-        {{
-          &mdl::parentForNodes(map),
-          {literalKeyEntityNode, wildcardMatchedEntityNode},
-        }});
+        mdl::parentForNodes(map),
+        kdl::vec_from<std::unique_ptr<mdl::Node>>(
+          std::move(literalKeyEntityNodePtr), std::move(wildcardMatchedEntityNodePtr)));
 
       mdl::selectNodes(map, {literalKeyEntityNode, wildcardMatchedEntityNode});
       model.updateFromMap();
@@ -449,17 +453,95 @@ TEST_CASE("EntityPropertyModel")
     }
   }
 
+  SECTION("setData")
+  {
+    auto* unsetEntityNode = mdl::addNode(
+      map,
+      mdl::parentForNodes(map),
+      std::make_unique<mdl::EntityNode>(mdl::Entity{{
+        {"classname", "source_entity"},
+      }}));
+
+    const auto valueIndex = [&](const std::string& propertyKey) {
+      return model.index(
+        model.rowIndexForPropertyKey(propertyKey), EntityPropertyModel::ColumnValue);
+    };
+
+    SECTION("Sets a changed value")
+    {
+      mdl::selectNodes(map, {unsetEntityNode});
+      model.updateFromMap();
+
+      CHECK(model.setData(valueIndex("target"), "some_target", Qt::EditRole));
+      CHECK(
+        unsetEntityNode->entity().properties()
+        == std::vector<mdl::EntityProperty>{
+          {"classname", "source_entity"},
+          {"target", "some_target"},
+        });
+    }
+
+    SECTION("Does nothing if the value is unchanged")
+    {
+      SECTION("Default property")
+      {
+        mdl::selectNodes(map, {unsetEntityNode});
+        model.updateFromMap();
+
+        const auto index = valueIndex("target");
+        REQUIRE(model.rows().at(size_t(index.row())).valueState == ValueState::Unset);
+
+        CHECK(model.setData(index, index.data(Qt::EditRole), Qt::EditRole));
+        CHECK(
+          unsetEntityNode->entity().properties()
+          == std::vector<mdl::EntityProperty>{
+            {"classname", "source_entity"},
+          });
+      }
+
+      SECTION("Property with multiple values")
+      {
+        mdl::selectNodes(map, {entityNode1, entityNode2});
+        model.updateFromMap();
+
+        const auto index = valueIndex("some_key");
+        REQUIRE(
+          model.rows().at(size_t(index.row())).valueState == ValueState::MultipleValues);
+
+        CHECK(model.setData(index, index.data(Qt::EditRole), Qt::EditRole));
+        CHECK(entityNode1->entity().hasProperty("some_key", "some_value"));
+        CHECK(entityNode2->entity().hasProperty("some_key", "some_other_value"));
+      }
+
+      SECTION("Property that is unset for some entities")
+      {
+        mdl::selectNodes(map, {entityNode1, entityNode2});
+        model.updateFromMap();
+
+        const auto index = valueIndex("some_other_key");
+        REQUIRE(
+          model.rows().at(size_t(index.row())).valueState
+          == ValueState::SingleValueAndUnset);
+
+        CHECK(model.setData(index, index.data(Qt::EditRole), Qt::EditRole));
+        CHECK(!entityNode1->entity().hasProperty("some_other_key"));
+      }
+    }
+  }
+
   SECTION("lessThan")
   {
-    auto* entityNode = new mdl::EntityNode{mdl::Entity{{
-      {"classname", "source_entity"},
-      {"angle", "some_value"},
-      {"wad2", "some_value"},
-      {"wad10", "some_value"},
-      {"Zhlt", "some_value"},
-    }}};
 
-    mdl::addNodes(map, {{&mdl::parentForNodes(map), {entityNode}}});
+    auto* entityNode = mdl::addNode(
+      map,
+      mdl::parentForNodes(map),
+      std::make_unique<mdl::EntityNode>(mdl::Entity{{
+        {"classname", "source_entity"},
+        {"angle", "some_value"},
+        {"wad2", "some_value"},
+        {"wad10", "some_value"},
+        {"Zhlt", "some_value"},
+      }}));
     mdl::selectNodes(map, {entityNode});
     model.updateFromMap();
 

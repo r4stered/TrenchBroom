@@ -236,10 +236,8 @@ void assertCannotSnapTo(
   REQUIRE(nodes);
   CHECK(nodes.value().size() == 1u);
 
-  auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+  auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
   CHECK(!brush.canSnapVertices(worldBounds, gridSize));
-
-  kdl::col_delete_all(nodes.value());
 }
 
 void assertCannotSnap(const std::string& data, kdl::task_manager& taskManager)
@@ -259,7 +257,7 @@ void assertSnapTo(
   REQUIRE(nodes);
   REQUIRE(nodes.value().size() == 1u);
 
-  auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+  auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
   CHECK(brush.canSnapVertices(worldBounds, gridSize));
 
   CHECK(brush.snapVertices(worldBounds, gridSize));
@@ -273,8 +271,6 @@ void assertSnapTo(
       CHECK(vm::is_integral(pos, 0.001));
     }
   }
-
-  kdl::col_delete_all(nodes.value());
 }
 
 void assertSnapToInteger(const std::string& data, kdl::task_manager& taskManager)
@@ -2834,7 +2830,7 @@ TEST_CASE("Brush")
       REQUIRE(nodes);
       CHECK(nodes.value().size() == 1u);
 
-      auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+      auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
       const auto p = vm::vec3d{192, 128, 352};
 
       const auto oldVertexPositions = std::vector{p};
@@ -2845,8 +2841,6 @@ TEST_CASE("Brush")
 
       CHECK(newVertexPositions.size() == 1u);
       CHECK(newVertexPositions.front() == vm::approx(transform * p));
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("moveVerticesFail_2158")
@@ -2899,7 +2893,7 @@ TEST_CASE("Brush")
       REQUIRE(nodes);
       CHECK(nodes.value().size() == 1u);
 
-      auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+      auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
 
       const auto vertexPositions = std::vector{
         brush.findClosestVertexPosition(
@@ -2914,8 +2908,6 @@ TEST_CASE("Brush")
       const auto transform = vm::translation_matrix(vm::vec3d{16, 0, 0});
       CHECK(brush.canTransformVertices(worldBounds, vertexPositions, transform));
       CHECK_NOTHROW(brush.transformVertices(worldBounds, vertexPositions, transform));
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("removeVertexWithCorrectMaterials_2082")
@@ -2944,7 +2936,7 @@ TEST_CASE("Brush")
       REQUIRE(nodes);
       CHECK(nodes.value().size() == 1u);
 
-      auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+      auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
 
       const auto p1 = vm::vec3d{32, 32, 0};
       const auto p2 = vm::vec3d{-16, 32, 0};
@@ -3001,8 +2993,6 @@ TEST_CASE("Brush")
       // failure, becomes *slime0:
       assertMaterial("*slime1", brush, std::vector{p8, p9, p11});
       assertMaterial("*teleport", brush, std::vector{p9, p10, p11});
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("snapIssue1198")
@@ -3299,7 +3289,7 @@ TEST_CASE("Brush")
       REQUIRE(nodes);
       REQUIRE(nodes.value().size() == 1u);
 
-      auto brush = static_cast<BrushNode*>(nodes.value().front())->brush();
+      auto brush = static_cast<BrushNode*>(nodes.value().front().get())->brush();
 
       const auto vertex1 =
         brush.findClosestVertexPosition(vm::vec3d{-5774.7302805949275, 488, 1108});
@@ -3310,8 +3300,6 @@ TEST_CASE("Brush")
       const auto transform = vm::translation_matrix(vm::vec3d{0, -4, 0});
       CHECK(brush.canTransformEdges(worldBounds, {segment}, transform));
       CHECK_NOTHROW(brush.transformEdges(worldBounds, {segment}, transform));
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("moveFaceFailure_1499")
@@ -3367,9 +3355,9 @@ TEST_CASE("Brush")
       REQUIRE(!nodes.value().empty());
 
       auto points = std::vector<vm::vec3d>{};
-      for (const auto* node : nodes.value())
+      for (const auto& node : nodes.value())
       {
-        if (const auto* brushNode = dynamic_cast<const BrushNode*>(node))
+        if (const auto* brushNode = dynamic_cast<const BrushNode*>(node.get()))
         {
           for (const auto* vertex : brushNode->brush().vertices())
           {
@@ -3414,8 +3402,6 @@ TEST_CASE("Brush")
       {
         CHECK(polyhedron.hasVertex(position, 01));
       }
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("convexMergeIncorrectResult_2789")
@@ -3434,9 +3420,9 @@ TEST_CASE("Brush")
       REQUIRE(nodes.value().size() == 28);
 
       auto points = std::vector<vm::vec3d>{};
-      for (const auto* node : nodes.value())
+      for (const auto& node : nodes.value())
       {
-        const auto* brushNode = dynamic_cast<const BrushNode*>(node);
+        const auto* brushNode = dynamic_cast<const BrushNode*>(node.get());
         REQUIRE(brushNode != nullptr);
         for (const auto* vertex : brushNode->brush().vertices())
         {
@@ -3468,8 +3454,6 @@ TEST_CASE("Brush")
         {960, 384, 520},          {960, 384, 803},          {1024, -128, 512},
         {1024, -128, 795},        {1024, 128, 512},         {1024, 128, 795}};
       CHECK(polyhedron.hasAllVertices(expectedPositions, 01));
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("subtractTruncatedCones")
@@ -3544,17 +3528,14 @@ TEST_CASE("Brush")
       REQUIRE(subtrahendNodes);
 
       const auto& minuend =
-        static_cast<BrushNode*>(minuendNodes.value().front())->brush();
+        static_cast<BrushNode*>(minuendNodes.value().front().get())->brush();
       const auto& subtrahend =
-        static_cast<BrushNode*>(subtrahendNodes.value().front())->brush();
+        static_cast<BrushNode*>(subtrahendNodes.value().front().get())->brush();
 
       const auto result =
         minuend.subtract(MapFormat::Valve, worldBounds, "some_material", subtrahend)
         | kdl::fold;
       CHECK(!result.is_error());
-
-      kdl::col_delete_all(minuendNodes.value());
-      kdl::col_delete_all(subtrahendNodes.value());
     }
 
     SECTION("subtractDome")
@@ -3583,15 +3564,12 @@ TEST_CASE("Brush")
       REQUIRE(subtrahendNodes);
 
       const auto& minuend =
-        static_cast<BrushNode*>(minuendNodes.value().front())->brush();
+        static_cast<BrushNode*>(minuendNodes.value().front().get())->brush();
       const auto& subtrahend =
-        static_cast<BrushNode*>(subtrahendNodes.value().front())->brush();
+        static_cast<BrushNode*>(subtrahendNodes.value().front().get())->brush();
 
       const auto result =
         minuend.subtract(MapFormat::Standard, worldBounds, "some_material", subtrahend);
-
-      kdl::col_delete_all(minuendNodes.value());
-      kdl::col_delete_all(subtrahendNodes.value());
     }
 
     SECTION("subtractPipeFromCubeWithMissingFragments")
@@ -3633,17 +3611,14 @@ TEST_CASE("Brush")
       REQUIRE(subtrahendNodes);
 
       const auto& minuend =
-        static_cast<BrushNode*>(minuendNodes.value().front())->brush();
+        static_cast<BrushNode*>(minuendNodes.value().front().get())->brush();
       const auto& subtrahend =
-        static_cast<BrushNode*>(subtrahendNodes.value().front())->brush();
+        static_cast<BrushNode*>(subtrahendNodes.value().front().get())->brush();
 
       const auto fragments =
         minuend.subtract(MapFormat::Standard, worldBounds, "some_material", subtrahend)
         | kdl::fold | kdl::value();
       CHECK(fragments.size() == 8u);
-
-      kdl::col_delete_all(minuendNodes.value());
-      kdl::col_delete_all(subtrahendNodes.value());
     }
 
     SECTION("healEdgesCrash")
@@ -3668,7 +3643,7 @@ TEST_CASE("Brush")
         brushString, MapFormat::Valve, worldBounds, {}, status, taskManager);
       REQUIRE(nodes);
 
-      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front());
+      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front().get());
       REQUIRE(brushNode != nullptr);
       const auto brush = brushNode->brush();
 
@@ -3693,8 +3668,6 @@ TEST_CASE("Brush")
       {
         CHECK(brush.hasVertex(position, 0.01));
       }
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("healEdgesCrash2")
@@ -3727,7 +3700,7 @@ TEST_CASE("Brush")
         brushString, MapFormat::Standard, worldBounds, {}, status, taskManager);
       REQUIRE(nodes);
 
-      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front());
+      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front().get());
       REQUIRE(brushNode != nullptr);
       const auto brush = brushNode->brush();
 
@@ -3748,8 +3721,6 @@ TEST_CASE("Brush")
       {
         CHECK(brush.hasVertex(position, 01));
       }
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("healEdgesCrash3")
@@ -3868,7 +3839,7 @@ TEST_CASE("Brush")
         brushString, MapFormat::Standard, worldBounds, {}, status, taskManager);
       REQUIRE(nodes);
 
-      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front());
+      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front().get());
       REQUIRE(brushNode != nullptr);
       const auto brush = brushNode->brush();
 
@@ -3887,8 +3858,6 @@ TEST_CASE("Brush")
       {
         CHECK(brush.hasVertex(position, 01));
       }
-
-      kdl::col_delete_all(nodes.value());
     }
 
     SECTION("healEdgesCrash4")
@@ -3915,7 +3884,8 @@ TEST_CASE("Brush")
       CHECK(
         NodeReader::read(
           brushString, MapFormat::Valve, largeWorldBounds, {}, status, taskManager)
-        == Result<std::vector<Node*>>{std::vector<Node*>{}});
+        == Result<std::vector<std::unique_ptr<Node>>>{
+          std::vector<std::unique_ptr<Node>>{}});
       CHECK(
         status.messages(LogLevel::Error)
         == std::vector<std::string>{"At line 1, column 1: Brush is incomplete"});
@@ -3944,7 +3914,7 @@ TEST_CASE("Brush")
       REQUIRE(nodes);
       REQUIRE(nodes.value().size() == 1u);
 
-      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front());
+      const auto* brushNode = dynamic_cast<BrushNode*>(nodes.value().front().get());
       REQUIRE(brushNode != nullptr);
       const auto& brush = brushNode->brush();
 

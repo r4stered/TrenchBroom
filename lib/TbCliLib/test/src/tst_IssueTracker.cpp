@@ -57,10 +57,12 @@ mdl::BrushNode* addBox(mdl::Map& map, const vm::bbox3d& bounds)
 {
   auto& worldNode = map.worldNode();
   const auto builder = mdl::BrushBuilder{worldNode.mapFormat(), map.worldBounds()};
-  auto brushNode =
-    std::make_unique<mdl::BrushNode>(builder.createCuboid(bounds, "box").value());
-  REQUIRE(!mdl::addNodes(map, {{worldNode.defaultLayer(), {brushNode.get()}}}).empty());
-  return brushNode.release();
+  auto* brushNode = mdl::addNode(
+    map,
+    *worldNode.defaultLayer(),
+    std::make_unique<mdl::BrushNode>(builder.createCuboid(bounds, "box").value()));
+  REQUIRE(brushNode);
+  return brushNode;
 }
 
 /** The type ids of the given issues. */
@@ -131,8 +133,9 @@ TEST_CASE("IssueTracker")
       auto tracker = IssueTracker{loadedMap, config};
       auto unaware = IssueTracker{loadedMap, config};
 
-      auto* copy = box->clone(map.worldBounds());
-      REQUIRE(!mdl::addNodes(map, {{map.worldNode().defaultLayer(), {copy}}}).empty());
+      auto* copy =
+        mdl::addNode(map, *map.worldNode().defaultLayer(), box->clone(map.worldBounds()));
+      REQUIRE(copy);
       mdl::removeNodes(map, {box});
 
       CHECK(tracker.introduced({.modified = {copy}, .replaced = {{box, copy}}}).empty());

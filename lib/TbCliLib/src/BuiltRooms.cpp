@@ -1127,11 +1127,11 @@ std::unique_ptr<mdl::GroupNode> newCarrierGroup(
           groupName,
           std::get<Error>(brush.error()).msg));
     }
-    carrier->addChild(new mdl::BrushNode{std::move(brush).value()});
+    carrier->addChild(std::make_unique<mdl::BrushNode>(std::move(brush).value()));
   }
 
   auto group = std::make_unique<mdl::GroupNode>(mdl::Group{groupName});
-  group->addChild(carrier.release());
+  group->addChild(std::move(carrier));
   return group;
 }
 
@@ -1139,12 +1139,13 @@ std::unique_ptr<mdl::GroupNode> newCarrierGroup(
 void addCarrierGroup(
   OpContext& context, mdl::Node& parent, std::unique_ptr<mdl::GroupNode> group)
 {
-  if (mdl::addNodes(context.map, {{&parent, {group.get()}}}).empty())
+  const auto name = group->name();
+  auto* groupNode = mdl::addNode(context.map, parent, std::move(group));
+  if (!groupNode)
   {
-    throw opFailed(
-      context.opName, fmt::format("cannot add {} to the map", group->name()));
+    throw opFailed(context.opName, fmt::format("cannot add {} to the map", name));
   }
-  context.outcome.created.push_back(group.release());
+  context.outcome.created.push_back(groupNode);
 }
 
 std::string connectionGroupName(const std::string_view from, const std::string_view to)
@@ -2021,7 +2022,7 @@ void cutOpening(
   const auto builder = brushBuilderOf(map);
 
   auto cut = std::vector<mdl::Node*>{};
-  auto pieces = std::vector<std::unique_ptr<mdl::BrushNode>>{};
+  auto pieces = std::vector<std::unique_ptr<mdl::Node>>{};
   for (auto* child : carrier.children())
   {
     if (
@@ -2043,17 +2044,9 @@ void cutOpening(
 
   if (!pieces.empty())
   {
-    auto nodes =
-      pieces
-      | std::views::transform([](const auto& piece) -> mdl::Node* { return piece.get(); })
-      | kdl::ranges::to<std::vector>();
-    if (mdl::addNodes(map, {{&carrier, std::move(nodes)}}).empty())
+    if (mdl::addNodes(map, carrier, std::move(pieces)).empty())
     {
       throw opFailed(context.opName, fmt::format("cannot cut the walls of {}", what));
-    }
-    for (auto& piece : pieces)
-    {
-      piece.release();
     }
   }
   // the pieces are added first, so that removing the cut brushes never empties the
@@ -2242,7 +2235,7 @@ void rebuildCarrier(
   const auto what = describeCarrier(carrier);
   const auto builder = brushBuilderOf(map);
 
-  const auto oldNodes = carrier.children();
+  const auto oldNodes = carrier.children() | kdl::ranges::to<std::vector>();
   auto oldBrushes = std::vector<const mdl::BrushNode*>{};
   for (const auto* child : oldNodes)
   {
@@ -2258,7 +2251,7 @@ void rebuildCarrier(
     newBounds = vm::merge(newBounds, box);
   }
 
-  auto pieces = std::vector<std::unique_ptr<mdl::BrushNode>>{};
+  auto pieces = std::vector<std::unique_ptr<mdl::Node>>{};
   for (const auto& box : boxes)
   {
     const auto* source = materialSource(box, newBounds, oldBrushes, oldBounds);
@@ -2266,17 +2259,9 @@ void rebuildCarrier(
       std::make_unique<mdl::BrushNode>(
         cuboidLike(context, builder, box, source ? &source->brush() : nullptr)));
   }
-  auto nodes =
-    pieces
-    | std::views::transform([](const auto& piece) -> mdl::Node* { return piece.get(); })
-    | kdl::ranges::to<std::vector>();
-  if (mdl::addNodes(map, {{&carrier, std::move(nodes)}}).empty())
+  if (mdl::addNodes(map, carrier, std::move(pieces)).empty())
   {
     throw opFailed(context.opName, fmt::format("cannot rebuild {}", what));
-  }
-  for (auto& piece : pieces)
-  {
-    piece.release();
   }
   // the new brushes are added first, so that removing the old ones never empties the
   // carrier

@@ -25,15 +25,19 @@
 #include "mdl/Tag.h"
 #include "mdl/VisibilityState.h"
 
-#include "kd/reflection_decl.h"
+#include "kd/ranges/raw_pointers_view.h"
+#include "kd/ranges/to.h"
 
 #include "vm/bbox.h"
 #include "vm/ray.h"
 #include "vm/util.h"
 
 #include <algorithm>
+#include <concepts>
 #include <memory>
+#include <ranges>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tb::mdl
@@ -49,18 +53,11 @@ class PickResult;
 class Validator;
 class Object;
 
-struct NodePath
-{
-  std::vector<std::size_t> indices;
-
-  kdl_reflect_decl(NodePath, indices);
-};
-
 class Node : public Taggable
 {
 private:
   Node* m_parent = nullptr;
-  std::vector<Node*> m_children;
+  std::vector<std::unique_ptr<Node>> m_children;
   size_t m_descendantCount = 0;
   bool m_selected = false;
 
@@ -92,23 +89,6 @@ public: // getters
   const std::string& name() const;
 
   /**
-   * Returns a path from the given ancestor to this node.
-   *
-   * If the given node is not an ancestor of this node, then the returned path is
-   * undefined.
-   */
-  NodePath pathFrom(const Node& fromAncestor) const;
-
-  /**
-   * Resolves the given path starting at this node.
-   *
-   * Returns the descendant of this node to which the given path resolves or null if the
-   * given path is not valid from this node.
-   */
-  Node* resolvePath(const NodePath& path);
-  const Node* resolvePath(const NodePath& path) const;
-
-  /**
    * Returns a box that encloses the "logical" part of this node and its children; these
    * are the bounds that are used in game (for entities, the bounds specified in the
    * entity definition file), and used for grid snapping, for example. Nodes can render or
@@ -129,28 +109,30 @@ public: // getters
   double projectedArea(vm::axis::type axis) const;
 
 public: // cloning and snapshots
-  Node* clone(const vm::bbox3d& worldBounds) const;
-  Node* cloneRecursively(const vm::bbox3d& worldBounds) const;
+  std::unique_ptr<Node> clone(const vm::bbox3d& worldBounds) const;
+  std::unique_ptr<Node> cloneRecursively(const vm::bbox3d& worldBounds) const;
 
 protected:
   void cloneAttributes(Node& node) const;
 
-  static std::vector<Node*> clone(
-    const vm::bbox3d& worldBounds, const std::vector<Node*>& nodes);
-  static std::vector<Node*> cloneRecursively(
-    const vm::bbox3d& worldBounds, const std::vector<Node*>& nodes);
-
-  template <typename I, typename O>
-  static void clone(const vm::bbox3d& worldBounds, I cur, I end, O result)
+  template <std::ranges::range R>
+  static std::vector<std::unique_ptr<Node>> clone(
+    const vm::bbox3d& worldBounds, R&& nodes)
   {
-    std::for_each(cur, end, [&](auto* node) { result++ = node->clone(worldBounds); });
+    return std::forward<R>(nodes) | std::views::transform([&](const auto* node) {
+             return node->clone(worldBounds);
+           })
+           | kdl::ranges::to<std::vector>();
   }
 
-  template <typename I, typename O>
-  static void cloneRecursively(const vm::bbox3d& worldBounds, I cur, I end, O result)
+  template <std::ranges::range R>
+  static std::vector<std::unique_ptr<Node>> cloneRecursively(
+    const vm::bbox3d& worldBounds, R&& nodes)
   {
-    std::for_each(
-      cur, end, [&](auto* node) { result++ = node->cloneRecursively(worldBounds); });
+    return std::forward<R>(nodes) | std::views::transform([&](const auto* node) {
+             return node->cloneRecursively(worldBounds);
+           })
+           | kdl::ranges::to<std::vector>();
   }
 
 public: // tree management
@@ -166,44 +148,32 @@ public: // tree management
 
   bool hasChildren() const;
   size_t childCount() const;
-  const std::vector<Node*>& children() const;
+  auto children() const { return m_children | kdl::views::raw_pointers; }
   size_t descendantCount() const;
   size_t familySize() const;
 
   bool shouldAddToSpacialIndex() const;
 
 public:
-  void addChildren(const std::vector<Node*>& children);
+  void addChildren(std::vector<std::unique_ptr<Node>> children);
 
-  template <typename I>
-  void addChildren(I cur, I end, size_t count = 0)
+  template <std::derived_from<Node> T>
+  T& addChild(std::unique_ptr<T> child)
   {
-    m_children.reserve(m_children.size() + count);
-    size_t descendantCountDelta = 0;
-    std::for_each(cur, end, [&](auto* child) {
-      doAddChild(child);
-      descendantCountDelta += child->descendantCount() + 1;
-    });
-    incDescendantCount(descendantCountDelta);
+    auto* result = child.get();
+    doAddChild(std::move(child));
+    incDescendantCount(result->descendantCount() + 1u);
+    incChildSelectionCount(result->selected() ? 1u : 0u);
+    incDescendantSelectionCount(result->descendantSelectionCount());
+    return *result;
   }
-
-  Node& addChild(Node* child);
 
   std::vector<std::unique_ptr<Node>> replaceChildren(
     std::vector<std::unique_ptr<Node>> newChildren);
 
-  template <typename I>
-  void removeChildren(I cur, I end)
-  {
-    size_t descendantCountDelta = 0;
-    std::for_each(cur, end, [&](auto* child) {
-      doRemoveChild(child);
-      descendantCountDelta += child->descendantCount() + 1;
-    });
-    decDescendantCount(descendantCountDelta);
-  }
+  std::vector<std::unique_ptr<Node>> removeChildren(const std::vector<Node*>& children);
 
-  void removeChild(Node* child);
+  std::unique_ptr<Node> removeChild(Node* child);
 
   bool canAddChild(const Node& child) const;
   bool canRemoveChild(const Node& child) const;
@@ -222,9 +192,8 @@ public:
   }
 
 private:
-  void doAddChild(Node* child);
-  void doRemoveChild(Node* child);
-  void clearChildren();
+  void doAddChild(std::unique_ptr<Node> child);
+  std::unique_ptr<Node> doRemoveChild(Node* child);
 
   void childWillBeAdded(Node& node);
   void childWasAdded(Node& node);
@@ -460,9 +429,9 @@ public: // visitors
    * Visit every node in the given vector with the given lambda.
    */
   template <typename R, typename L>
-  static void visitAll(const R& nodes, const L& lambda)
+  static void visitAll(R&& nodes, const L& lambda)
   {
-    for (auto& node : nodes)
+    for (const auto& node : nodes)
     {
       node->accept(lambda);
     }
@@ -496,8 +465,8 @@ private: // subclassing interface
 
   virtual double doGetProjectedArea(vm::axis::type axis) const = 0;
 
-  virtual Node* doClone(const vm::bbox3d& worldBounds) const = 0;
-  virtual Node* doCloneRecursively(const vm::bbox3d& worldBounds) const;
+  virtual std::unique_ptr<Node> doClone(const vm::bbox3d& worldBounds) const = 0;
+  virtual std::unique_ptr<Node> doCloneRecursively(const vm::bbox3d& worldBounds) const;
 
   virtual bool doCanAddChild(const Node& child) const = 0;
   virtual bool doCanRemoveChild(const Node& child) const = 0;

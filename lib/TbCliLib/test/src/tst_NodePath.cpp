@@ -32,6 +32,7 @@
 
 #include "kd/result.h"
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -45,23 +46,29 @@ TEST_CASE("NodePath")
   const auto worldBounds = vm::bbox3d{8192.0};
   const auto builder = mdl::BrushBuilder{mdl::MapFormat::Valve, worldBounds};
   const auto makeBrush = [&]() {
-    return new mdl::BrushNode{builder.createCube(64.0, "material") | kdl::value()};
+    return std::make_unique<mdl::BrushNode>(
+      builder.createCube(64.0, "material") | kdl::value());
   };
 
   auto worldNode =
     mdl::WorldNode{mdl::EntityPropertyConfig{}, mdl::Entity{}, mdl::MapFormat::Valve};
   auto& defaultLayer = *worldNode.defaultLayer();
-  auto& customLayer = worldNode.addChild(new mdl::LayerNode{mdl::Layer{"Custom"}});
+  auto& customLayer =
+    worldNode.addChild(std::make_unique<mdl::LayerNode>(mdl::Layer{"Custom"}));
 
   // indices count the preceding siblings of the same kind
   auto& brush0 = defaultLayer.addChild(makeBrush());
-  auto& entity0 = defaultLayer.addChild(new mdl::EntityNode{mdl::Entity{}});
+  auto& entity0 = defaultLayer.addChild(std::make_unique<mdl::EntityNode>(mdl::Entity{}));
   auto& brush1 = defaultLayer.addChild(makeBrush());
 
-  auto& group0 = customLayer.addChild(new mdl::GroupNode{mdl::Group{"group"}});
-  auto& group1 = customLayer.addChild(new mdl::GroupNode{mdl::Group{"group"}});
-  auto& nestedGroup = group1.addChild(new mdl::GroupNode{mdl::Group{"nested"}});
-  auto& brushEntity = nestedGroup.addChild(new mdl::EntityNode{mdl::Entity{}});
+  auto& group0 =
+    customLayer.addChild(std::make_unique<mdl::GroupNode>(mdl::Group{"group"}));
+  auto& group1 =
+    customLayer.addChild(std::make_unique<mdl::GroupNode>(mdl::Group{"group"}));
+  auto& nestedGroup =
+    group1.addChild(std::make_unique<mdl::GroupNode>(mdl::Group{"nested"}));
+  auto& brushEntity =
+    nestedGroup.addChild(std::make_unique<mdl::EntityNode>(mdl::Entity{}));
   auto& entityBrush = brushEntity.addChild(makeBrush());
 
   SECTION("nodePath")

@@ -113,18 +113,52 @@ TEST_CASE("EntityNode")
     CHECK(entityNode.canRemoveChild(patchNode));
   }
 
+  SECTION("removeIfEmpty")
+  {
+    SECTION("without definition")
+    {
+      const auto entityNode = EntityNode{Entity{}};
+
+      CHECK(entityNode.removeIfEmpty());
+    }
+
+    SECTION("with brush entity definition")
+    {
+      const auto definition = EntityDefinition{"some_name", Color{}, "", {}};
+
+      auto entityNode = EntityNode{Entity{}};
+      entityNode.setDefinition(&definition);
+
+      CHECK(entityNode.removeIfEmpty());
+    }
+
+    SECTION("with point entity definition")
+    {
+      const auto definition = EntityDefinition{
+        "some_name",
+        Color{},
+        "",
+        {},
+        PointEntityDefinition{vm::bbox3d{16.0}, {}, {}},
+      };
+
+      auto entityNode = EntityNode{Entity{}};
+      entityNode.setDefinition(&definition);
+
+      CHECK(!entityNode.removeIfEmpty());
+    }
+  }
+
   SECTION("pointEntity")
   {
     auto entityNode = EntityNode{Entity{}};
-    auto brushNode1 = BrushNode{
-      BrushBuilder{mapFormat, worldBounds}.createCube(64.0, "material") | kdl::value()};
-    auto brushNode2 = BrushNode{
-      BrushBuilder{mapFormat, worldBounds}.createCube(64.0, "material") | kdl::value()};
 
     REQUIRE(entityNode.entity().pointEntity());
-    entityNode.addChild(&brushNode1);
+    auto& brushNode1 = entityNode.addChild(std::make_unique<BrushNode>(
+      BrushBuilder{mapFormat, worldBounds}.createCube(64.0, "material") | kdl::value()));
     CHECK(!entityNode.entity().pointEntity());
-    entityNode.addChild(&brushNode2);
+    auto& brushNode2 = entityNode.addChild(std::make_unique<BrushNode>(
+      BrushBuilder{mapFormat, worldBounds}.createCube(64.0, "material") | kdl::value()));
     CHECK(!entityNode.entity().pointEntity());
 
     entityNode.removeChild(&brushNode1);
@@ -227,12 +261,9 @@ TEST_CASE("EntityNode")
 
     SECTION("when the node is part of a world")
     {
-      // the world takes ownership of the entity node
-      auto* entityNode =
-        new EntityNode{Entity{{{EntityPropertyKeys::Classname, "something"}}}};
-
       auto worldNode = WorldNode{{}, {}, MapFormat::Standard};
-      worldNode.defaultLayer()->addChild(entityNode);
+      auto* entityNode = &worldNode.defaultLayer()->addChild(std::make_unique<EntityNode>(
+        Entity{{{EntityPropertyKeys::Classname, "something"}}}));
 
       entityNode->setEntity(Entity{{{"origin", "10 20 30"}}});
       CHECK(entityNode->entity().origin() == newOrigin);

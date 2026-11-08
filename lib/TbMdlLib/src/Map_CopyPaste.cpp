@@ -50,6 +50,7 @@
 #include "kd/vector_utils.h"
 
 #include <algorithm>
+#include <memory>
 #include <ranges>
 
 namespace tb::mdl
@@ -57,59 +58,40 @@ namespace tb::mdl
 namespace
 {
 
-auto extractNodesToPaste(const std::vector<Node*>& nodes, Node& parent)
+auto extractNodesToPaste(std::vector<std::unique_ptr<Node>> nodes, Node& parent)
 {
-  auto nodesToDetach = std::vector<Node*>{};
-  auto nodesToDelete = std::vector<Node*>{};
-  auto nodesToAdd = kdl::flat_map<Node*, std::vector<Node*>>{};
+  auto nodesToAdd = kdl::flat_map<Node*, std::vector<std::unique_ptr<Node>>>{};
 
-  for (auto* node : nodes)
+  for (auto& node : nodes)
   {
+    auto nodesToExtract = std::vector<Node*>{};
     node->accept(kdl::overload(
-      [&](auto&& thisLambda, WorldNode& worldNode) {
-        worldNode.visitChildren(thisLambda);
-        nodesToDelete.push_back(&worldNode);
-      },
-      [&](auto&& thisLambda, LayerNode& layerNode) {
-        layerNode.visitChildren(thisLambda);
-        nodesToDetach.push_back(&layerNode);
-        nodesToDelete.push_back(&layerNode);
-      },
-      [&](GroupNode& groupNode) {
-        nodesToDetach.push_back(&groupNode);
-        nodesToAdd[&parent].push_back(&groupNode);
-      },
+      [&](
+        auto&& thisLambda, WorldNode& worldNode) { worldNode.visitChildren(thisLambda); },
+      [&](
+        auto&& thisLambda, LayerNode& layerNode) { layerNode.visitChildren(thisLambda); },
+      [&](GroupNode& groupNode) { nodesToExtract.push_back(&groupNode); },
       [&](auto&& thisLambda, EntityNode& entityNode) {
         if (isWorldspawn(entityNode.entity().classname()))
         {
           entityNode.visitChildren(thisLambda);
-          nodesToDetach.push_back(&entityNode);
-          nodesToDelete.push_back(&entityNode);
         }
         else
         {
-          nodesToDetach.push_back(&entityNode);
-          nodesToAdd[&parent].push_back(&entityNode);
+          nodesToExtract.push_back(&entityNode);
         }
       },
-      [&](BrushNode& brushNode) {
-        nodesToDetach.push_back(&brushNode);
-        nodesToAdd[&parent].push_back(&brushNode);
-      },
-      [&](PatchNode& patchNode) {
-        nodesToDetach.push_back(&patchNode);
-        nodesToAdd[&parent].push_back(&patchNode);
-      }));
-  }
+      [&](BrushNode& brushNode) { nodesToExtract.push_back(&brushNode); },
+      [&](PatchNode& patchNode) { nodesToExtract.push_back(&patchNode); }));
 
-  for (auto* node : nodesToDetach)
-  {
-    if (auto* nodeParent = node->parent())
+    for (auto* nodeToExtract : nodesToExtract)
     {
-      nodeParent->removeChild(node);
+      auto* nodeParent = nodeToExtract->parent();
+      auto extractedNode =
+        nodeParent ? nodeParent->removeChild(nodeToExtract) : std::move(node);
+      nodesToAdd[&parent].push_back(std::move(extractedNode));
     }
   }
-  kdl::vec_clear_and_delete(nodesToDelete);
 
   return nodesToAdd;
 }
@@ -138,7 +120,7 @@ std::vector<IdType> allPersistentGroupIds(const Node& root)
 }
 
 void fixRedundantPersistentIds(
-  const kdl::flat_map<Node*, std::vector<Node*>>& nodesToAdd,
+  const kdl::flat_map<Node*, std::vector<std::unique_ptr<Node>>>& nodesToAdd,
   const std::vector<IdType>& existingPersistentGroupIds)
 {
   // parentheses (not braces) are required to select the container constructor instead of
@@ -146,7 +128,7 @@ void fixRedundantPersistentIds(
   auto persistentGroupIds = kdl::flat_set(existingPersistentGroupIds);
   for (const auto& [newParent, nodesToAddToParent] : nodesToAdd)
   {
-    for (auto* node : nodesToAddToParent)
+    for (const auto& node : nodesToAddToParent)
     {
       node->accept(kdl::overload(
         [&](auto&& thisLambda, WorldNode& worldNode) {
@@ -174,12 +156,13 @@ void fixRedundantPersistentIds(
 }
 
 void fixRecursiveLinkedGroups(
-  const kdl::flat_map<Node*, std::vector<Node*>>& nodesToAdd, Logger& logger)
+  const kdl::flat_map<Node*, std::vector<std::unique_ptr<Node>>>& nodesToAdd,
+  Logger& logger)
 {
   for (const auto& [newParent, nodesToAddToParent] : nodesToAdd)
   {
     const auto linkedGroupIds = kdl::vec_sort(collectParentLinkedGroupIds(*newParent));
-    for (auto* node : nodesToAddToParent)
+    for (const auto& node : nodesToAddToParent)
     {
       node->accept(kdl::overload(
         [&](auto&& thisLambda, WorldNode& worldNode) {
@@ -210,7 +193,7 @@ void fixRecursiveLinkedGroups(
 }
 
 void copyAndSetLinkIds(
-  const kdl::flat_map<Node*, std::vector<Node*>>& nodesToAdd,
+  const kdl::flat_map<Node*, std::vector<std::unique_ptr<Node>>>& nodesToAdd,
   WorldNode& worldNode,
   Logger& logger)
 {
@@ -221,16 +204,17 @@ void copyAndSetLinkIds(
   }
 }
 
-std::vector<Node*> addPastedNodes(Map& map, const std::vector<Node*>& nodes, Node& parent)
+std::vector<Node*> addPastedNodes(
+  Map& map, std::vector<std::unique_ptr<Node>> nodes, Node& parent)
 {
-  const auto nodesToAdd = extractNodesToPaste(nodes, parent);
+  auto nodesToAdd = extractNodesToPaste(std::move(nodes), parent);
   fixRedundantPersistentIds(nodesToAdd, allPersistentGroupIds(map.worldNode()));
   fixRecursiveLinkedGroups(nodesToAdd, map.logger());
   copyAndSetLinkIds(nodesToAdd, map.worldNode(), map.logger());
 
   auto transaction = Transaction{map, "Paste Nodes"};
 
-  const auto addedNodes = addNodes(map, nodesToAdd);
+  const auto addedNodes = addNodes(map, std::move(nodesToAdd));
   if (addedNodes.empty())
   {
     transaction.cancel();
@@ -290,7 +274,7 @@ PasteType paste(Map& map, const std::string& str)
            parserStatus,
            map.taskManager())
          | kdl::transform([&](auto nodes) {
-             return !addPastedNodes(map, nodes, parentForNodes(map)).empty()
+             return !addPastedNodes(map, std::move(nodes), parentForNodes(map)).empty()
                       ? PasteType::Node
                       : PasteType::Failed;
            })
@@ -327,7 +311,7 @@ Result<std::vector<Node*>> pasteNodes(
            status,
            map.taskManager())
          | kdl::and_then([&](auto nodes) -> Result<std::vector<Node*>> {
-             auto addedNodes = addPastedNodes(map, nodes, parent);
+             auto addedNodes = addPastedNodes(map, std::move(nodes), parent);
              if (addedNodes.empty())
              {
                return Error{"Could not add the pasted nodes"};
