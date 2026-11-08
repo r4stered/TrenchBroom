@@ -38,7 +38,7 @@ namespace tb::cli
 {
 
 class Json;
-struct LoadedMap;
+struct MapRef;
 
 /** How far apart two boxes may be and still count as touching or intersecting. */
 inline constexpr auto SpatialTolerance = 0.01;
@@ -80,6 +80,6 @@ std::vector<NodeOrFace> queryMatches(
  * @throw CliError if the `touching` path does not resolve, or `wrong_node_kind` if it is
  * the world, which nothing can touch
  */
-Json query(LoadedMap& loadedMap, const QueryOptions& options);
+Json query(const MapRef& mapRef, const QueryOptions& options);
 
 } // namespace tb::cli

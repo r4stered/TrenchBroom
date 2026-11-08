@@ -22,7 +22,7 @@
 #include "cli/CliError.h"
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
-#include "cli/LoadMap.h"
+#include "cli/MapRef.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityProperties.h"
@@ -133,9 +133,9 @@ Json spawnflagsToJson(const PVT::Flags& flags)
 
 } // namespace
 
-Json fgd(const LoadedMap& loadedMap, const std::string_view classname)
+Json fgd(const MapRef& mapRef, const std::string_view classname)
 {
-  const auto& definitions = loadedMap.map->entityDefinitionManager();
+  const auto& definitions = mapRef.map.entityDefinitionManager();
   if (definitions.definitions().empty())
   {
     throw CliError{
@@ -171,7 +171,7 @@ Json fgd(const LoadedMap& loadedMap, const std::string_view classname)
 
   auto result = Json::object();
   result.set("schema", "tbcli.fgd/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   result.set("classname", definition->name);
   result.set(
     "type",

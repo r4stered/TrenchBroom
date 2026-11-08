@@ -21,7 +21,6 @@
 
 #include "cli/CliValidators.h"
 #include "cli/IssueTypes.h"
-#include "cli/LoadMap.h"
 #include "cli/Ops.h"
 #include "cli/Targets.h"
 #include "mdl/BrushNode.h"
@@ -164,7 +163,6 @@ public:
 
 struct IssueTracker::Impl
 {
-  LoadedMap& loadedMap;
   mdl::Map& map;
   const VerifyConfig& config;
   std::vector<std::unique_ptr<mdl::Validator>> cliValidators;
@@ -172,9 +170,8 @@ struct IssueTracker::Impl
   std::vector<const mdl::Validator*> validators;
   std::unordered_map<const mdl::Node*, NodeRecord> records;
 
-  Impl(LoadedMap& loadedMap_, const VerifyConfig& config_)
-    : loadedMap{loadedMap_}
-    , map{*loadedMap_.map}
+  Impl(mdl::Map& map_, const VerifyConfig& config_)
+    : map{map_}
     , config{config_}
     , cliValidators{makeCliValidators(materialCheckOf(map))}
   {
@@ -238,10 +235,10 @@ private:
   }
 };
 
-IssueTracker::IssueTracker(LoadedMap& loadedMap, const VerifyConfig& config)
-  : m_impl{std::make_unique<Impl>(loadedMap, config)}
+IssueTracker::IssueTracker(mdl::Map& map, const VerifyConfig& config)
+  : m_impl{std::make_unique<Impl>(map, config)}
 {
-  auto collector = NodeIssueCollector{loadedMap, m_impl->validators};
+  auto collector = NodeIssueCollector{map, m_impl->validators};
   for (auto* node : nodeAndDescendants(m_impl->map.worldNode()))
   {
     m_impl->checkAndRecord(*node, collector);
@@ -370,7 +367,7 @@ std::vector<VerifyIssue> IssueTracker::introduced(const OpOutcome& outcome)
     addHolders(impl.holderInMap(*node));
   }
 
-  auto collector = NodeIssueCollector{impl.loadedMap, impl.validators};
+  auto collector = NodeIssueCollector{impl.map, impl.validators};
   auto result = std::vector<VerifyIssue>{};
   for (auto* node : changed.nodes())
   {

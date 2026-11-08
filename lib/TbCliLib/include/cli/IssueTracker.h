@@ -27,7 +27,6 @@
 namespace tb::cli
 {
 
-struct LoadedMap;
 struct OpOutcome;
 struct VerifyConfig;
 
@@ -49,7 +48,7 @@ public:
    *
    * @throw CliError if a validator is not in the issue-type table
    */
-  IssueTracker(LoadedMap& loadedMap, const VerifyConfig& config);
+  IssueTracker(mdl::Map& map, const VerifyConfig& config);
   ~IssueTracker();
 
   IssueTracker(const IssueTracker&) = delete;

@@ -33,7 +33,8 @@ namespace tb::cli
 
 class Json;
 struct Config;
-struct LoadedMap;
+struct MapRef;
+struct MapSource;
 
 /** The default of `--split-ratio`. */
 inline constexpr auto DefaultSplitRatio = 0.5;
@@ -114,6 +115,10 @@ struct RoomsOptions
  * missing, leaked, of another rev or of clusters rather than leafs, or as `compile`
  * does
  */
-Json rooms(LoadedMap& loadedMap, const Config& config, const RoomsOptions& options);
+Json rooms(
+  const MapRef& mapRef,
+  const MapSource& source,
+  const Config& config,
+  const RoomsOptions& options);
 
 } // namespace tb::cli

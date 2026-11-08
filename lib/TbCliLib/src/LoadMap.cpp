@@ -300,6 +300,16 @@ LoadedMap::LoadedMap(LoadedMap&&) noexcept = default;
 LoadedMap& LoadedMap::operator=(LoadedMap&&) noexcept = default;
 LoadedMap::~LoadedMap() = default;
 
+MapRef LoadedMap::ref()
+{
+  return MapRef{*map, rev, loadProblems};
+}
+
+MapSource LoadedMap::source() const
+{
+  return MapSource{bytes, loadMs};
+}
+
 std::string computeRev(const std::string_view bytes)
 {
   return sha256Hex(bytes).substr(0, RevLength);
@@ -375,11 +385,6 @@ LoadedMap loadMap(
     *result.resourceManager, gl::ProcessContext{gl, [](auto, auto) {}});
 
   return result;
-}
-
-std::string mapName(const LoadedMap& loadedMap)
-{
-  return loadedMap.map->path().stem().string();
 }
 
 } // namespace tb::cli

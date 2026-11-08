@@ -18,8 +18,13 @@
  */
 
 #include "CliTestUtils.h"
+#include "base/Logger.h"
+#include "cli/LoadMap.h"
+#include "cli/MapRef.h"
+#include "cli/Show.h"
 
 #include <string>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -195,6 +200,18 @@ TEST_CASE("show")
     REQUIRE(result.exitCode == 0);
     CHECK_THAT(result.out, ContainsSubstring("schema: tbcli.show/1"));
     CHECK_THAT(result.out, ContainsSubstring("classname: func_door"));
+  }
+
+  SECTION("a borrowed map is shown at the rev it is lent at")
+  {
+    auto logger = NullLogger{};
+    const auto loadedMap = loadFixtureMap("maps/query.map", logger);
+    const auto noLoadProblems = std::vector<LoadProblem>{};
+    const auto mapRef = MapRef{*loadedMap.map, "borrowed", noLoadProblems};
+
+    const auto json = show(mapRef, "layer:0/entity:1", false);
+    CHECK(json["rev"] == Json{"borrowed"});
+    CHECK(json["node"]["classname"] == Json{"func_door"});
   }
 }
 

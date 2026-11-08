@@ -24,8 +24,8 @@
 #include "cli/EntityJson.h"
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
-#include "cli/LoadMap.h"
 #include "cli/MapContents.h"
+#include "cli/MapRef.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "cli/Verify.h"
@@ -437,11 +437,11 @@ bool isKeyEntity(const mdl::Entity& entity, const std::vector<std::string>& clas
 }
 
 Json describe(
-  const LoadedMap& loadedMap,
+  const MapRef& mapRef,
   const std::optional<std::vector<std::string>>& keyEntityClasses,
   const IssueReport& issueReport)
 {
-  const auto& map = *loadedMap.map;
+  const auto& map = mapRef.map;
   const auto& worldNode = map.worldNode();
   const auto contents = collectContents(worldNode);
   const auto summary = summarize(contents);
@@ -449,7 +449,7 @@ Json describe(
 
   auto result = Json::object();
   result.set("schema", "tbcli.describe/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   result.set("counts", countsToJson(summary));
   result.set("bounds", boundsToJson(summary));
   result.set("layers", TreeWriter{linkSets}.write(worldNode));

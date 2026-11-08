@@ -54,12 +54,6 @@ TEST_CASE("LoadMap")
       CHECK(problem.line == 19);
     }
   }
-
-  SECTION("mapName")
-  {
-    auto logger = NullLogger{};
-    CHECK(mapName(loadFixtureMap("maps/simple.map", logger)) == "simple");
-  }
 }
 
 } // namespace tb::cli

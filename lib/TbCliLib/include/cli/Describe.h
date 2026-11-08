@@ -33,7 +33,7 @@ namespace tb::cli
 
 class Json;
 struct IssueReport;
-struct LoadedMap;
+struct MapRef;
 
 /**
  * The classes whose entities are key entities: the given ones, or else the player starts
@@ -63,7 +63,7 @@ bool isKeyEntity(const mdl::Entity& entity, const std::vector<std::string>& clas
  * severity, as verify does.
  */
 Json describe(
-  const LoadedMap& loadedMap,
+  const MapRef& mapRef,
   const std::optional<std::vector<std::string>>& keyEntityClasses,
   const IssueReport& issueReport);
 

@@ -872,8 +872,8 @@ CommandResult runCommand(
   {
     checkArguments(arguments, command, {"a map file"});
     auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    const auto issueReport = collectIssues(loadedMap, config.verify);
-    return describe(loadedMap, config.keyEntities, issueReport);
+    const auto issueReport = collectIssues(loadedMap.ref(), config.verify);
+    return describe(loadedMap.ref(), config.keyEntities, issueReport);
   }
   if (command == "query")
   {
@@ -885,19 +885,19 @@ CommandResult runCommand(
     {
       options.query = positionals[2];
     }
-    return query(loadedMap, options);
+    return query(loadedMap.ref(), options);
   }
   if (command == "show")
   {
     checkArguments(arguments, command, {"a map file", "a node path"});
     auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return show(loadedMap, positionals[2], arguments.raw);
+    return show(loadedMap.ref(), positionals[2], arguments.raw);
   }
   if (command == "fgd")
   {
     checkArguments(arguments, command, {"a map file", "a classname"});
-    const auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return fgd(loadedMap, positionals[2]);
+    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    return fgd(loadedMap.ref(), positionals[2]);
   }
   if (command == "apply")
   {
@@ -924,7 +924,8 @@ CommandResult runCommand(
       options.compile = compileOptions;
       options.compile->compilers = config.compilers;
     }
-    auto [output, failed] = verify(loadedMap, config.verify, options);
+    auto [output, failed] =
+      verify(loadedMap.ref(), config.verify, options, loadedMap.source());
     return {std::move(output), failed ? ExitCode::FailOn : ExitCode::Ok};
   }
   if (command == "rooms")
@@ -940,7 +941,7 @@ CommandResult runCommand(
       throw usageError("--timeout cannot be used with --from-artifacts");
     }
     auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return rooms(loadedMap, config, options);
+    return rooms(loadedMap.ref(), loadedMap.source(), config, options);
   }
   if (command == "ops")
   {

@@ -20,10 +20,10 @@
 #pragma once
 
 #include "base/ParserStatus.h"
+#include "cli/MapRef.h"
 
 #include <filesystem>
 #include <memory>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,15 +51,6 @@ class Map;
 namespace cli
 {
 struct Config;
-
-/** Something the map reader skipped or changed while loading. */
-struct LoadProblem
-{
-  /** The reader's message, without its location. */
-  std::string message;
-  /** The line the reader reported it at, if it reported one. */
-  std::optional<size_t> line;
-};
 
 /**
  * Logs what the map reader reports about the given text and records its warnings and
@@ -115,6 +106,12 @@ struct LoadedMap
   LoadedMap(LoadedMap&&) noexcept;
   LoadedMap& operator=(LoadedMap&&) noexcept;
   ~LoadedMap();
+
+  /** The loaded map at the file's rev, which commands read and edit. */
+  MapRef ref();
+
+  /** The file's bytes and how long reading them took. */
+  MapSource source() const;
 };
 
 /** The rev of a file with the given bytes. */
@@ -132,9 +129,6 @@ std::string computeRev(std::string_view bytes);
  */
 LoadedMap loadMap(
   const std::filesystem::path& mapPath, const Config& config, Logger& logger);
-
-/** The name of the loaded map's file without its extension, as compilers name outputs. */
-std::string mapName(const LoadedMap& loadedMap);
 
 } // namespace cli
 } // namespace tb

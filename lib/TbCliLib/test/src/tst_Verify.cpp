@@ -1157,7 +1157,7 @@ TEST_CASE("verify")
 
     auto config = VerifyConfig{};
     config.severity[findIssueType("leak")] = Severity::Warning;
-    const auto issue = leakIssueToJson(loadedMap, config, compileResult);
+    const auto issue = leakIssueToJson(loadedMap.ref(), config, compileResult);
 
     CHECK(issue["type"] == Json{"leak"});
     CHECK(issue["severity"] == Json{"warning"});
@@ -1176,7 +1176,7 @@ TEST_CASE("NodeIssueCollector")
     auto logger = NullLogger{};
     auto loadedMap = loadFixtureMap("maps/verify.map", logger);
     auto& worldNode = loadedMap.map->worldNode();
-    auto collector = NodeIssueCollector{loadedMap, worldNode.registeredValidators()};
+    auto collector = NodeIssueCollector{*loadedMap.map, worldNode.registeredValidators()};
 
     // the light's issues, but not those of the nodes below the layer
     auto* light = resolveNodePath(worldNode, "layer:0/entity:1").node;

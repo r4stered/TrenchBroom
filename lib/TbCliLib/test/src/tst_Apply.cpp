@@ -18,7 +18,16 @@
  */
 
 #include "CliTestUtils.h"
+#include "base/Logger.h"
+#include "cli/Apply.h"
+#include "cli/CliError.h"
+#include "cli/Config.h"
+#include "cli/FileUtils.h"
 #include "cli/LoadMap.h"
+#include "cli/NodePath.h"
+#include "cli/Ops.h"
+#include "mdl/Map.h"
+#include "mdl/WorldNode.h"
 
 #include <fmt/format.h>
 
@@ -795,6 +804,55 @@ TEST_CASE("apply")
       fixture.env.writeConfig({}, config);
       json = parseOutput(fixture.apply(fmt::format("[{}]", OffGridBoxOp)));
       CHECK(json["ops"][0]["issues_introduced"] == Json::array());
+    }
+  }
+
+  SECTION("runBatch")
+  {
+    auto logger = NullLogger{};
+    auto loadedMap = loadFixtureMap("maps/simple.map", logger);
+    // the map is used as the editor would lend it, without the loaded file around it
+    auto& map = *loadedMap.map;
+    const auto original = fixturePath("maps/simple.map");
+    const auto originalBytes = readFile(original);
+
+    SECTION("runs the ops on the borrowed map and writes nothing")
+    {
+      const auto ops = parseBatch(parseJsonLiteral(R"([
+        {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
+        {"op": "delete", "target": "layer:0/brush:0"}
+      ])"));
+      const auto result = runBatch(map, ops, false, VerifyConfig{});
+
+      REQUIRE(result.ops.size() == 2);
+      CHECK(result.ops[1]["removed"] == parseJsonLiteral(R"(["layer:0/brush:0"])"));
+      REQUIRE(result.ops[0]["created"].size() == 1);
+      CHECK(
+        result.bindings
+        == parseJsonLiteral(
+          fmt::format(R"({{"$box": {}}})", result.ops[0]["created"][0].dump())));
+      // the edit is in the borrowed map, not in the file
+      CHECK(
+        resolveNodePath(map.worldNode(), result.ops[0]["created"][0].asString()).node
+        != nullptr);
+      CHECK(readFile(original) == originalBytes);
+    }
+
+    SECTION("names the index of a failing op")
+    {
+      const auto ops = parseBatch(parseJsonLiteral(
+        fmt::format(
+          R"([{}, {{"op": "delete", "target": "layer:0/brush:7"}}])", CreateBoxOp)));
+      try
+      {
+        runBatch(map, ops, false, VerifyConfig{});
+        FAIL("runBatch did not throw");
+      }
+      catch (const CliError& e)
+      {
+        CHECK(e.code() == ErrorCode::NodeNotFound);
+        CHECK(e.opIndex() == 1);
+      }
     }
   }
 }

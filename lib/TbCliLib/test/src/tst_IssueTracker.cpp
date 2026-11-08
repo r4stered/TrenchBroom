@@ -103,7 +103,7 @@ TEST_CASE("IssueTracker")
     // remembers the issues of every node, so that checking all of them again finds
     // nothing new
     auto loadedMap = loadFixtureMap("maps/verify.map", logger);
-    auto tracker = IssueTracker{loadedMap, config};
+    auto tracker = IssueTracker{*loadedMap.map, config};
     CHECK(tracker.introduced({}).empty());
     CHECK(tracker.introduced(modified(&loadedMap.map->worldNode())).empty());
   }
@@ -114,7 +114,7 @@ TEST_CASE("IssueTracker")
     {
       auto loadedMap = loadFixtureMap("maps/simple.map", logger);
       auto& map = *loadedMap.map;
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       auto* box = addBox(map, {{0.5, 0, 0}, {16, 16, 16}});
       const auto issues = tracker.introduced(created(box));
@@ -130,8 +130,8 @@ TEST_CASE("IssueTracker")
       auto loadedMap = loadFixtureMap("maps/simple.map", logger);
       auto& map = *loadedMap.map;
       auto* box = addBox(map, {{0.5, 0, 0}, {16, 16, 16}});
-      auto tracker = IssueTracker{loadedMap, config};
-      auto unaware = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
+      auto unaware = IssueTracker{map, config};
 
       auto* copy =
         mdl::addNode(map, *map.worldNode().defaultLayer(), box->clone(map.worldBounds()));
@@ -149,7 +149,7 @@ TEST_CASE("IssueTracker")
     {
       auto loadedMap = loadFixtureMap("maps/verify.map", logger);
       auto& map = *loadedMap.map;
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       // the light has link_target and two empty_property_value issues
       auto& light = dynamic_cast<mdl::EntityNode&>(
@@ -171,7 +171,7 @@ TEST_CASE("IssueTracker")
     {
       auto loadedMap = loadFixtureMap("maps/simple.map", logger);
       auto& map = *loadedMap.map;
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       // the player start is at 0 80 24
       auto* box = addBox(map, {{-16, 64, 0}, {16, 96, 48}});
@@ -199,7 +199,7 @@ TEST_CASE("IssueTracker")
       mdl::selectNodes(map, {light});
       mdl::setEntityProperty(map, "target", "door1");
       mdl::deselectAll(map);
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       auto* door = resolveNodePath(map.worldNode(), "layer:0/entity:1").node;
       mdl::removeNodes(map, {door});
@@ -213,7 +213,7 @@ TEST_CASE("IssueTracker")
     {
       auto loadedMap = loadFixtureMap("maps/simple.map", logger);
       auto& map = *loadedMap.map;
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       auto* playerStart = resolveNodePath(map.worldNode(), "layer:0/entity:0").node;
       mdl::removeNodes(map, {playerStart});
@@ -226,7 +226,7 @@ TEST_CASE("IssueTracker")
       auto& map = *loadedMap.map;
       const auto* type = findIssueType("non_integer_vertices");
       config.severity[type] = Severity::Error;
-      auto tracker = IssueTracker{loadedMap, config};
+      auto tracker = IssueTracker{map, config};
 
       auto* box = addBox(map, {{0.5, 0, 0}, {16, 16, 16}});
       const auto issues = tracker.introduced(created(box));

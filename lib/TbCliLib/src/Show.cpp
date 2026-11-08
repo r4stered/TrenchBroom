@@ -23,8 +23,8 @@
 #include "cli/CappedList.h"
 #include "cli/EntityJson.h"
 #include "cli/Json.h"
-#include "cli/LoadMap.h"
 #include "cli/MapContents.h"
+#include "cli/MapRef.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "mdl/BrushNode.h"
@@ -135,14 +135,14 @@ Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bo
 
 } // namespace
 
-Json show(LoadedMap& loadedMap, const std::string_view path, const bool raw)
+Json show(const MapRef& mapRef, const std::string_view path, const bool raw)
 {
-  auto& worldNode = loadedMap.map->worldNode();
+  auto& worldNode = mapRef.map.worldNode();
   const auto resolved = resolveNodePath(worldNode, path);
 
   auto result = Json::object();
   result.set("schema", "tbcli.show/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   result.set(
     "node",
     resolved.faceIndex

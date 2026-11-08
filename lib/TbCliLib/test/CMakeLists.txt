@@ -39,6 +39,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LinkedGroups.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadMap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapContents.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapRef.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodeJson.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NodePath.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Ops.cpp

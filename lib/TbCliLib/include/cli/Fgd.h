@@ -25,7 +25,7 @@ namespace tb::cli
 {
 
 class Json;
-struct LoadedMap;
+struct MapRef;
 
 /**
  * The `tbcli.fgd/1` result for the entity definition of the given class, as the map's
@@ -43,6 +43,6 @@ struct LoadedMap;
  * @throw CliError `undefined_class` if no entity definition has the given name, with a
  * message that says so if no entity definitions are loaded at all
  */
-Json fgd(const LoadedMap& loadedMap, std::string_view classname);
+Json fgd(const MapRef& mapRef, std::string_view classname);
 
 } // namespace tb::cli

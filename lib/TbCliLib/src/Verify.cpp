@@ -25,7 +25,7 @@
 #include "cli/Config.h"
 #include "cli/GeometryJson.h"
 #include "cli/Leak.h"
-#include "cli/LoadMap.h"
+#include "cli/MapRef.h"
 #include "cli/NodePath.h"
 #include "cli/Query.h"
 #include "cli/Sha256.h"
@@ -45,6 +45,7 @@
 #include "mdl/Validator.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/contracts.h"
 #include "kd/overload.h"
 #include "kd/ranges/to.h"
 
@@ -251,10 +252,10 @@ private:
 };
 
 void collectLoadErrors(
-  const LoadedMap& loadedMap, KeyMaker& keys, std::vector<VerifyIssue>& issues)
+  const MapRef& mapRef, KeyMaker& keys, std::vector<VerifyIssue>& issues)
 {
   const auto& type = *findIssueType("load_error");
-  for (const auto& problem : loadedMap.loadProblems)
+  for (const auto& problem : mapRef.loadProblems)
   {
     issues.push_back(
       VerifyIssue{
@@ -462,14 +463,14 @@ VerifyIssue leakIssue(
  */
 void collectCompilerIssues(
   const CompileResult& compileResult,
-  LoadedMap& loadedMap,
+  const MapRef& mapRef,
   KeyMaker& keys,
   std::vector<VerifyIssue>& issues)
 {
   const auto& compilerType = *findIssueType("compiler");
   const auto& fatalType = *findIssueType("compile_fatal");
-  const auto lossy = !loadedMap.loadProblems.empty();
-  auto& worldNode = loadedMap.map->worldNode();
+  const auto lossy = !mapRef.loadProblems.empty();
+  auto& worldNode = mapRef.map.worldNode();
 
   for (const auto& run : compileResult.runs)
   {
@@ -788,13 +789,13 @@ Json issueToJson(
 }
 
 Json leakIssueToJson(
-  LoadedMap& loadedMap, const VerifyConfig& config, const CompileResult& compileResult)
+  const MapRef& mapRef, const VerifyConfig& config, const CompileResult& compileResult)
 {
-  auto& map = *loadedMap.map;
+  auto& map = mapRef.map;
   auto& worldNode = map.worldNode();
-  auto keys = KeyMaker{worldNode, *loadedMap.taskManager};
+  auto keys = KeyMaker{worldNode, map.taskManager()};
   auto issues = std::vector<VerifyIssue>{
-    leakIssue(compileResult, worldNode, !loadedMap.loadProblems.empty(), keys)};
+    leakIssue(compileResult, worldNode, !mapRef.loadProblems.empty(), keys)};
   applyConfig(map, config, issues);
   return issueToJson(issues.front(), nodePaths(worldNode));
 }
@@ -828,16 +829,19 @@ std::vector<const VerifyIssue*> filterIssues(
 } // namespace
 
 IssueReport collectIssues(
-  LoadedMap& loadedMap,
+  const MapRef& mapRef,
   const VerifyConfig& config,
-  const std::optional<CompileOptions>& compileOptions)
+  const std::optional<CompileOptions>& compileOptions,
+  const std::optional<MapSource>& source)
 {
-  auto& map = *loadedMap.map;
+  contract_pre(!compileOptions || source);
+
+  auto& map = mapRef.map;
   auto& worldNode = map.worldNode();
-  auto keys = KeyMaker{worldNode, *loadedMap.taskManager};
+  auto keys = KeyMaker{worldNode, map.taskManager()};
   auto result = IssueReport{};
 
-  collectLoadErrors(loadedMap, keys, result.issues);
+  collectLoadErrors(mapRef, keys, result.issues);
 
   const auto validatorMs = timed([&] {
     ValidatorIssueCollector{worldNode.registeredValidators(), keys, result.issues}
@@ -852,13 +856,12 @@ IssueReport collectIssues(
   });
 
   const auto compileResult =
-    compileOptions
-      ? std::optional{compile(
-          loadedMap.bytes, mapName(loadedMap), loadedMap.rev, *compileOptions)}
-      : std::nullopt;
+    compileOptions ? std::optional{compile(
+                       source->bytes, mapName(mapRef), mapRef.rev, *compileOptions)}
+                   : std::nullopt;
   if (compileResult)
   {
-    collectCompilerIssues(*compileResult, loadedMap, keys, result.issues);
+    collectCompilerIssues(*compileResult, mapRef, keys, result.issues);
   }
 
   // validator issues are collected depth first; the lines give the file order, with
@@ -875,7 +878,9 @@ IssueReport collectIssues(
     });
   };
   result.stages = {
-    {"load_diagnostics", hasIssuesFrom(IssueSource::LoadDiagnostics), loadedMap.loadMs},
+    {"load_diagnostics",
+     hasIssuesFrom(IssueSource::LoadDiagnostics),
+     source ? source->loadMs : 0.0},
     {"validators", hasIssuesFrom(IssueSource::Validator), validatorMs},
     {"cli_checks", hasIssuesFrom(IssueSource::CliCheck), cliMs},
   };
@@ -910,16 +915,16 @@ struct NodeIssueCollector::Impl
   std::vector<VerifyIssue> collected;
   ValidatorIssueCollector collector;
 
-  Impl(LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators)
-    : keys{loadedMap.map->worldNode(), *loadedMap.taskManager}
+  Impl(mdl::Map& map, std::vector<const mdl::Validator*> validators)
+    : keys{map.worldNode(), map.taskManager()}
     , collector{std::move(validators), keys, collected}
   {
   }
 };
 
 NodeIssueCollector::NodeIssueCollector(
-  LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators)
-  : m_impl{std::make_unique<Impl>(loadedMap, std::move(validators))}
+  mdl::Map& map, std::vector<const mdl::Validator*> validators)
+  : m_impl{std::make_unique<Impl>(map, std::move(validators))}
 {
 }
 
@@ -962,10 +967,13 @@ void setIssueCounts(Json& object, const std::vector<VerifyIssue>& issues)
 }
 
 VerifyResult verify(
-  LoadedMap& loadedMap, const VerifyConfig& config, const VerifyOptions& options)
+  const MapRef& mapRef,
+  const VerifyConfig& config,
+  const VerifyOptions& options,
+  const std::optional<MapSource>& source)
 {
-  auto& map = *loadedMap.map;
-  const auto report = collectIssues(loadedMap, config, options.compile);
+  auto& map = mapRef.map;
+  const auto report = collectIssues(mapRef, config, options.compile, source);
   const auto listed = filterIssues(map, report.issues, options);
 
   const auto threshold = options.failOn.value_or(Severity::Error);
@@ -985,7 +993,7 @@ VerifyResult verify(
 
   auto result = Json::object();
   result.set("schema", "tbcli.verify/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   result.set("ok", !failing);
   result.set("stages", std::move(stages));
   setIssueCounts(result, report.issues);

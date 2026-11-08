@@ -26,8 +26,8 @@
 #include "cli/FileUtils.h"
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
-#include "cli/LoadMap.h"
 #include "cli/MapContents.h"
+#include "cli/MapRef.h"
 #include "cli/NodePath.h"
 #include "cli/Query.h"
 #include "cli/Verify.h"
@@ -237,9 +237,12 @@ void checkQbspRun(const CompileResult& result)
  * with CellsQbspFlags, and reads what the second run wrote.
  */
 CompiledMap compileForRooms(
-  LoadedMap& loadedMap, const Config& config, const RoomsOptions& options)
+  const MapRef& mapRef,
+  const MapSource& source,
+  const Config& config,
+  const RoomsOptions& options)
 {
-  const auto name = mapName(loadedMap);
+  const auto name = mapName(mapRef);
   const auto artifacts = TemporaryDirectory{"tbcli-rooms-"};
 
   auto compileOptions = CompileOptions{};
@@ -253,18 +256,18 @@ CompiledMap compileForRooms(
       compileOptions.artifacts = artifacts.path();
     }
 
-    const auto result = compile(loadedMap.bytes, name, loadedMap.rev, compileOptions);
+    const auto result = compile(source.bytes, name, mapRef.rev, compileOptions);
     if (result.leaked)
     {
       throw CliError{
         ErrorCode::MapLeaks,
         "the map leaks, so it has no rooms; fix the leak that the issue describes"}
-        .withIssue(leakIssueToJson(loadedMap, config.verify, result));
+        .withIssue(leakIssueToJson(mapRef, config.verify, result));
     }
     checkQbspRun(result);
   }
 
-  return readCompiledMap(artifacts.path(), name, loadedMap.rev, ErrorCode::CompileFailed);
+  return readCompiledMap(artifacts.path(), name, mapRef.rev, ErrorCode::CompileFailed);
 }
 
 /** The name of the contents of a cell: empty, water, slime or lava. */
@@ -1745,17 +1748,19 @@ void setCells(
 
 } // namespace
 
-Json rooms(LoadedMap& loadedMap, const Config& config, const RoomsOptions& options)
+Json rooms(
+  const MapRef& mapRef,
+  const MapSource& source,
+  const Config& config,
+  const RoomsOptions& options)
 {
-  const auto compiled = options.fromArtifacts
-                          ? readCompiledMap(
-                              *options.fromArtifacts,
-                              mapName(loadedMap),
-                              loadedMap.rev,
-                              ErrorCode::StaleArtifact)
-                          : compileForRooms(loadedMap, config, options);
+  const auto compiled =
+    options.fromArtifacts
+      ? readCompiledMap(
+          *options.fromArtifacts, mapName(mapRef), mapRef.rev, ErrorCode::StaleArtifact)
+      : compileForRooms(mapRef, source, config, options);
 
-  const auto& worldNode = loadedMap.map->worldNode();
+  const auto& worldNode = mapRef.map.worldNode();
   const auto graph = buildCellGraph(compiled);
   auto roomGraph = buildRooms(graph, compiled.tree, worldNode, options.splitRatio);
   const auto openings = buildOpenings(graph, roomGraph);
@@ -1767,7 +1772,7 @@ Json rooms(LoadedMap& loadedMap, const Config& config, const RoomsOptions& optio
 
   auto result = Json::object();
   result.set("schema", "tbcli.rooms/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   result.set("heuristic", true);
   result.set("method", std::move(method));
 

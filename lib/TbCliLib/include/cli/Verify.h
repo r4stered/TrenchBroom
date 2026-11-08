@@ -23,6 +23,7 @@
 #include "cli/Compile.h"
 #include "cli/IssueTypes.h"
 #include "cli/Json.h"
+#include "cli/MapRef.h"
 
 #include "vm/vec.h"
 
@@ -44,7 +45,6 @@ class Validator;
 namespace tb::cli
 {
 
-struct LoadedMap;
 struct VerifyConfig;
 
 /** Where a leaking map's hole is, as the `leak` issue reports it. */
@@ -118,10 +118,11 @@ struct IssueReport
 /**
  * Runs the in-process verify stages on the whole map: load diagnostics, which turn
  * what the reader skipped into `load_error` issues, then every validator the map
- * registers, then the CLI checks. Given compile options, then compiles the map's bytes
- * and turns the compilers' logs into `compiler` issues, a leak into one `leak` issue
- * and a failed compiler into a `compile_fatal` issue. Applies the severities and
- * suppressions of the given configuration.
+ * registers, then the CLI checks. Given compile options, then compiles the bytes of the
+ * map's source, which must be given too, and turns the compilers' logs into `compiler`
+ * issues, a leak into one `leak` issue and a failed compiler into a `compile_fatal`
+ * issue. Applies the severities and suppressions of the given configuration. The load
+ * diagnostics stage takes the source's load time, or none without a source.
  *
  * A compiler message that names a line (`[line N]`) is put on the innermost node
  * containing that line; one that names a classname and origin is put on the first
@@ -133,9 +134,10 @@ struct IssueReport
  * @throw CliError if a validator is not in the issue-type table, or as `compile` does
  */
 IssueReport collectIssues(
-  LoadedMap& loadedMap,
+  const MapRef& mapRef,
   const VerifyConfig& config,
-  const std::optional<CompileOptions>& compileOptions = std::nullopt);
+  const std::optional<CompileOptions>& compileOptions = std::nullopt,
+  const std::optional<MapSource>& source = std::nullopt);
 
 /**
  * The issue record `{type, severity, key, message, node, line, origin? | bounds?,
@@ -151,7 +153,7 @@ Json issueToJson(
  * have leaked, with the severity that the configuration sets for `leak`.
  */
 Json leakIssueToJson(
-  LoadedMap& loadedMap, const VerifyConfig& config, const CompileResult& compileResult);
+  const MapRef& mapRef, const VerifyConfig& config, const CompileResult& compileResult);
 
 /**
  * Collects the issues of single nodes as verify does, with their keys. Keys tell
@@ -167,7 +169,7 @@ public:
   /**
    * @throw CliError if a validator is not in the issue-type table
    */
-  NodeIssueCollector(LoadedMap& loadedMap, std::vector<const mdl::Validator*> validators);
+  NodeIssueCollector(mdl::Map& map, std::vector<const mdl::Validator*> validators);
   ~NodeIssueCollector();
 
   NodeIssueCollector(const NodeIssueCollector&) = delete;
@@ -222,11 +224,15 @@ struct VerifyResult
  *
  * `ok` is whether no unsuppressed issue is at or above `failOn`, or `error` without it.
  * The counts cover the whole map; the filters and paging apply only to `issues`, which
- * leaves out suppressed issues.
+ * leaves out suppressed issues. Compiling (`options.compile`) needs the map's source
+ * (see collectIssues).
  *
  * @throw CliError if the target path does not resolve
  */
 VerifyResult verify(
-  LoadedMap& loadedMap, const VerifyConfig& config, const VerifyOptions& options);
+  const MapRef& mapRef,
+  const VerifyConfig& config,
+  const VerifyOptions& options,
+  const std::optional<MapSource>& source);
 
 } // namespace tb::cli

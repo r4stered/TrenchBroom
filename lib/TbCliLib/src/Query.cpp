@@ -22,8 +22,8 @@
 #include "cli/CappedList.h"
 #include "cli/CliError.h"
 #include "cli/Json.h"
-#include "cli/LoadMap.h"
 #include "cli/MapContents.h"
+#include "cli/MapRef.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "mdl/BrushFace.h"
@@ -189,9 +189,9 @@ std::vector<NodeOrFace> queryMatches(
   return matches;
 }
 
-Json query(LoadedMap& loadedMap, const QueryOptions& options)
+Json query(const MapRef& mapRef, const QueryOptions& options)
 {
-  auto& map = *loadedMap.map;
+  auto& map = mapRef.map;
 
   // resolve the reference first so that an invalid path fails regardless of the query
   const auto touching = options.touching | kdl::optional_transform([&](const auto& path) {
@@ -226,7 +226,7 @@ Json query(LoadedMap& loadedMap, const QueryOptions& options)
 
   auto result = Json::object();
   result.set("schema", "tbcli.query/1");
-  result.set("rev", loadedMap.rev);
+  result.set("rev", mapRef.rev);
   if (options.countOnly)
   {
     result.set("total", matches.size());

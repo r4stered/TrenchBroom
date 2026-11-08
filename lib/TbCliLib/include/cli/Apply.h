@@ -19,15 +19,21 @@
 
 #pragma once
 
+#include "cli/Json.h"
+
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <vector>
 
+namespace tb::mdl
+{
+class Map;
+} // namespace tb::mdl
+
 namespace tb::cli
 {
 
-class Json;
 struct LoadedMap;
 struct Op;
 struct VerifyConfig;
@@ -47,9 +53,40 @@ struct ApplyOptions
   bool allowLossy = false;
 };
 
+/** What a batch of ops did to a map, with paths in the map's new state. */
+struct BatchResult
+{
+  /**
+   * Per op `{ok, created, modified, removed, warnings, issues_introduced,
+   * instances_affected?, stale_placements?}`, as in the `tbcli.apply/1` result.
+   */
+  Json ops;
+  /** The paths of the nodes that the ops bound, by binding name. */
+  Json bindings;
+};
+
 /**
- * Runs the given ops against the loaded map, all or nothing, and writes the map once,
- * atomically. Returns the `tbcli.apply/1` result
+ * Runs the given ops against the given map, which can be borrowed: resolves every
+ * node path and query up front, runs the ops in order and collects what each one did,
+ * as `apply` reports it (see there). Edits only the map in memory; neither writes nor
+ * saves it. The map must have command collation disabled, since collated commands
+ * delete the nodes that earlier ops of the batch replaced.
+ *
+ * `allowLocked` lets ops edit locked nodes and keeps locked nodes in query targets.
+ * `issues_introduced` takes the severities and suppressions of `verifyConfig`.
+ *
+ * @throw CliError the error of the first failing op, with its `op_index`. The ops
+ * before it have then already edited the map; undoing them is up to the caller.
+ */
+BatchResult runBatch(
+  mdl::Map& map,
+  const std::vector<Op>& ops,
+  bool allowLocked,
+  const VerifyConfig& verifyConfig);
+
+/**
+ * Runs the given ops against the loaded map with runBatch, all or nothing, and writes
+ * the map once, atomically. Returns the `tbcli.apply/1` result
  * `{schema, rev, ops: [{ok, created, modified, removed, warnings, issues_introduced,
  * instances_affected?, stale_placements?}], bindings, warnings?}`, where
  * `rev` is the rev of the written (or, with `dryRun`, would-be) file, `created`,

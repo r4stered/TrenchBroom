@@ -25,7 +25,7 @@ namespace tb::cli
 {
 
 class Json;
-struct LoadedMap;
+struct MapRef;
 
 /**
  * The `tbcli.show/1` result `{schema, rev, node}` for the node or face at the given path.
@@ -46,6 +46,6 @@ struct LoadedMap;
  *
  * @throw CliError if the path does not resolve
  */
-Json show(LoadedMap& loadedMap, std::string_view path, bool raw);
+Json show(const MapRef& mapRef, std::string_view path, bool raw);
 
 } // namespace tb::cli
