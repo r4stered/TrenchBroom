@@ -1085,6 +1085,215 @@ TEST_CASE("CommandProcessor")
 
     commandProcessor.undo();
   }
+
+  SECTION("setIsCollationEnabled")
+  {
+    const auto commandName1 = "test command 1";
+    auto command1 =
+      std::make_unique<TestCommand>(commandName1, !K(updateModificationCount));
+    auto* command1Ptr = command1.get();
+
+    const auto commandName2 = "test command 2";
+    auto command2 =
+      std::make_unique<TestCommand>(commandName2, !K(updateModificationCount));
+    auto* command2Ptr = command2.get();
+
+    const auto transactionName = "transaction";
+
+    SECTION("Commands inside a transaction are collated if collation is enabled")
+    {
+      command1->expectDo(true);
+      command2->expectDo(true);
+      command1->expectCollate(command2Ptr, true);
+      command1->expectUndo(true);
+
+      commandProcessor.startTransaction(transactionName, TransactionScope::Oneshot);
+      CHECK(commandProcessor.executeAndStore(std::move(command1)));
+      CHECK(commandProcessor.executeAndStore(std::move(command2)));
+      commandProcessor.commitTransaction();
+      getNotifications();
+
+      CHECK(commandProcessor.undo());
+
+      // NOTE: command2 is gone because it was collated into command1
+      CHECK(
+        getNotifications()
+        == std::vector<Notification>{
+          CN{CN::Type::Undo, command1Ptr},
+          CN{CN::Type::Undone, command1Ptr},
+          TN{TN::Type::Undone, transactionName, K(isObservable), !K(isModification)},
+        });
+    }
+
+    SECTION("Commands inside a transaction are not collated if collation is disabled")
+    {
+      commandProcessor.setIsCollationEnabled(false);
+
+      command1->expectDo(true);
+      command2->expectDo(true);
+      command2->expectUndo(true);
+      command1->expectUndo(true);
+
+      commandProcessor.startTransaction(transactionName, TransactionScope::LongRunning);
+      CHECK(commandProcessor.executeAndStore(std::move(command1)));
+      CHECK(commandProcessor.executeAndStore(std::move(command2)));
+      commandProcessor.commitTransaction();
+      getNotifications();
+
+      REQUIRE(commandProcessor.canUndo());
+      CHECK(*commandProcessor.undoCommandName() == transactionName);
+
+      CHECK(commandProcessor.undo());
+      CHECK(!commandProcessor.canUndo());
+
+      CHECK(
+        getNotifications()
+        == std::vector<Notification>{
+          CN{CN::Type::Undo, command2Ptr},
+          CN{CN::Type::Undone, command2Ptr},
+          CN{CN::Type::Undo, command1Ptr},
+          CN{CN::Type::Undone, command1Ptr},
+          TN{TN::Type::Undone, transactionName, K(isObservable), !K(isModification)},
+        });
+    }
+
+    SECTION("Nested transactions are not collated if collation is disabled")
+    {
+      commandProcessor.setIsCollationEnabled(false);
+
+      command1->expectDo(true);
+      command2->expectDo(true);
+      command2->expectUndo(true);
+      command1->expectUndo(true);
+
+      commandProcessor.startTransaction(transactionName, TransactionScope::LongRunning);
+
+      commandProcessor.startTransaction("nested 1", TransactionScope::Oneshot);
+      CHECK(commandProcessor.executeAndStore(std::move(command1)));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.startTransaction("nested 2", TransactionScope::Oneshot);
+      CHECK(commandProcessor.executeAndStore(std::move(command2)));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.commitTransaction();
+      getNotifications();
+
+      CHECK(commandProcessor.undo());
+      CHECK(!commandProcessor.canUndo());
+
+      CHECK(
+        getNotifications()
+        == std::vector<Notification>{
+          CN{CN::Type::Undo, command2Ptr},
+          CN{CN::Type::Undone, command2Ptr},
+          CN{CN::Type::Undo, command1Ptr},
+          CN{CN::Type::Undone, command1Ptr},
+          TN{TN::Type::Undone, transactionName, K(isObservable), !K(isModification)},
+        });
+    }
+  }
+
+  SECTION("markTransactionAsCollationBarrier")
+  {
+    /*
+     * Collation is enabled and everything happens within the collation interval, so the
+     * command processor would try to collate each transaction with its predecessor. None
+     * of the test commands expects a call to doCollateWith, so any attempt to collate
+     * across the barrier fails the test.
+     */
+
+    auto beforeCommand =
+      std::make_unique<TestCommand>("before", !K(updateModificationCount));
+    auto batchCommand =
+      std::make_unique<TestCommand>("batch command", !K(updateModificationCount));
+    auto afterCommand =
+      std::make_unique<TestCommand>("after", !K(updateModificationCount));
+
+    beforeCommand->expectDo(true);
+    batchCommand->expectDo(true);
+    afterCommand->expectDo(true);
+
+    afterCommand->expectUndo(true);
+    batchCommand->expectUndo(true);
+    beforeCommand->expectUndo(true);
+
+    SECTION("Top level")
+    {
+      commandProcessor.startTransaction("before", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::move(beforeCommand));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.startTransaction("batch", TransactionScope::LongRunning);
+      commandProcessor.markTransactionAsCollationBarrier();
+      commandProcessor.executeAndStore(std::move(batchCommand));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.startTransaction("after", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::move(afterCommand));
+      commandProcessor.commitTransaction();
+
+      CHECK(*commandProcessor.undoCommandName() == "after");
+      CHECK(commandProcessor.undo());
+      CHECK(*commandProcessor.undoCommandName() == "batch");
+      CHECK(commandProcessor.undo());
+      CHECK(*commandProcessor.undoCommandName() == "before");
+      CHECK(commandProcessor.undo());
+      CHECK(!commandProcessor.canUndo());
+    }
+
+    SECTION("Inside a transaction")
+    {
+      commandProcessor.startTransaction("outer", TransactionScope::Oneshot);
+
+      commandProcessor.startTransaction("before", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::move(beforeCommand));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.startTransaction("batch", TransactionScope::Oneshot);
+      commandProcessor.markTransactionAsCollationBarrier();
+      commandProcessor.executeAndStore(std::move(batchCommand));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.startTransaction("after", TransactionScope::Oneshot);
+      commandProcessor.executeAndStore(std::move(afterCommand));
+      commandProcessor.commitTransaction();
+
+      commandProcessor.commitTransaction();
+
+      CHECK(*commandProcessor.undoCommandName() == "outer");
+      CHECK(commandProcessor.undo());
+      CHECK(!commandProcessor.canUndo());
+    }
+
+    SECTION("Inside transactions that are collated with each other")
+    {
+      const auto commitInOuterTransaction =
+        [&](const std::string& name, std::unique_ptr<TestCommand> command, bool barrier) {
+          commandProcessor.startTransaction("outer " + name, TransactionScope::Oneshot);
+          commandProcessor.startTransaction(name, TransactionScope::Oneshot);
+          if (barrier)
+          {
+            commandProcessor.markTransactionAsCollationBarrier();
+          }
+          commandProcessor.executeAndStore(std::move(command));
+          commandProcessor.commitTransaction();
+          commandProcessor.commitTransaction();
+        };
+
+      commitInOuterTransaction("before", std::move(beforeCommand), false);
+      commitInOuterTransaction("batch", std::move(batchCommand), true);
+      commitInOuterTransaction("after", std::move(afterCommand), false);
+
+      CHECK(*commandProcessor.undoCommandName() == "outer after");
+      CHECK(commandProcessor.undo());
+      CHECK(*commandProcessor.undoCommandName() == "outer batch");
+      CHECK(commandProcessor.undo());
+      CHECK(*commandProcessor.undoCommandName() == "outer before");
+      CHECK(commandProcessor.undo());
+      CHECK(!commandProcessor.canUndo());
+    }
+  }
 }
 
 } // namespace tb::mdl

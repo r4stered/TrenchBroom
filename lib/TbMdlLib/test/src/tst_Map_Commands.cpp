@@ -25,11 +25,13 @@
 #include "mdl/CatchConfig.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GroupNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Brushes.h"
 #include "mdl/Map_Entities.h"
 #include "mdl/Map_Geometry.h"
+#include "mdl/Map_Groups.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/TestFactory.h"
@@ -385,6 +387,107 @@ TEST_CASE("Map_Commands")
       // For now, we won't support repeating a sequence of commands
       // containing undo/redo (it just clears the repeat stack)
       CHECK(!map.canRepeatCommands());
+    }
+  }
+
+  SECTION("setIsCommandCollationEnabled")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+
+    SECTION("Linked group edits in a long running transaction keep replaced nodes alive")
+    {
+      auto* entityNode =
+        addNode(map, parentForNodes(map), std::make_unique<EntityNode>(Entity{}));
+      selectNodes(map, {entityNode});
+
+      auto* groupNode = groupSelectedNodes(map, "group");
+      auto* linkedGroupNode = createLinkedDuplicate(map);
+      REQUIRE(linkedGroupNode != nullptr);
+
+      openGroup(map, *groupNode);
+      deselectAll(map);
+      selectNodes(map, {entityNode});
+
+      map.setIsCommandCollationEnabled(false);
+      map.startTransaction("batch", TransactionScope::LongRunning);
+
+      REQUIRE(setEntityProperty(map, "key", "value 1"));
+      REQUIRE(linkedGroupNode->children().size() == 1u);
+      const auto* linkedEntityNode1 =
+        dynamic_cast<const EntityNode*>(linkedGroupNode->children().front());
+      REQUIRE(linkedEntityNode1 != nullptr);
+      REQUIRE(linkedEntityNode1->entity().property("key") != nullptr);
+
+      // replaces the linked copy of the entity a second time; if this collated with the
+      // first edit, the first replacement would be deleted
+      REQUIRE(setEntityProperty(map, "key", "value 2"));
+      REQUIRE(linkedGroupNode->children().size() == 1u);
+      REQUIRE(linkedGroupNode->children().front() != linkedEntityNode1);
+
+      const auto* value1 = linkedEntityNode1->entity().property("key");
+      REQUIRE(value1 != nullptr);
+      CHECK(*value1 == "value 1");
+
+      REQUIRE(map.commitTransaction());
+      REQUIRE(map.canUndoCommand());
+      CHECK(*map.undoCommandName() == "batch");
+
+      map.undoCommand();
+      CHECK(entityNode->entity().property("key") == nullptr);
+
+      const auto* linkedEntityNode =
+        dynamic_cast<const EntityNode*>(linkedGroupNode->children().front());
+      REQUIRE(linkedEntityNode != nullptr);
+      CHECK(linkedEntityNode->entity().property("key") == nullptr);
+    }
+  }
+
+  SECTION("markTransactionAsCollationBarrier")
+  {
+    auto fixture = MapFixture{};
+    auto& map = fixture.create();
+    map.setIsCommandCollationEnabled(true);
+
+    auto* entityNode =
+      addNode(map, parentForNodes(map), std::make_unique<EntityNode>(Entity{}));
+    selectNodes(map, {entityNode});
+
+    const auto mapperDrag = [&]() {
+      map.startTransaction("drag", TransactionScope::Oneshot);
+      REQUIRE(translateSelection(map, {1, 0, 0}));
+      REQUIRE(map.commitTransaction());
+    };
+
+    const auto batch = [&]() {
+      map.startTransaction("batch", TransactionScope::LongRunning);
+      map.markTransactionAsCollationBarrier();
+      REQUIRE(translateSelection(map, {2, 0, 0}));
+      REQUIRE(map.commitTransaction());
+    };
+
+    SECTION("A mapper action right before the batch doesn't merge with it")
+    {
+      mapperDrag();
+      batch();
+      REQUIRE(entityNode->entity().origin() == vm::vec3d{3, 0, 0});
+
+      CHECK(*map.undoCommandName() == "batch");
+      map.undoCommand();
+      CHECK(entityNode->entity().origin() == vm::vec3d{1, 0, 0});
+      CHECK(*map.undoCommandName() == "drag");
+    }
+
+    SECTION("A mapper action right after the batch doesn't merge with it")
+    {
+      batch();
+      mapperDrag();
+      REQUIRE(entityNode->entity().origin() == vm::vec3d{3, 0, 0});
+
+      CHECK(*map.undoCommandName() == "drag");
+      map.undoCommand();
+      CHECK(entityNode->entity().origin() == vm::vec3d{2, 0, 0});
+      CHECK(*map.undoCommandName() == "batch");
     }
   }
 

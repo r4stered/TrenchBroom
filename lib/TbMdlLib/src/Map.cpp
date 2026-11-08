@@ -1541,6 +1541,11 @@ void Map::cancelTransaction()
   m_repeatStack->commitTransaction();
 }
 
+void Map::markTransactionAsCollationBarrier()
+{
+  m_commandProcessor->markTransactionAsCollationBarrier();
+}
+
 bool Map::isCurrentDocumentStateObservable() const
 {
   return m_commandProcessor->isCurrentDocumentStateObservable();

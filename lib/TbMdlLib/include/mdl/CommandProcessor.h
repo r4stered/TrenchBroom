@@ -45,7 +45,10 @@ enum class TransactionScope;
  * - the previous command's `collateWith` method returns true when passed the succeeding
  * command
  * - the time passed between the execution of the commands does not exceed the collation
- * interval.
+ * interval (this only applies to commands on the undo stack, not to commands within a
+ * transaction)
+ * - collation is enabled
+ * - neither command is a transaction that was marked as a collation barrier.
  *
  * The command processor supports nested transactions. Each transaction can be committed
  * or rolled back individually. Committing a nested transaction adds it as a command to
@@ -195,6 +198,15 @@ public:
    * Precondition: a transaction is currently executing.
    */
   void commitTransaction();
+
+  /**
+   * Marks the currently executing transaction as a collation barrier. Once committed, the
+   * transaction is never collated with the command before it or with the command after
+   * it, regardless of the collation interval and the collation flag.
+   *
+   * Precondition: a transaction is currently executing.
+   */
+  void markTransactionAsCollationBarrier();
 
   /**
    * Rolls the currently executing transaction back by undoing all commands that belong to
@@ -360,10 +372,14 @@ private:
    *
    * @param name the name of the command to create
    * @param commands the commands to store in the newly created transaction command
+   * @param isCollationBarrier whether the newly created command must never be collated
+   * with its neighbours
    * @return the newly created command
    */
   std::unique_ptr<UndoableCommand> createTransaction(
-    std::string name, std::vector<std::unique_ptr<UndoableCommand>> commands);
+    std::string name,
+    std::vector<std::unique_ptr<UndoableCommand>> commands,
+    bool isCollationBarrier);
 
   /**
    * Pushes the given command onto the undo stack, unless it can be collated with the

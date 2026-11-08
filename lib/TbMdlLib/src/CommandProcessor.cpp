@@ -48,6 +48,7 @@ class TransactionCommand : public UndoableCommand
 {
 private:
   std::vector<std::unique_ptr<UndoableCommand>> m_commands;
+  bool m_isCollationBarrier;
 
   Notifier<Command&>& m_commandDoNotifier;
   Notifier<Command&>& m_commandDoneNotifier;
@@ -58,12 +59,14 @@ public:
   TransactionCommand(
     std::string name,
     std::vector<std::unique_ptr<UndoableCommand>> commands,
+    const bool isCollationBarrier,
     Notifier<Command&>& i_commandDoNotifier,
     Notifier<Command&>& i_commandDoneNotifier,
     Notifier<UndoableCommand&>& i_commandUndoNotifier,
     Notifier<UndoableCommand&>& i_commandUndoneNotifier)
     : UndoableCommand(std::move(name), false)
     , m_commands{std::move(commands)}
+    , m_isCollationBarrier{isCollationBarrier}
     , m_commandDoNotifier{i_commandDoNotifier}
     , m_commandDoneNotifier{i_commandDoneNotifier}
     , m_commandUndoNotifier{i_commandUndoNotifier}
@@ -115,6 +118,10 @@ private:
   {
     if (auto* transactionCommand = dynamic_cast<TransactionCommand*>(&other))
     {
+      if (m_isCollationBarrier || transactionCommand->m_isCollationBarrier)
+      {
+        return false;
+      }
       if (m_commands.empty())
       {
         m_commands = std::move(transactionCommand->m_commands);
@@ -147,6 +154,7 @@ struct CommandProcessor::TransactionState
   std::string name;
   TransactionScope scope;
   std::vector<std::unique_ptr<UndoableCommand>> commands;
+  bool isCollationBarrier = false;
 
   TransactionState(std::string i_name, const TransactionScope i_scope)
     : name{std::move(i_name)}
@@ -218,6 +226,13 @@ void CommandProcessor::commitTransaction()
   contract_pre(!m_transactionStack.empty());
 
   createAndStoreTransaction();
+}
+
+void CommandProcessor::markTransactionAsCollationBarrier()
+{
+  contract_pre(!m_transactionStack.empty());
+
+  m_transactionStack.back().isCollationBarrier = true;
 }
 
 void CommandProcessor::rollbackTransaction()
@@ -387,7 +402,7 @@ bool CommandProcessor::pushTransactionCommand(
   if (!transaction.commands.empty())
   {
     auto& lastCommand = transaction.commands.back();
-    if (collate && lastCommand->collateWith(*command))
+    if (m_isCollationEnabled && collate && lastCommand->collateWith(*command))
     {
       // the command is not stored because it was collated with its predecessor
       return false;
@@ -408,7 +423,8 @@ void CommandProcessor::createAndStoreTransaction()
     {
       transaction.name = transaction.commands.front()->name();
     }
-    auto command = createTransaction(transaction.name, std::move(transaction.commands));
+    auto command = createTransaction(
+      transaction.name, std::move(transaction.commands), transaction.isCollationBarrier);
     const auto isModification = command->isModification();
 
     if (m_transactionStack.empty())
@@ -425,11 +441,14 @@ void CommandProcessor::createAndStoreTransaction()
 }
 
 std::unique_ptr<UndoableCommand> CommandProcessor::createTransaction(
-  std::string name, std::vector<std::unique_ptr<UndoableCommand>> commands)
+  std::string name,
+  std::vector<std::unique_ptr<UndoableCommand>> commands,
+  const bool isCollationBarrier)
 {
   return std::make_unique<TransactionCommand>(
     std::move(name),
     std::move(commands),
+    isCollationBarrier,
     commandDoNotifier,
     commandDoneNotifier,
     commandUndoNotifier,

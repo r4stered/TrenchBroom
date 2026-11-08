@@ -396,6 +396,7 @@ public: // command processing
   void rollbackTransaction();
   bool commitTransaction();
   void cancelTransaction();
+  void markTransactionAsCollationBarrier();
 
   bool isCurrentDocumentStateObservable() const;
 
