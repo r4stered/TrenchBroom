@@ -21,10 +21,16 @@
 
 #include "cli/Ops.h"
 #include "cli/Targets.h"
+#include "mdl/BrushNode.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Node.h"
 #include "mdl/Object.h"
+#include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
+
+#include "kd/overload.h"
 
 #include <algorithm>
 #include <deque>
@@ -50,13 +56,20 @@ std::string linkIdOf(const mdl::Node& node)
 
 void collectGroups(const mdl::Node& node, std::vector<mdl::GroupNode*>& groups)
 {
+  // runs before every op of a batch, so it visits only the nodes that can hold groups
   for (auto* child : node.children())
   {
-    if (auto* group = dynamic_cast<mdl::GroupNode*>(child))
-    {
-      groups.push_back(group);
-    }
-    collectGroups(*child, groups);
+    child->accept(
+      kdl::overload(
+        [](mdl::WorldNode&) {},
+        [&](mdl::LayerNode& layer) { collectGroups(layer, groups); },
+        [&](mdl::GroupNode& group) {
+          groups.push_back(&group);
+          collectGroups(group, groups);
+        },
+        [](mdl::EntityNode&) {},
+        [](mdl::BrushNode&) {},
+        [](mdl::PatchNode&) {}));
   }
 }
 

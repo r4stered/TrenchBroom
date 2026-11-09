@@ -38,6 +38,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Leak.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LinkedGroups.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LiveBatchPerformance.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LiveLink.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LiveSession.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadMap.cpp

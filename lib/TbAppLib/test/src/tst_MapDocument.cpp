@@ -30,6 +30,7 @@
 #include "mdl/MapFormat.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/TestUtils.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 #include "ui/MapDocument.h"
 
@@ -212,6 +213,82 @@ TEST_CASE("MapDocument")
         CHECK(documentWasLoaded.notifications == std::vector<std::tuple<>>{{}});
       }
     }) | kdl::transform_error([](auto e) { FAIL(e.msg); });
+  }
+}
+
+TEST_CASE("MapDocument::DeferredRefresh")
+{
+  const auto environmentConfig = mdl::EnvironmentConfig{};
+  auto taskManager = createTestTaskManager();
+  auto resourceManager = gl::ResourceManager{};
+
+  auto document = MapDocument::createDocument(
+                    environmentConfig,
+                    mdl::Quake2GameInfo,
+                    mdl::MapFormat::Valve,
+                    vm::bbox3d{8192.0},
+                    *taskManager,
+                    resourceManager)
+                  | kdl::value();
+  auto& map = document->map();
+
+  const auto addEntity = [&]() {
+    addNode(
+      map, mdl::parentForNodes(map), std::make_unique<mdl::EntityNode>(mdl::Entity{}));
+  };
+
+  auto documentDidChange = Observer<>{document->documentDidChangeNotifier};
+
+  SECTION("without it, every change refreshes")
+  {
+    addEntity();
+    addEntity();
+    CHECK(documentDidChange.notifications.size() == 2);
+  }
+
+  SECTION("holds back the refreshes until it ends, then refreshes once")
+  {
+    {
+      const auto deferredRefresh = MapDocument::DeferredRefresh{*document};
+      addEntity();
+      addEntity();
+      CHECK(documentDidChange.notifications.empty());
+    }
+    CHECK(documentDidChange.notifications.size() == 1);
+  }
+
+  SECTION("holds back the refreshes of the changes inside a long-running transaction")
+  {
+    {
+      const auto deferredRefresh = MapDocument::DeferredRefresh{*document};
+      map.startTransaction("batch", mdl::TransactionScope::LongRunning);
+      addEntity();
+      addEntity();
+      map.commitTransaction();
+      CHECK(documentDidChange.notifications.empty());
+    }
+    CHECK(documentDidChange.notifications.size() == 1);
+  }
+
+  SECTION("refreshes nothing if nothing changed")
+  {
+    {
+      const auto deferredRefresh = MapDocument::DeferredRefresh{*document};
+    }
+    CHECK(documentDidChange.notifications.empty());
+  }
+
+  SECTION("nested, refreshes when the outermost ends")
+  {
+    {
+      const auto outer = MapDocument::DeferredRefresh{*document};
+      {
+        const auto inner = MapDocument::DeferredRefresh{*document};
+        addEntity();
+      }
+      CHECK(documentDidChange.notifications.empty());
+    }
+    CHECK(documentDidChange.notifications.size() == 1);
   }
 }
 

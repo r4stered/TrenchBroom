@@ -25,13 +25,18 @@
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "mdl/Brush.h"
+#include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/Issue.h"
+#include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Nodes.h"
 #include "mdl/WorldNode.h"
+
+#include "vm/bbox.h"
 
 #include <memory>
 #include <string>
@@ -190,6 +195,25 @@ TEST_CASE("EntityInsideSolidValidator")
   SECTION("a brush entity")
   {
     CHECK(fixture.messages(validator, "layer:0/entity:3").empty());
+  }
+
+  SECTION("a point entity inside a world brush that was added after loading")
+  {
+    auto& map = *fixture.loadedMap.map;
+    auto& worldNode = map.worldNode();
+    const auto builder = mdl::BrushBuilder{worldNode.mapFormat(), map.worldBounds()};
+    // around the item_health at 0 64 0
+    REQUIRE(
+      mdl::addNode(
+        map,
+        *worldNode.defaultLayer(),
+        std::make_unique<mdl::BrushNode>(
+          builder.createCuboid(vm::bbox3d{{-16, 48, -16}, {16, 80, 16}}, "box")
+            .value())));
+
+    CHECK(
+      fixture.messages(validator, "layer:0/entity:2")
+      == Messages{"item_health origin is inside a world brush"});
   }
 }
 

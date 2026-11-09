@@ -92,6 +92,26 @@ class MapDocument
 public:
   static const vm::bbox3d DefaultWorldBounds;
 
+  /**
+   * While it lives, the document holds back documentDidChangeNotifier, which refreshes
+   * the views, inspectors and browsers, and sends it once when it ends if the document
+   * changed. For edits made of many commands, such as a batch of a tbcli live session,
+   * which would otherwise refresh the UI after every command. Nested, the outermost one
+   * sends it.
+   */
+  class DeferredRefresh
+  {
+  private:
+    MapDocument& m_document;
+
+  public:
+    explicit DeferredRefresh(MapDocument& document);
+    ~DeferredRefresh();
+
+    DeferredRefresh(const DeferredRefresh&) = delete;
+    DeferredRefresh& operator=(const DeferredRefresh&) = delete;
+  };
+
   Notifier<> documentWasLoadedNotifier;
   Notifier<> documentWasSavedNotifier;
   Notifier<> documentDidChangeNotifier;
@@ -162,6 +182,11 @@ private:
   std::optional<PortalFile> m_portalFile;
 
   std::unique_ptr<render::MapRenderer> m_mapRenderer;
+
+  /** The number of DeferredRefresh scopes that are alive. */
+  size_t m_deferRefreshDepth = 0;
+  /** Whether the document changed while its refresh was held back. */
+  bool m_refreshPending = false;
 
   NotifierConnection m_notifierConnection;
 
@@ -245,6 +270,9 @@ private: // observers
 
   void transactionDone(const std::string& name, bool observable, bool isModification);
   void transactionUndone(const std::string& name, bool observable, bool isModification);
+  void documentDidChange();
+  void beginDeferRefresh();
+  void endDeferRefresh();
   void documentWasLoaded();
   void documentWasCleared();
   void preferenceDidChange(const std::filesystem::path& preferencePath);

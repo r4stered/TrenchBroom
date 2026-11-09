@@ -32,6 +32,7 @@
 #include "mdl/IssueType.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/NodeTree.h"
 #include "mdl/PatchNode.h"
 #include "mdl/PropertyDefinition.h"
 #include "mdl/WorldNode.h"
@@ -166,29 +167,23 @@ const mdl::WorldNode& worldOf(const mdl::Node& node)
 }
 
 /**
- * Whether a solid world brush below the node strictly contains the point. Subtrees whose
- * bounds do not contain the point are skipped.
+ * Whether a solid world brush strictly contains the point. Looks the point up in the
+ * world's node tree: checking every brush for every point entity took most of the time
+ * of checking a large map.
  */
-bool containsSolidWorldBrushAt(const mdl::Node& node, const vm::vec3d& point)
+bool containsSolidWorldBrushAt(const mdl::WorldNode& worldNode, const vm::vec3d& point)
 {
-  return std::ranges::any_of(node.children(), [&](const mdl::Node* child) {
-    return child->logicalBounds().contains(point)
-           && child->accept(
-             kdl::overload(
-               [](const mdl::WorldNode&) { return false; },
-               [&](const mdl::LayerNode& layer) {
-                 return containsSolidWorldBrushAt(layer, point);
-               },
-               [&](const mdl::GroupNode& group) {
-                 return containsSolidWorldBrushAt(group, point);
-               },
-               // the brushes of an entity are not world brushes
-               [](const mdl::EntityNode&) { return false; },
-               [&](const mdl::BrushNode& brushNode) {
-                 const auto& brush = brushNode.brush();
-                 return !isLiquid(brush) && brush.containsPointStrictly(point);
-               },
-               [](const mdl::PatchNode&) { return false; }));
+  const auto candidates = worldNode.nodeTree().find_containers(point);
+  return std::ranges::any_of(candidates, [&](const mdl::Node* node) {
+    const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(node);
+    // the brushes of an entity are not world brushes
+    if (!brushNode || brushNode->entity() != &worldNode)
+    {
+      return false;
+    }
+    const auto& brush = brushNode->brush();
+    return brushNode->logicalBounds().contains(point) && !isLiquid(brush)
+           && brush.containsPointStrictly(point);
   });
 }
 

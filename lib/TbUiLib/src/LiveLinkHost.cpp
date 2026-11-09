@@ -416,7 +416,11 @@ bool LiveLinkHost::isMapperBusy() const
 
 cli::RunResult LiveLinkHost::serve(const cli::Invocation& invocation)
 {
-  auto result = cli::run(invocation.args, invocation.in, *this);
+  auto result = [&]() {
+    // a batch refreshes the editor's views, inspectors and browsers once, not per op
+    const auto deferredRefresh = MapDocument::DeferredRefresh{m_document};
+    return cli::run(invocation.args, invocation.in, *this);
+  }();
   if (const auto command = cli::mutatingCommand(invocation.args))
   {
     // every change that the agent makes gets a line in the Console

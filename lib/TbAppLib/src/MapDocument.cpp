@@ -73,6 +73,17 @@ MapDocument::MapDocument(
   connectObservers();
 }
 
+MapDocument::DeferredRefresh::DeferredRefresh(MapDocument& document)
+  : m_document{document}
+{
+  m_document.beginDeferRefresh();
+}
+
+MapDocument::DeferredRefresh::~DeferredRefresh()
+{
+  m_document.endDeferRefresh();
+}
+
 MapDocument::MapDocument(MapDocument&&) noexcept = default;
 MapDocument& MapDocument::operator=(MapDocument&&) noexcept = default;
 
@@ -428,7 +439,7 @@ void MapDocument::transactionDone(
 {
   if (observable && isModification)
   {
-    documentDidChangeNotifier();
+    documentDidChange();
   }
 }
 
@@ -437,6 +448,34 @@ void MapDocument::transactionUndone(
 {
   if (observable && isModification)
   {
+    documentDidChange();
+  }
+}
+
+void MapDocument::documentDidChange()
+{
+  if (m_deferRefreshDepth > 0)
+  {
+    m_refreshPending = true;
+  }
+  else
+  {
+    documentDidChangeNotifier();
+  }
+}
+
+void MapDocument::beginDeferRefresh()
+{
+  ++m_deferRefreshDepth;
+}
+
+void MapDocument::endDeferRefresh()
+{
+  contract_pre(m_deferRefreshDepth > 0);
+
+  if (--m_deferRefreshDepth == 0 && m_refreshPending)
+  {
+    m_refreshPending = false;
     documentDidChangeNotifier();
   }
 }

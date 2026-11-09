@@ -19,6 +19,7 @@
 
 #include <QCoreApplication>
 
+#include "Observer.h"
 #include "base/Logger.h"
 #include "base/PreferenceManager.h"
 #include "cli/Json.h"
@@ -245,6 +246,20 @@ TEST_CASE("LiveLinkHost")
       parse(
         run({"show", mapArg, created["created_handles"][0].asString()}))["node"]["path"]
       == created["created"][0]);
+  }
+
+  SECTION("a batch refreshes the editor's UI once, not after every op")
+  {
+    const auto threeBoxes = std::string{R"([
+      {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "x"},
+      {"op": "create_box", "min": [0, 64, 0], "max": [64, 96, 16], "material": "x"},
+      {"op": "create_box", "min": [0, 128, 0], "max": [64, 160, 16], "material": "x"}
+    ])"};
+
+    auto documentDidChange = Observer<>{document.documentDidChangeNotifier};
+    run({"apply", mapArg, "-"}, threeBoxes);
+    CHECK(map.worldNode().defaultLayer()->childCount() == 4);
+    CHECK(documentDidChange.notifications.size() == 1);
   }
 
   SECTION("reads write no Console line, failures do")
