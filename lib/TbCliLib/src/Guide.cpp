@@ -396,6 +396,174 @@ loop in `tbcli guide` says.
 
 {examples})";
 
+constexpr auto LiveText = R"(# Live sessions
+
+While TrenchBroom has a map open, tbcli runs your commands in the editor instead of on
+the file: you read and edit the map the mapper sees, and the mapper sees your edits at
+once. You call tbcli as always; it finds the editor by itself. Then `tbcli describe
+<map>` has a `session` block, `{"live": true, "epoch", "map"}`, and the `rev` of the
+open map is a live rev. The rest of the guide still holds, apart from what this topic
+says.
+
+## What changes
+
+- **The open map is the state, not the file.** `apply` and the ops edit the map in the
+  editor and write nothing; their result has `"session": "live"`. Only `tbcli save` or
+  the mapper's own Save writes the file, so git does not undo your batch: `tbcli undo`
+  does.
+- **No tbcli.json is needed** to read and edit: the editor's game config and entity
+  definitions answer for the map, and `--game-config` and `--fgd` are refused with
+  `invalid_argument`. Compiling still needs one (see Compiling).
+- **The mapper works while you work.** A request waits while the mapper drags, uses a
+  tool or has a dialog open, then runs. If the mapper stays busy for 60 seconds, it
+  fails with `busy` and changes nothing: retry shortly.
+- **The mapper sees what you do.** Each batch that changes the map is one step in the
+  editor's undo history, labelled `AI: <ops>`, which the mapper can undo with Ctrl+Z.
+  The nodes you create or modify flash once, the status bar shows that you are working
+  or looking, and the Console gets one line per batch, undo and save, failures
+  included.
+
+## Live revs
+
+A live rev is `live-<epoch>:<counter>`. The counter goes up on every change to the map,
+yours, the mapper's, undo and redo, and a rev never comes back. Selecting, hiding and
+showing nodes don't move it. A batch moves it by more than one, and so does a
+`--dry-run`, which undoes what it did. The epoch is new whenever the editor opens or
+reloads the map, or saves it under another name.
+
+## Node handles
+
+Next to every node path, live output has the node's handle: `handle` next to `path`,
+`<key>_handle` next to any other key that holds one path (as `entity_handle`, or
+`node_handle` in an error), and `<key>_handles` next to a list or object of paths (as
+`created_handles`, `modified_handles`, `removed_handles` and `bindings_handles`). A
+handle is `n:<epoch>.<k>`, a face's `n:<epoch>.<k>/face:<i>`.
+
+- A handle names its node for the whole session, wherever the mapper's edits move the
+  node's path, and again after an undo brings the node back. A duplicate or a pasted
+  copy has a handle of its own.
+- **Target handles, not paths.** A handle goes wherever a path goes: in a batch's
+  targets and node arguments, an op's flags, `show`, `query --touching`, `verify
+  --target` and `view --look-at`. A path names a node only at the rev it came from.
+- A removed node's handle gives `gone`. A handle of another epoch gives
+  `stale_session`: the map was reopened, so read it again.
+
+## Editing at an old rev
+
+Pass `--expect-rev <rev>` with the rev you read, as in file mode. While the mapper
+edits, the live rev moves on, but a batch at an old rev still runs if nothing it names
+was touched since that rev:
+
+- a handle, unless its node was removed or changed, an ancestor below the world changed
+  (such as a group's transform or a layer's lock), or, for a group or an entity,
+  something inside it changed. Changes to its siblings, hiding and selecting don't
+  count;
+- a path only at the current rev, since the mapper's edits may have shifted it;
+- a query target is run against the current map and checked only by its `expect`.
+
+Otherwise the batch is refused with `stale_rev` (exit 3) and changes nothing. The error
+has `conflicts`, each with the `op_index`, the `node` as the batch named it, path or
+handle, and a `reason`: `path`, `changed`, `ancestor_changed`, `descendant_changed` or
+`removed`, with the node's current `path` if it is still in the map; and `changes`, what
+`tbcli changes` lists since your rev. Re-plan from them; don't retry blindly. A rev of
+another session, or one older than the editor's change log, is refused without them:
+read the map again.
+
+## Catching up
+
+`tbcli changes <map> --since <rev>` lists the nodes created, modified and removed since
+the rev, one entry each: its `kind`, `handle` and current `path` (a removed node has
+none), who changed it last (`origin`: `mapper` or `agent`), the `rev` of that change,
+and `undo` or `redo` if an undo or a redo made it. Of a created or removed group or
+entity, only the group or entity is listed. The editor remembers the latest 1000 or so
+changes; for an older rev, `changes` fails with `too_old`, and for a rev of another
+session with `stale_session`: read the map again with `describe` and `query`.
+
+## Undo and save
+
+- `tbcli undo <map>` undoes your own most recent batch, and after that the one before
+  it. The result names the undo step it undid in `undone`. It is refused with
+  `undo_refused` if the most recent change is not yours: if the mapper changed the map,
+  undid or redid something, or only selected, hid or showed nodes since your last
+  request, or if there is nothing to undo. Then ask the mapper to press Ctrl+Z.
+- `tbcli save <map>` saves the open map to its file, as the mapper's Save does. Save
+  only when the mapper asks you to. The result has the `path` written and `modified`,
+  whether the map still has unsaved changes. A failed write fails with `write_failed`,
+  and the map stays unsaved. `tbcli save <map> -o <out.map>` (or `--output`) writes a
+  copy and leaves the map's file and its unsaved changes alone; it cannot name the
+  map's own file.
+- `apply -o <out.map>` writes the batch's result there and leaves the open map as it
+  was. Its `rev` is the written file's, and the live rev moves, as after a `--dry-run`.
+
+## Compiling
+
+`verify --compile` and `rooms` compile the open map, not the file: the editor hands
+tbcli the map as it is, and the compile runs in tbcli, outside the editor. As in file
+mode, they need a tbcli.json next to the map or above it: without a game config in it
+they fail with `config_error`, and without the compilers with `compiler_missing`.
+Their `rev` is the rev of the map they compiled. If the map changed during the compile,
+the result has `"stale": true`: compile again before you trust a leak or the rooms.
+Their line numbers and paths refer to the compiled map, and they have no handles.
+
+## Seeing what the mapper sees
+
+`tbcli view <map>` captures the map view the mapper last focused, 3D or 2D, as it is on
+screen. The result has the PNG's `image` (`path`, `width`, `height`), the `view` (`3d`,
+`xy`, `xz` or `yz`), the `camera`, the `pixel_ratio`, the `selection` (nodes and faces)
+and `hovered`, the node or face under the mouse, each with its path, handle and box. A
+box is `[left, top, right, bottom]` in the image's pixels, or null if the node is
+outside it. Images are kept in a temporary directory that keeps the latest 20 and goes
+away with the session; `--out <file.png>` copies the image to keep it. If the editor
+cannot capture the view, `view` fails with `view_failed`.
+
+## Shown views
+
+The mapper can show you a view with View > Show to Agent (Ctrl+Alt+S), which captures
+the view under the mouse with a crosshair at the cursor. Until you see it, every output,
+errors included, has `"shown": {"rev", "age", "run": "tbcli view"}`, with `age` in
+seconds. **If an output has `shown`, run `tbcli view <map>`:** the mapper means the
+shown view. The result then has it under `shown`, with its own `image`, `view`,
+`camera`, `selection`, `hovered`, which is what the crosshair points at, and `cursor`,
+the crosshair's `[x, y]` in its image, all as of the shown `rev`. Only the mapper's
+latest shown view is kept, and any `view` takes it, so you see it once.
+
+## Your own cameras
+
+With camera options, `view` renders the map from a camera of your own, without moving
+the mapper's camera:
+
+- what to look at: `--look-at <path | handle>`, `--frame x1,y1,z1,x2,y2,z2` or
+  `--selection` (the mapper's selected nodes, or else faces);
+- from where: `--orbit yaw,pitch[,distance]` around it, `--from x,y,z --toward x,y,z`,
+  or `--top`, `--front` or `--side`, which look along an axis as the editor's `xy`,
+  `xz` and `yz` views do;
+- `--size WxH`, 1024x768 by default, fitted into 2048 pixels.
+
+With only what to look at, the camera orbits it at yaw 225 and pitch 30, southwest of
+it and above, as far away as it needs to fit it. Yaw counts counterclockwise from +x;
+pitch is -90 to 90 above the horizon. With only where from, it looks at the whole map.
+The result's `camera` is the camera it rendered from: to repeat or adjust a view, pass
+its `position` to `--from` and its position plus its `direction` to `--toward`. A
+malformed or conflicting option fails with `invalid_argument`.
+
+## When the session ends
+
+- `session_ended`: the mapper closed the map or saved it under another name, which the
+  message names, and the command did not run. Your next command on the map's old path
+  runs on the file; read the map again.
+- `link_disabled`: the editor's "Accept AI connections" preference was off when the
+  editor opened the map. tbcli then refuses to work on the file; ask the mapper to turn
+  the preference on and reopen the map.
+- `no_session`: `undo`, `save`, `view` and `changes` work only in a live session.
+  `--live` makes any command fail with `no_session` rather than work on the file, and
+  `--file` works on the file although the editor has the map open: both are for
+  debugging only, and never write the file with `--file` while the editor has it open.
+
+In the examples, `<rev>` is the live rev you read, `<new rev>` the live rev after your
+batch, and `<epoch>` the session's epoch.
+
+{examples})";
+
 /** The guide's examples, initialized on first use, not at static initialization. */
 const std::vector<GuideExample>& allExamples()
 {
@@ -607,6 +775,115 @@ group `connection:A-B`. `connect` modified both rooms' carriers, whose walls it 
       R"(To make B wider, `edit_room` B with a new `size`: tbcli rebuilds B and the corridor,
 and cuts A's wall again.)",
     },
+    {
+      "live",
+      "live_handles",
+      "Example: edit by handle while the mapper works",
+      R"(TrenchBroom has the map of `tbcli guide examples` open: two rooms, with the player
+start in the west room and a light in the east room. The mapper asks you to make the
+light brighter. Read the map and find the light.)",
+      {
+        {
+          "tbcli describe <map>",
+          R"({"rev": "<rev>", "session": {"live": true, "epoch": "<epoch>"}})",
+          true,
+        },
+        {
+          R"(tbcli query <map> 'classname is "light"')",
+          R"({"rev": "<rev>", "items": [
+  {"path": "layer:0/entity:1", "handle": "n:<epoch>.4", "classname": "light",
+   "origin": [144, 0, 96]}]})",
+          true,
+        },
+      },
+      R"(Meanwhile, the mapper moves the player start, and the live rev moves on from
+`<rev>`. Target the light by its handle and pass the rev you read: the batch runs,
+because the mapper's edit did not touch the light. Had you targeted the light's path,
+the batch would be refused with `stale_rev`, since the rev is no longer `<rev>`. A
+light without a `light` key has the brightness 300.)",
+      R"([{"op": "set_property", "target": "n:<epoch>.4", "key": "light",
+  "value": "400"}])",
+      R"({"schema": "tbcli.apply/1", "session": "live", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": [], "created_handles": [],
+   "modified": ["layer:0/entity:1"], "modified_handles": ["n:<epoch>.4"],
+   "removed": [], "removed_handles": [], "warnings": [], "issues_introduced": []}],
+ "bindings": {}, "bindings_handles": {}})",
+      R"(The result has `"session": "live"` and every path's handle next to it. In the
+editor, the light flashes once, and the batch is one undo step, `AI: set_property`.)",
+      {
+        {
+          "tbcli changes <map> --since <rev>",
+          R"({"schema": "tbcli.changes/1", "session": "live", "rev": "<new rev>",
+ "since": "<rev>", "changes": [
+  {"kind": "modified", "path": "layer:0/entity:0", "handle": "n:<epoch>.3",
+   "origin": "mapper", "rev": "live-<epoch>:1"},
+  {"kind": "modified", "path": "layer:0/entity:1", "handle": "n:<epoch>.4",
+   "origin": "agent", "rev": "live-<epoch>:2"}]})",
+        },
+        {
+          "tbcli undo <map>",
+          R"({"schema": "tbcli.undo/1", "session": "live", "undone": "AI: set_property"})",
+          true,
+        },
+      },
+      R"(`changes` lists the mapper's move of the player start and your edit of the light.
+`undo` takes your batch back; it would be refused with `undo_refused` had the mapper
+changed the map or the selection after it.)",
+    },
+    {
+      "live",
+      "live_shown",
+      "Example: act on what the mapper shows you",
+      R"(TrenchBroom has just opened the map of the first example, so this is a new session,
+whose handles differ from the first example's. The mapper points at the light in the 3D
+view, presses Ctrl+Alt+S and asks you to make this brighter. Your next command has the
+hint `shown`, so look at what the mapper showed you.)",
+      {
+        {
+          "tbcli describe <map>",
+          R"({"rev": "<rev>", "shown": {"rev": "<rev>", "run": "tbcli view"}})",
+          true,
+        },
+        {
+          "tbcli view <map>",
+          R"({"schema": "tbcli.view/1", "session": "live", "rev": "<rev>",
+ "shown": {"rev": "<rev>", "image": {"width": 1024, "height": 768}, "view": "3d",
+           "camera": {"projection": "perspective", "position": [-128, 0, 48],
+                      "direction": [1, 0, 0], "up": [0, 0, 1], "fov": 90,
+                      "zoom": 1, "viewport": [1024, 768]},
+           "hovered": {"path": "layer:0/entity:1", "handle": "n:<epoch>.1",
+                       "point": [144, 0, 96], "box": [496, 275, 528, 311]},
+           "cursor": [512, 293]}})",
+          true,
+        },
+      },
+      R"(`shown` is the view the mapper showed you, as of the rev it was shown at. Its image
+has a crosshair at `cursor`, and `hovered` is what the crosshair points at: the light,
+whose `box` in the image is around the crosshair. Outside `shown`, the result is the
+view the mapper has focused now. Target the light by its handle.)",
+      R"([{"op": "set_property", "target": "n:<epoch>.1", "key": "light",
+  "value": "400"}])",
+      R"({"schema": "tbcli.apply/1", "session": "live", "rev": "<new rev>", "ops": [
+  {"ok": true, "created": [], "created_handles": [],
+   "modified": ["layer:0/entity:1"], "modified_handles": ["n:<epoch>.1"],
+   "removed": [], "removed_handles": [], "warnings": [], "issues_introduced": []}],
+ "bindings": {}, "bindings_handles": {}})",
+      R"(The result has no `shown` any more: `view` took the shown view.)",
+      {
+        {
+          "tbcli view <map> --look-at n:<epoch>.1 --size 512x384",
+          R"({"schema": "tbcli.view/1", "rev": "<new rev>",
+ "image": {"width": 512, "height": 384}, "view": "3d",
+ "camera": {"projection": "perspective", "position": [113.844, -30.156, 120.622],
+            "direction": [0.612, 0.612, -0.5], "up": [0.354, 0.354, 0.866],
+            "fov": 90, "zoom": 1, "viewport": [512, 384]}})",
+          true,
+        },
+      },
+      R"(To check your work, look at the light from a camera of your own, which looks at it
+from the southwest and above and leaves the mapper's camera where it is. Open the image
+at `image.path`.)",
+    },
   };
   return examples;
 }
@@ -621,6 +898,8 @@ description: "Reading, editing, generating or verifying Quake `.map` files with 
 Before you work on a Quake `.map` file, run `tbcli guide` and follow it. The guide is
 built into tbcli, so it always matches the installed version. It lists topics that
 `tbcli guide <topic>` loads on demand.
+
+If an output has `shown`, run `tbcli view <map>`: the mapper is showing you something.
 )";
 
 constexpr auto AgentsSnippetText = R"(## Quake maps
@@ -869,7 +1148,12 @@ struct GuideTopic
   bool readsConfig = false;
 };
 
-constexpr auto Topics = std::array<GuideTopic, 5>{{
+std::string live(const GuideConfig&)
+{
+  return fillPlaceholders(LiveText, {{"{examples}", renderExamples("live")}});
+}
+
+constexpr auto Topics = std::array<GuideTopic, 6>{{
   {"conventions",
    "player size, step and jump heights, corridor and door sizes, grid, wall "
    "thickness and texture scale",
@@ -885,6 +1169,11 @@ constexpr auto Topics = std::array<GuideTopic, 5>{{
    [](const GuideConfig&) { return std::string{VerifyText}; }},
   {"generate", "laying out rooms and corridors as built rooms", generate},
   {"examples", "worked batches with their results", examples},
+  {"live",
+   "when TrenchBroom has the map open and `describe` has a `session` block: live "
+   "revs, node handles, `shown` and `view`, `undo`, `save`, `changes` and stale "
+   "results",
+   live},
 }};
 
 constexpr auto TopicNames = []() {

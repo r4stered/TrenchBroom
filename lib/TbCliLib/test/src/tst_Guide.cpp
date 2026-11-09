@@ -18,12 +18,21 @@
  */
 
 #include "CliTestUtils.h"
+#include "FakeEditorHost.h"
 #include "cli/CliError.h"
 #include "cli/Compile.h"
 #include "cli/FileUtils.h"
 #include "cli/Guide.h"
 #include "cli/IssueTypes.h"
 #include "cli/Ops.h"
+#include "cli/View.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
+#include "mdl/LayerNode.h"
+#include "mdl/Map.h"
+#include "mdl/Map_Geometry.h"
+#include "mdl/Map_Selection.h"
+#include "mdl/WorldNode.h"
 
 #include "kd/string_utils.h"
 
@@ -32,6 +41,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -87,6 +97,74 @@ constexpr auto ExampleSetups = std::array{
   ExampleSetup{"doorway", "compiled/rooms_prt1.map", "", "guide_doorway"},
   ExampleSetup{"leak", "compiled/compile_leak.map", "compile_leak", "guide_leak_fixed"},
   ExampleSetup{"rooms", "", "", "connected_rooms"},
+};
+
+/** What the mapper does in the editor while a live example runs. */
+using MapperAction = void (*)(FakeEditorHost&);
+
+/** What a guide example of a live session needs to run. */
+struct LiveExampleSetup
+{
+  std::string_view name;
+  /** The fixture map that the editor has open. */
+  std::string_view map;
+  /** What the mapper does before the example's inspect commands, if anything. */
+  MapperAction beforeInspect = nullptr;
+  /** What the mapper does between the inspect commands and the batch, if anything. */
+  MapperAction beforeApply = nullptr;
+};
+
+/** The first entity of the given class in the default layer of the editor's map. */
+mdl::Node* entityOfClass(FakeEditorHost& editor, const std::string_view classname)
+{
+  for (auto* node : editor.map().worldNode().defaultLayer()->children())
+  {
+    if (
+      const auto* entityNode = dynamic_cast<mdl::EntityNode*>(node);
+      entityNode && entityNode->entity().classname() == classname)
+    {
+      return node;
+    }
+  }
+  FAIL("the map has no " << classname);
+  return nullptr;
+}
+
+constexpr auto LiveExampleSetups = std::array{
+  LiveExampleSetup{
+    "live_handles",
+    "compiled/rooms_prt1.map",
+    nullptr,
+    // the mapper moves the player start
+    [](FakeEditorHost& editor) {
+      auto& map = editor.map();
+      mdl::selectNodes(map, {entityOfClass(editor, "info_player_start")});
+      mdl::translateSelection(map, {0, 32, 0});
+      mdl::deselectAll(map);
+    },
+  },
+  LiveExampleSetup{
+    "live_shown",
+    "compiled/rooms_prt1.map",
+    // the mapper points at the light and shows the agent the view
+    [](FakeEditorHost& editor) {
+      editor.show(
+        ViewCapture{
+          .png = "PNG of the shown view",
+          .image = {1024, 768},
+          .camera =
+            CameraPose{
+              .position = {-128, 0, 48},
+              .direction = {1, 0, 0},
+              .viewport = {1024, 768},
+            },
+          .hovered =
+            HoveredPick{entityOfClass(editor, "light"), std::nullopt, {144, 0, 96}},
+          .cursor = ImagePoint{512, 293},
+        });
+    },
+    nullptr,
+  },
 };
 
 /** The words of a command line, where single quotes group words, as in a shell. */
@@ -158,6 +236,13 @@ Json withRevs(
       fmt::format("\"{}\"", newRev)));
 }
 
+/** The text of a live example with the placeholder `<epoch>` of its handles replaced. */
+std::string withEpoch(const std::string_view text, const FakeEditorHost* editor)
+{
+  return editor ? kdl::str_replace_every(std::string{text}, "<epoch>", editor->epoch())
+                : std::string{text};
+}
+
 /** Lets verify --compile replay the given qbsp recording. */
 void useQbspRecording(CliTestEnvironment& env, const std::string_view recording)
 {
@@ -169,16 +254,20 @@ void useQbspRecording(CliTestEnvironment& env, const std::string_view recording)
   env.writeConfig({}, config);
 }
 
-/** Runs a command of an example on the map and checks that it prints what it shows. */
+/**
+ * Runs a command of an example on the map and checks that it prints what it shows. With
+ * an editor, the command runs in the editor's live session.
+ */
 void checkCommand(
   const GuideCommand& command,
   const std::string& map,
   const std::string& rev,
-  const std::string& newRev)
+  const std::string& newRev,
+  FakeEditorHost* editor = nullptr)
 {
   CAPTURE(command.command);
 
-  auto args = splitCommand(command.command);
+  auto args = splitCommand(withEpoch(command.command, editor));
   REQUIRE(args.front() == "tbcli");
   args.erase(args.begin());
   for (auto& word : args)
@@ -186,10 +275,58 @@ void checkCommand(
     word = word == "<map>" ? map : word == "<rev>" ? rev : word;
   }
 
-  const auto actual = runJson(args);
-  const auto expected = withRevs(command.output, rev, newRev);
+  const auto actual = editor ? parseOutput(editor->run(args)) : runJson(args);
+  const auto expected = withRevs(withEpoch(command.output, editor), rev, newRev);
   CAPTURE(actual, expected);
   CHECK((command.excerpt ? containsJson(actual, expected) : actual == expected));
+}
+
+/**
+ * Runs a live example in an editor that has its map open, with the mapper's actions in
+ * between, and checks that tbcli prints what the example shows.
+ */
+void checkLiveExample(const GuideExample& example)
+{
+  const auto setup =
+    std::ranges::find(LiveExampleSetups, example.name, &LiveExampleSetup::name);
+  REQUIRE(setup != LiveExampleSetups.end());
+
+  // no tbcli.json: a live session doesn't need one
+  auto env = CliTestEnvironment{};
+  const auto mapPath = env.copyFixture(setup->map, "example.map");
+  const auto map = arg(mapPath);
+  auto editor = FakeEditorHost{mapPath};
+
+  if (setup->beforeInspect)
+  {
+    setup->beforeInspect(editor);
+  }
+  const auto rev = editor.rev();
+  for (const auto& command : example.inspect)
+  {
+    checkCommand(command, map, rev, "", &editor);
+  }
+
+  if (setup->beforeApply)
+  {
+    setup->beforeApply(editor);
+  }
+  const auto applied = editor.run(
+    {"apply", map, "-", "--expect-rev", rev}, withEpoch(example.batch, &editor));
+  INFO(applied.out);
+  REQUIRE(applied.exitCode == 0);
+  const auto result = parseOutput(applied);
+  const auto newRev = result["rev"].asString();
+  CHECK(newRev != rev);
+  CHECK(result == withRevs(withEpoch(example.result, &editor), rev, newRev));
+
+  for (const auto& command : example.check)
+  {
+    checkCommand(command, map, rev, newRev, &editor);
+  }
+
+  // the map's file is never written
+  CHECK(env.readFile("example.map") == *readFile(fixturePath(setup->map)));
 }
 
 } // namespace
@@ -201,17 +338,22 @@ TEST_CASE("Guide")
     CHECK(
       std::vector<std::string_view>{guideTopics().begin(), guideTopics().end()}
       == std::vector<std::string_view>{
-        "conventions", "targeting", "verify", "generate", "examples"});
+        "conventions", "targeting", "verify", "generate", "examples", "live"});
   }
 
   SECTION("guideExamples")
   {
     // every setup belongs to an example
-    for (const auto& setup : ExampleSetups)
+    auto setupNames = std::vector<std::string_view>{};
+    std::ranges::transform(
+      ExampleSetups, std::back_inserter(setupNames), &ExampleSetup::name);
+    std::ranges::transform(
+      LiveExampleSetups, std::back_inserter(setupNames), &LiveExampleSetup::name);
+    for (const auto name : setupNames)
     {
-      CAPTURE(setup.name);
+      CAPTURE(name);
       CHECK(
-        std::ranges::find(guideExamples(), setup.name, &GuideExample::name)
+        std::ranges::find(guideExamples(), name, &GuideExample::name)
         != guideExamples().end());
     }
 
@@ -224,6 +366,12 @@ TEST_CASE("Guide")
     CHECK_THAT(text, ContainsSubstring(fmt::format("## {}\n", example.title)));
     CHECK_THAT(text, ContainsSubstring(std::string{example.batch}));
     CHECK_THAT(text, ContainsSubstring(std::string{example.result}));
+
+    if (example.topic == "live")
+    {
+      checkLiveExample(example);
+      return;
+    }
 
     // the example runs and tbcli prints what it shows
     const auto setup =
@@ -412,6 +560,48 @@ TEST_CASE("Guide")
       CHECK_THAT(text, ContainsSubstring("`-z`"));
     }
 
+    SECTION("live covers what a live session changes for the agent")
+    {
+      const auto text = guideText("live");
+      for (const auto* term : {
+             "`session`",
+             "live-<epoch>:<counter>",
+             "n:<epoch>.<k>",
+             "`<key>_handle`",
+             "`<key>_handles`",
+             "Target handles, not paths",
+             "`gone`",
+             "`stale_session`",
+             "`stale_rev`",
+             "`conflicts`",
+             "`ancestor_changed`",
+             "tbcli changes <map> --since <rev>",
+             "`too_old`",
+             "`busy`",
+             "tbcli undo <map>",
+             "`undo_refused`",
+             "tbcli save <map>",
+             "`write_failed`",
+             "`\"stale\": true`",
+             "tbcli.json",
+             "tbcli view <map>",
+             "--out <file.png>",
+             "[left, top, right, bottom]",
+             "`view_failed`",
+             "`shown`",
+             "Ctrl+Alt+S",
+             "--look-at <path | handle>",
+             "--orbit yaw,pitch[,distance]",
+             "--size WxH",
+             "`session_ended`",
+             "`link_disabled`",
+           })
+      {
+        CAPTURE(term);
+        CHECK_THAT(text, ContainsSubstring(term));
+      }
+    }
+
     SECTION("an unknown topic is a usage error")
     {
       CHECK_THROWS_MATCHES(
@@ -441,6 +631,7 @@ TEST_CASE("Guide")
         "description: \"Reading, editing, generating or verifying Quake `.map` files "
         "with tbcli."));
     CHECK_THAT(skill, ContainsSubstring("`tbcli guide`"));
+    CHECK_THAT(skill, ContainsSubstring("If an output has `shown`, run `tbcli view"));
     CHECK(lineCount(skill) < 15);
 
     const auto snippet = env.readFile("repo/.claude/skills/tbcli/AGENTS.snippet.md");
