@@ -49,6 +49,7 @@ namespace tb::cli
 {
 
 class LiveSession;
+struct CameraRequest;
 
 /** The largest width or height of an image that `tbcli view` returns, in pixels. */
 inline constexpr int MaxViewImageSize = 2048;
@@ -249,16 +250,23 @@ public:
 };
 
 /**
- * `tbcli view`: captures the mapper's focused view as a PNG in the session's view images
- * and reports what it shows: the camera, the view type, the selection and the node under
- * the mouse, with the rectangles they cover in the image, the pixel ratio and the rev.
- * With `out`, also copies the image there. If the mapper showed the agent a view that
- * it has not seen yet, also reports that one as `shown`, with its image, rev, age and
- * cursor, and takes it from the session, so that the agent sees it once.
+ * `tbcli view`: captures the mapper's focused view, or with an agent camera renders the
+ * view of that camera, as a PNG in the session's view images and reports what it shows:
+ * the camera, the view type, the selection and the node under the mouse, with the
+ * rectangles they cover in the image, the pixel ratio and the rev. An agent camera's
+ * view has no node under the mouse, and its camera is the pose that the request
+ * resolved to, so that the agent can repeat or adjust it. With `out`, also copies the
+ * image there. If the mapper showed the agent a view that it has not seen yet, also
+ * reports that one as `shown`, with its image, rev, age and cursor, and takes it from the
+ * session, so that the agent sees it once.
  *
- * @throw CliError `view_failed` if the editor cannot capture its view, `write_failed`
- * if the image cannot be written
+ * @throw CliError `view_failed` if the editor cannot capture or render its view,
+ * `write_failed` if the image cannot be written, and as subjectBounds does for the
+ * agent camera's subject
  */
-Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& out);
+Json viewLive(
+  LiveSession& session,
+  const std::optional<CameraRequest>& camera,
+  const std::optional<std::filesystem::path>& out);
 
 } // namespace tb::cli

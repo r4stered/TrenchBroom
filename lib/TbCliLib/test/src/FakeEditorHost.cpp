@@ -121,6 +121,19 @@ ViewCapture FakeEditorHost::captureMapperView()
   return *m_mapperView;
 }
 
+ViewCapture FakeEditorHost::renderAgentView(const CameraPose& pose)
+{
+  if (m_agentViewsFail)
+  {
+    throw CliError{ErrorCode::ViewFailed, "the fake editor cannot render"};
+  }
+  return ViewCapture{
+    .png = "PNG of an agent view",
+    .image = pose.viewport,
+    .camera = pose,
+  };
+}
+
 ViewImages& FakeEditorHost::viewImages()
 {
   return m_viewImages;
@@ -129,6 +142,11 @@ ViewImages& FakeEditorHost::viewImages()
 void FakeEditorHost::setMapperView(std::optional<ViewCapture> view)
 {
   m_mapperView = std::move(view);
+}
+
+void FakeEditorHost::setAgentViewsFail(const bool fail)
+{
+  m_agentViewsFail = fail;
 }
 
 const ShownView* FakeEditorHost::shownView() const

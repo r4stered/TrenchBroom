@@ -19,6 +19,7 @@
 
 #include "cli/View.h"
 
+#include "cli/AgentCamera.h"
 #include "cli/CappedList.h"
 #include "cli/CliError.h"
 #include "cli/FileUtils.h"
@@ -451,7 +452,10 @@ Json shownHint(const ShownView& shown, const std::chrono::steady_clock::time_poi
   return result;
 }
 
-Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& out)
+Json viewLive(
+  LiveSession& session,
+  const std::optional<CameraRequest>& camera,
+  const std::optional<std::filesystem::path>& out)
 {
   auto& map = session.map();
   if (out && isSameFile(*out, map.path()))
@@ -459,7 +463,9 @@ Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& 
     throw invalidArgument("--out names the map's own file");
   }
 
-  const auto capture = session.captureMapperView();
+  const auto capture =
+    camera ? session.renderAgentView(resolveCameraPose(map, *camera, &session.handles()))
+           : session.captureMapperView();
   const auto imagePath = session.viewImages().add(capture.png);
 
   auto result = Json::object();

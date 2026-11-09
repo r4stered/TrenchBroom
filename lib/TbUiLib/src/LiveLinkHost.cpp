@@ -123,6 +123,11 @@ void LiveLinkHost::setViewCapturer(ViewCapturer viewCapturer)
   m_viewCapturer = std::move(viewCapturer);
 }
 
+void LiveLinkHost::setAgentViewRenderer(AgentViewRenderer agentViewRenderer)
+{
+  m_agentViewRenderer = std::move(agentViewRenderer);
+}
+
 LiveLinkHost::ShowOutcome LiveLinkHost::show(const cli::ViewCapture& capture)
 {
   if (!m_sessionMap)
@@ -185,6 +190,16 @@ cli::ViewCapture LiveLinkHost::captureMapperView()
     throw cli::CliError{cli::ErrorCode::ViewFailed, "this editor has no map view"};
   }
   return m_viewCapturer();
+}
+
+cli::ViewCapture LiveLinkHost::renderAgentView(const cli::CameraPose& pose)
+{
+  if (!m_agentViewRenderer)
+  {
+    throw cli::CliError{
+      cli::ErrorCode::ViewFailed, "this editor cannot render an agent camera's view"};
+  }
+  return m_agentViewRenderer(pose);
 }
 
 cli::ViewImages& LiveLinkHost::viewImages()

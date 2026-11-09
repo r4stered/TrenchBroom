@@ -128,6 +128,16 @@ public:
 
   ActionManager& actionManager();
 
+  /**
+   * Makes the app's offscreen GL context current on its offscreen surface, creating them
+   * first if needed. The context shares its resources with the map views, so it can
+   * render the map without them. The caller must call doneCurrent on it when done.
+   *
+   * @return the context, or nullptr if the GL resources are not initialized yet, since
+   * no map view has been shown, or the context cannot be made current
+   */
+  QOpenGLContext* makeOffscreenContextCurrent();
+
   void askForAutoUpdates();
   void triggerAutoUpdateCheck();
 

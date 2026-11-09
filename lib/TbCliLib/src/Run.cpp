@@ -20,6 +20,7 @@
 #include "cli/Run.h"
 
 #include "base/Logger.h"
+#include "cli/AgentCamera.h"
 #include "cli/Apply.h"
 #include "cli/CliError.h"
 #include "cli/Config.h"
@@ -89,7 +90,7 @@ commands:
                         the mapper's Save does; with -o, write a copy to
                         out.map and leave the map's file and its unsaved
                         changes alone. Only ever save when the mapper asks
-  view <map> [--out <file.png>]
+  view <map> [<camera options>] [--out <file.png>]
                         live sessions only: what the mapper sees. Captures the
                         map view the mapper last focused (3D or 2D) as a PNG and
                         reports its path, the camera, the selection and the
@@ -97,7 +98,9 @@ commands:
                         boxes [left, top, right, bottom] in image pixels, the
                         pixel ratio and the rev. Images go to a temporary
                         directory that keeps the latest 20; --out also copies
-                        the image to file.png
+                        the image to file.png. With camera options, renders
+                        the map from your own camera instead, without moving
+                        the mapper's, and reports the camera it resolved to
   changes <map> --since <rev>
                         live sessions only: the nodes created, modified and
                         removed since a live rev, with their handles and
@@ -217,6 +220,27 @@ options:
                         with no_session (by default, tbcli uses it when there is
                         one and the map file otherwise)
   --file                use the map file even if TrenchBroom has it open
+  --look-at <path>      view: fit the node or face at the path (or handle) into
+                        an agent camera's view
+  --frame <box>         view: fit the box into an agent camera's view
+  --selection           view: fit the mapper's selected nodes into an agent
+                        camera's view (the subject is the whole map without
+                        --look-at, --frame or --selection)
+  --orbit <yaw,pitch[,distance]>
+                        view: a perspective camera around the subject's center,
+                        yaw degrees counterclockwise from +x and pitch degrees
+                        above the horizon (-90 to 90), backing off to fit the
+                        subject unless distance is given; a subject alone
+                        orbits at 225,30
+  --from <x,y,z> --toward <x,y,z>
+                        view: a perspective camera at one point looking toward
+                        another; takes no subject
+  --top, --front, --side
+                        view: an orthographic camera looking down -z (xy),
+                        along +y (xz) or along -x (yz), zoomed to fit the
+                        subject, with the grid
+  --size <WxH>          view: the agent camera's image size in pixels (default:
+                        1024x768, fitted into 2048x2048)
   -h, --help            print this help
   --version             print the version
 
@@ -277,7 +301,7 @@ bool changesMap(const std::string_view command)
   return isMutatingCommand(command) || command == "undo" || command == "save";
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 37>{{
+constexpr auto CommandOptions = std::array<CommandOption, 47>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -308,6 +332,16 @@ constexpr auto CommandOptions = std::array<CommandOption, 37>{{
   {"--install", "guide"},
   {"--since", "changes"},
   {"--out", "view"},
+  {"--look-at", "view"},
+  {"--frame", "view"},
+  {"--selection", "view"},
+  {"--from", "view"},
+  {"--toward", "view"},
+  {"--orbit", "view"},
+  {"--top", "view"},
+  {"--front", "view"},
+  {"--side", "view"},
+  {"--size", "view"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
@@ -391,6 +425,8 @@ struct Arguments
   std::optional<std::string> since;
   /** view --out: where to copy the image to */
   std::optional<std::filesystem::path> viewOut;
+  /** view's agent camera options, checked when the command runs */
+  CameraOptions cameraOptions;
   /** guide --install: the directory to write the agent files into */
   std::optional<std::filesystem::path> guideInstall;
   /** The flags of an op's subcommand, as (name without dashes, value). */
@@ -488,6 +524,24 @@ vm::bbox3d parseBox(const std::string_view name, const std::string& value)
         "{}: the first corner of '{}' must be the minimum on every axis", name, value));
   }
   return vm::bbox3d{min, max};
+}
+
+/** The axis view that --top, --front or --side asks for, or nothing for other options. */
+std::optional<AxisView> parseAxisViewOption(const std::string_view name)
+{
+  if (name == "--top")
+  {
+    return AxisView::Top;
+  }
+  if (name == "--front")
+  {
+    return AxisView::Front;
+  }
+  if (name == "--side")
+  {
+    return AxisView::Side;
+  }
+  return std::nullopt;
 }
 
 Arguments parseArguments(const std::vector<std::string>& args)
@@ -785,6 +839,40 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--room")
     {
       result.roomsOptions.room = parseCount(name, value());
+    }
+    else if (name == "--look-at")
+    {
+      result.cameraOptions.lookAt = value();
+    }
+    else if (name == "--frame")
+    {
+      result.cameraOptions.frame = value();
+    }
+    else if (name == "--selection")
+    {
+      noValue();
+      result.cameraOptions.selection = true;
+    }
+    else if (name == "--from")
+    {
+      result.cameraOptions.from = value();
+    }
+    else if (name == "--toward")
+    {
+      result.cameraOptions.toward = value();
+    }
+    else if (name == "--orbit")
+    {
+      result.cameraOptions.orbit = value();
+    }
+    else if (const auto axisView = parseAxisViewOption(name))
+    {
+      noValue();
+      result.cameraOptions.axisViews.push_back(*axisView);
+    }
+    else if (name == "--size")
+    {
+      result.cameraOptions.size = value();
     }
     else
     {
@@ -1184,8 +1272,9 @@ CommandResult runCommand(
   if (command == "view")
   {
     checkArguments(arguments, command, {"a map file"});
+    const auto camera = parseCameraRequest(arguments.cameraOptions);
     auto map = openLiveMapArgument(arguments, logger, session, command);
-    return viewLive(*map.session(), arguments.viewOut);
+    return viewLive(*map.session(), camera, arguments.viewOut);
   }
   if (command == "changes")
   {

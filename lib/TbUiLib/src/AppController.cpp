@@ -496,29 +496,12 @@ void AppController::processGlResources()
       }
     };
 
-    const auto* shareContext = QOpenGLContext::globalShareContext();
-    const auto offscreenFormat =
-      shareContext != nullptr ? shareContext->format() : QSurfaceFormat::defaultFormat();
-
-    if (!m_offscreenSurface)
+    auto* glContext = makeOffscreenContextCurrent();
+    if (!glContext)
     {
-      m_offscreenSurface = new QOffscreenSurface{nullptr, this};
-      m_offscreenSurface->setFormat(offscreenFormat);
-      m_offscreenSurface->create();
+      return;
     }
-
-    if (!m_glContext)
-    {
-      m_glContext = new QOpenGLContext{this};
-      m_glContext->setFormat(offscreenFormat);
-      m_glContext->setShareContext(QOpenGLContext::globalShareContext());
-      m_glContext->create();
-    }
-
-    contract_assert(m_offscreenSurface != nullptr);
-    contract_assert(m_glContext != nullptr);
-    m_glContext->makeCurrent(m_offscreenSurface);
-    auto& glFunctions = getGlFunctions("AppController::processGlResources", m_glContext);
+    auto& glFunctions = getGlFunctions("AppController::processGlResources", glContext);
 
     auto gl = GlQt{glFunctions};
     auto processContext = tb::gl::ProcessContext{gl, errorHandler};
@@ -527,8 +510,39 @@ void AppController::processGlResources()
     m_glManager->vboManager().destroyPendingVbos(gl);
     m_glManager->fontManager().destroyPendingFonts(gl);
 
-    m_glContext->doneCurrent();
+    glContext->doneCurrent();
   }
+}
+
+QOpenGLContext* AppController::makeOffscreenContextCurrent()
+{
+  if (!m_glManager->initialized())
+  {
+    return nullptr;
+  }
+
+  const auto* shareContext = QOpenGLContext::globalShareContext();
+  const auto offscreenFormat =
+    shareContext != nullptr ? shareContext->format() : QSurfaceFormat::defaultFormat();
+
+  if (!m_offscreenSurface)
+  {
+    m_offscreenSurface = new QOffscreenSurface{nullptr, this};
+    m_offscreenSurface->setFormat(offscreenFormat);
+    m_offscreenSurface->create();
+  }
+
+  if (!m_glContext)
+  {
+    m_glContext = new QOpenGLContext{this};
+    m_glContext->setFormat(offscreenFormat);
+    m_glContext->setShareContext(QOpenGLContext::globalShareContext());
+    m_glContext->create();
+  }
+
+  contract_assert(m_offscreenSurface != nullptr);
+  contract_assert(m_glContext != nullptr);
+  return m_glContext->makeCurrent(m_offscreenSurface) ? m_glContext : nullptr;
 }
 
 } // namespace tb::ui

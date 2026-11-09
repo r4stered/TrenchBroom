@@ -111,6 +111,8 @@ std::optional<vm::bbox3d> nodeBounds(const mdl::Node& node)
       }));
 }
 
+} // namespace
+
 std::optional<vm::bbox3d> matchBounds(const NodeOrFace& match)
 {
   if (match.faceIndex)
@@ -120,6 +122,9 @@ std::optional<vm::bbox3d> matchBounds(const NodeOrFace& match)
   }
   return nodeBounds(*match.node);
 }
+
+namespace
+{
 
 /** Whether the match is the reference itself, or contains it or is contained by it. */
 bool isRelated(const NodeOrFace& match, const NodeOrFace& reference)

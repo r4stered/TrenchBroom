@@ -50,6 +50,7 @@ private:
   NodeHandleTable m_handles;
   AgentHistory m_agentHistory;
   std::optional<ViewCapture> m_mapperView;
+  bool m_agentViewsFail = false;
   TemporaryDirectory m_viewDir;
   ViewImages m_viewImages;
   std::optional<ShownView> m_shownView;
@@ -71,6 +72,11 @@ public:
   AgentHistory& agentHistory() override;
   ChangeLog& changeLog() override;
   ViewCapture captureMapperView() override;
+  /**
+   * Returns a fake PNG of the pose's viewport size, or fails with `view_failed` if the
+   * last setAgentViewsFail asked for it.
+   */
+  ViewCapture renderAgentView(const CameraPose& pose) override;
   ViewImages& viewImages() override;
   const ShownView* shownView() const override;
   std::optional<ShownView> takeShownView() override;
@@ -80,6 +86,9 @@ public:
    * default, it returns a 4x3 PNG of a perspective view.
    */
   void setMapperView(std::optional<ViewCapture> view);
+
+  /** Makes renderAgentView fail with `view_failed`, or succeed again. */
+  void setAgentViewsFail(bool fail);
 
   /**
    * Shows the agent the given capture of a view at the given time, as the mapper's

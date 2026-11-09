@@ -432,6 +432,34 @@ TEST_CASE("LiveLinkHost")
     CHECK(!std::filesystem::exists(image.parent_path()));
   }
 
+  SECTION("view with an agent camera renders that camera's view")
+  {
+    checkError(run({"view", mapArg, "--top"}), "view_failed");
+
+    // the offscreen render, as the map window provides it
+    auto rendered = std::vector<cli::CameraPose>{};
+    host->setAgentViewRenderer([&](const cli::CameraPose& pose) {
+      rendered.push_back(pose);
+      auto image =
+        QImage{pose.viewport.width, pose.viewport.height, QImage::Format_RGB32};
+      image.fill(Qt::black);
+      return makeViewCapture(image, *cli::makeCamera(pose), 1.0f, mdl::PickResult{});
+    });
+
+    const auto viewed = parse(run({"view", mapArg, "--top", "--size", "320x200"}));
+    REQUIRE(rendered.size() == 1);
+    CHECK(rendered[0].projection == cli::CameraPose::Projection::Orthographic);
+    CHECK(rendered[0].viewport == cli::ImageSize{320, 200});
+    CHECK(viewed["view"] == cli::Json{"xy"});
+    // the rendered camera's pose is echoed back
+    const auto expected = cli::toJson(rendered[0]);
+    CHECK(viewed["camera"]["position"] == expected["position"]);
+    CHECK(viewed["camera"]["direction"] == expected["direction"]);
+    CHECK(viewed["camera"]["viewport"] == expected["viewport"]);
+    CHECK(viewed["image"]["width"] == cli::Json{320});
+    CHECK(std::filesystem::exists(viewed["image"]["path"].asString()));
+  }
+
   SECTION("a shown view waits for the next agent's view and goes when the map closes")
   {
     const auto camera = gl::PerspectiveCamera{

@@ -59,6 +59,13 @@ struct QueryOptions
 };
 
 /**
+ * The bounds that the spatial filters test: a face's bounds, the summarized bounds of a
+ * world, layer or group's contents, or the logical bounds of any other node. Unset for a
+ * world, layer or group with nothing in it.
+ */
+std::optional<vm::bbox3d> matchBounds(const NodeOrFace& match);
+
+/**
  * The nodes or faces that a TbQl query matches, or every node but the world if there is
  * no query, in file order: a node precedes its descendants, and a brush its faces.
  */

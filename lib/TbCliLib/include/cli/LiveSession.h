@@ -45,6 +45,7 @@ class AgentHistory;
 class ChangeLog;
 class NodeHandleTable;
 class ViewImages;
+struct CameraPose;
 struct ShownView;
 struct ViewCapture;
 
@@ -89,6 +90,15 @@ public:
    * @throw CliError `view_failed` if there is no view to capture or the capture failed
    */
   virtual ViewCapture captureMapperView() = 0;
+
+  /**
+   * Renders the map as a camera with the given pose sees it, into an image of the size
+   * of the pose's viewport, without moving or redrawing the mapper's views. It shows the
+   * mapper's hidden, isolated and selected nodes as the mapper's views do.
+   *
+   * @throw CliError `view_failed` if the editor cannot render the view
+   */
+  virtual ViewCapture renderAgentView(const CameraPose& pose) = 0;
 
   /**
    * The images of this session's views, in a temporary directory that goes away when

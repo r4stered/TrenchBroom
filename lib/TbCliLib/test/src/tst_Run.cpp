@@ -45,6 +45,10 @@
 #include "mdl/UpdateBrushFaceAttributes.h"
 #include "mdl/WorldNode.h"
 
+#include "kd/string_utils.h"
+
+#include "vm/vec.h"
+
 #include <chrono>
 #include <filesystem>
 #include <memory>
@@ -1396,6 +1400,206 @@ TEST_CASE("run with a live session")
       checkError(editor.run({"view", fixture.map}), "view_failed", 1);
     }
 
+    SECTION("agent cameras")
+    {
+      // the agent's renders don't use the mapper's view
+      editor.setMapperView(std::nullopt);
+
+      const auto vec = [](const Json& json) {
+        return vm::vec3f{
+          float(json[0].asNumber()),
+          float(json[1].asNumber()),
+          float(json[2].asNumber())};
+      };
+      const auto near = [](const vm::vec3f& lhs, const vm::vec3f& rhs) {
+        return vm::is_equal(lhs, rhs, 0.001f);
+      };
+
+      // the center of everything in the map, as describe reports its bounds
+      const auto bounds = liveJson({"describe", fixture.map})["bounds"];
+      const auto mapCenter = (vec(bounds["min"]) + vec(bounds["max"])) / 2.0f;
+
+      SECTION("--top, --front and --side look along an axis at the whole map")
+      {
+        const auto top = liveJson({"view", fixture.map, "--top"});
+        CHECK(top["schema"] == Json{"tbcli.view/1"});
+        CHECK(top["view"] == Json{"xy"});
+        CHECK(top["camera"]["projection"] == Json{"orthographic"});
+        CHECK(near(vec(top["camera"]["direction"]), {0, 0, -1}));
+        CHECK(top["camera"]["viewport"] == Json{Json::Array{1024, 768}});
+        CHECK(top["image"]["width"] == Json{1024});
+        CHECK(top["image"]["height"] == Json{768});
+        CHECK(readFile(top["image"]["path"].asString()) == "PNG of an agent view");
+        CHECK(top["pixel_ratio"] == Json{1});
+        CHECK(top["hovered"] == Json{nullptr});
+
+        // centered on the map, above the world
+        const auto position = vec(top["camera"]["position"]);
+        CHECK(near(
+          position, {mapCenter.x(), mapCenter.y(), float(map.worldBounds().max.z())}));
+
+        CHECK(liveJson({"view", fixture.map, "--front"})["view"] == Json{"xz"});
+        CHECK(liveJson({"view", fixture.map, "--side"})["view"] == Json{"yz"});
+      }
+
+      SECTION("--look-at fits a node or face, by path or handle")
+      {
+        // brush 0 spans -64..64 on x and y and -16..0 on z
+        const auto top = liveJson(
+          {"view", fixture.map, "--top", "--look-at", editor.handles().handle(*brush0)});
+        CHECK(
+          near(vec(top["camera"]["position"]), {0, 0, float(map.worldBounds().max.z())}));
+
+        // a subject alone is orbited from the southwest, above it
+        mdl::selectNodes(map, {brush0});
+        const auto orbit =
+          liveJson({"view", fixture.map, "--look-at", "layer:0/brush:0"});
+        CHECK(orbit["view"] == Json{"3d"});
+        CHECK(orbit["camera"]["projection"] == Json{"perspective"});
+        const auto position = vec(orbit["camera"]["position"]);
+        CHECK(position.x() < -64.0f);
+        CHECK(position.y() < -64.0f);
+        CHECK(position.z() > 0.0f);
+        CHECK(near(
+          vec(orbit["camera"]["direction"]),
+          vm::normalize(vm::vec3f{0, 0, -8} - position)));
+        // the selected brush is the subject, so it is well inside the image
+        const auto& box = orbit["selection"]["nodes"]["items"][0]["box"];
+        CHECK(box[0].asNumber() > 0);
+        CHECK(box[1].asNumber() > 0);
+        CHECK(box[2].asNumber() < 1024);
+        CHECK(box[3].asNumber() < 768);
+
+        // a face of brush 1, whose bottom face spans -64..-48 on x at z 0
+        const auto face =
+          liveJson({"view", fixture.map, "--top", "--look-at", "layer:0/brush:1/face:2"});
+        CHECK(vec(face["camera"]["position"]).x() == -56.0f);
+      }
+
+      SECTION("--frame fits a box")
+      {
+        const auto json =
+          liveJson({"view", fixture.map, "--front", "--frame", "0,0,0,100,200,50"});
+        CHECK(near(
+          vec(json["camera"]["position"]), {50, float(map.worldBounds().min.y()), 25}));
+      }
+
+      SECTION("--selection fits the selected nodes or faces")
+      {
+        // brush 1 spans -64..-48 on x and 0..128 on z
+        mdl::selectNodes(map, {brush1});
+        const auto nodes = liveJson({"view", fixture.map, "--side", "--selection"});
+        CHECK(near(
+          vec(nodes["camera"]["position"]), {float(map.worldBounds().max.x()), 0, 64}));
+
+        mdl::deselectAll(map);
+        mdl::selectBrushFaces(map, {mdl::BrushFaceHandle{*brush1, 2}});
+        const auto faces = liveJson({"view", fixture.map, "--top", "--selection"});
+        CHECK(vec(faces["camera"]["position"]).x() == -56.0f);
+      }
+
+      SECTION("--orbit puts the camera at the given angles around the subject")
+      {
+        const auto json = liveJson(
+          {"view", fixture.map, "--look-at", "layer:0/brush:0", "--orbit", "0,0,500"});
+        CHECK(near(vec(json["camera"]["position"]), {500, 0, -8}));
+        CHECK(near(vec(json["camera"]["direction"]), {-1, 0, 0}));
+
+        // around the whole map without a subject
+        const auto whole = liveJson({"view", fixture.map, "--orbit", "180,0,500"});
+        CHECK(near(vec(whole["camera"]["position"]), mapCenter + vm::vec3f{-500, 0, 0}));
+      }
+
+      SECTION("--from and --toward place the camera at a point")
+      {
+        const auto json =
+          liveJson({"view", fixture.map, "--from", "0,0,64", "--toward", "100,0,64"});
+        CHECK(json["view"] == Json{"3d"});
+        CHECK(vec(json["camera"]["position"]) == vm::vec3f{0, 0, 64});
+        CHECK(vec(json["camera"]["direction"]) == vm::vec3f{1, 0, 0});
+        CHECK(vec(json["camera"]["up"]) == vm::vec3f{0, 0, 1});
+      }
+
+      SECTION("--size sets the image size, fitted into 2048 pixels")
+      {
+        const auto small = liveJson({"view", fixture.map, "--top", "--size", "640x480"});
+        CHECK(small["camera"]["viewport"] == Json{Json::Array{640, 480}});
+        CHECK(small["image"]["width"] == Json{640});
+        CHECK(small["image"]["height"] == Json{480});
+
+        const auto large =
+          liveJson({"view", fixture.map, "--top", "--size", "4096x1024"});
+        CHECK(large["image"]["width"] == Json{2048});
+        CHECK(large["image"]["height"] == Json{512});
+      }
+
+      SECTION("--out copies the image")
+      {
+        const auto out = fixture.env.path("top.png");
+        liveJson({"view", fixture.map, "--top", "--out", arg(out)});
+        CHECK(readFile(out) == "PNG of an agent view");
+      }
+
+      SECTION("invalid camera arguments give invalid_argument")
+      {
+        const auto invalid = [&](std::vector<std::string> options) {
+          auto args = std::vector<std::string>{"view", fixture.map};
+          args.insert(args.end(), options.begin(), options.end());
+          INFO(kdl::str_join(options, " "));
+          checkError(editor.run(args), "invalid_argument", 2);
+        };
+
+        invalid({"--size", "640x480"});
+        invalid({"--top", "--size", "640"});
+        invalid({"--top", "--size", "0x480"});
+        invalid({"--top", "--size", "wide"});
+        invalid({"--top", "--side"});
+        invalid({"--orbit", "0,0", "--front"});
+        invalid({"--look-at", "layer:0/brush:0", "--selection"});
+        invalid({"--frame", "0,0,0,1,1,1", "--look-at", "layer:0/brush:0"});
+        invalid({"--from", "0,0,0"});
+        invalid({"--toward", "0,0,0"});
+        invalid({"--from", "1,2,3", "--toward", "1,2,3"});
+        invalid({"--from", "0,0,0", "--toward", "1,1"});
+        invalid({"--from", "0,0,0", "--toward", "1,0,0", "--selection"});
+        invalid({"--orbit", "45"});
+        invalid({"--orbit", "45,30,100,7"});
+        invalid({"--orbit", "0,95"});
+        invalid({"--orbit", "0,0,0"});
+        invalid({"--orbit", "a,b"});
+        invalid({"--frame", "1,2,3"});
+        invalid({"--frame", "10,0,0,0,10,10"});
+        // nothing selected
+        invalid({"--selection"});
+        // an empty layer has nothing to look at
+        map.worldNode().addChild(std::make_unique<mdl::LayerNode>(mdl::Layer{"empty"}));
+        invalid({"--look-at", "layer:1"});
+
+        CHECK(fixture.unchanged());
+      }
+
+      SECTION("--look-at gives the errors of node references")
+      {
+        checkError(
+          editor.run({"view", fixture.map, "--look-at", "layer:0/brush:9"}),
+          "node_not_found",
+          1);
+      }
+
+      SECTION("gives view_failed if the editor cannot render")
+      {
+        editor.setAgentViewsFail(true);
+        checkError(editor.run({"view", fixture.map, "--top"}), "view_failed", 1);
+      }
+
+      SECTION("only view takes camera options")
+      {
+        checkError(editor.run({"describe", fixture.map, "--top"}), "usage", 2);
+        checkError(
+          editor.run({"query", fixture.map, "--look-at", "layer:0/brush:0"}), "usage", 2);
+      }
+    }
+
     SECTION("takes no other options")
     {
       checkError(editor.run({"view", fixture.map, "--dry-run"}), "usage", 2);
@@ -1512,6 +1716,15 @@ TEST_CASE("run with a live session")
       const auto json = liveJson({"view", fixture.map, "--out", arg(out)});
       CHECK(json["shown"]["cursor"] == Json{Json::Array{344, 300}});
       CHECK(readFile(out) == "PNG of the mapper's view");
+    }
+
+    SECTION("an agent camera's view returns and takes it too")
+    {
+      editor.show(shownCapture);
+      const auto json = liveJson({"view", fixture.map, "--top"});
+      CHECK(json["view"] == Json{"xy"});
+      CHECK(json["shown"]["cursor"] == Json{Json::Array{344, 300}});
+      CHECK(editor.shownView() == nullptr);
     }
 
     SECTION("a failed view leaves the shown view for the next one")

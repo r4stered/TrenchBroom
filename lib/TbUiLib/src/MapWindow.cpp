@@ -103,6 +103,7 @@
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
 #include "ui/ObjExportDialog.h"
+#include "ui/OffscreenMapRendering.h"
 #include "ui/QPathUtils.h"
 #include "ui/QStringUtils.h"
 #include "ui/QStyleUtils.h"
@@ -211,6 +212,9 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   m_liveLinkHost = new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
   m_liveLinkHost->setViewCapturer(
     [this]() { return captureMapView(*currentMapViewBase()); });
+  m_liveLinkHost->setAgentViewRenderer([this](const cli::CameraPose& pose) {
+    return renderMapOffscreen(m_appController, *m_document, pose);
+  });
 
   restoreWidgetGeometry(this);
   restoreWidgetState(this);

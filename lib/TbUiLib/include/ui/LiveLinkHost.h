@@ -69,9 +69,10 @@ class MapDocument;
  * button is held or a transaction is open, and fails with `busy` if that lasts longer
  * than the busy timeout.
  *
- * `tbcli view` captures the map view that the mapper last focused, which the map window
- * provides. Its images go into a directory next to the rendezvous file that is deleted
- * when the session ends.
+ * `tbcli view` captures the map view that the mapper last focused, or with an agent
+ * camera renders that camera's view offscreen, both of which the map window provides.
+ * Its images go into a directory next to the rendezvous file that is deleted when the
+ * session ends.
  *
  * The mapper can show the agent a view, which waits for the agent's next `tbcli view`,
  * even if no agent has connected yet. Only the latest one is kept, and it is dropped
@@ -86,6 +87,9 @@ public:
 
   /** Captures the map view that the mapper last focused. */
   using ViewCapturer = std::function<cli::ViewCapture()>;
+
+  /** Renders the map as an agent camera with the given pose sees it. */
+  using AgentViewRenderer = std::function<cli::ViewCapture(const cli::CameraPose&)>;
 
   /** What became of a view that the mapper showed the agent. */
   enum class ShowOutcome
@@ -116,6 +120,7 @@ private:
   cli::AgentHistory m_agentHistory;
   std::unique_ptr<cli::ViewImages> m_viewImages;
   ViewCapturer m_viewCapturer;
+  AgentViewRenderer m_agentViewRenderer;
   std::optional<cli::ShownView> m_shownView;
   std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
@@ -137,6 +142,9 @@ public:
   /** Sets how to capture the mapper's view; without one, `view` fails. */
   void setViewCapturer(ViewCapturer viewCapturer);
 
+  /** Sets how to render an agent camera's view; without one, such a `view` fails. */
+  void setAgentViewRenderer(AgentViewRenderer agentViewRenderer);
+
   /**
    * Shows the agent the given capture of a view, replacing a view shown before, so that
    * the agent's next `tbcli view` returns it.
@@ -156,6 +164,7 @@ public:
   cli::AgentHistory& agentHistory() override;
   cli::ChangeLog& changeLog() override;
   cli::ViewCapture captureMapperView() override;
+  cli::ViewCapture renderAgentView(const cli::CameraPose& pose) override;
   cli::ViewImages& viewImages() override;
   const cli::ShownView* shownView() const override;
   std::optional<cli::ShownView> takeShownView() override;
