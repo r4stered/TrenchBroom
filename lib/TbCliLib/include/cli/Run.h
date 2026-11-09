@@ -20,6 +20,7 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +32,20 @@ class CliError;
 class LiveSession;
 
 /**
+ * The open map as the editor hands it to tbcli for a command that compiles it, so that
+ * the compile runs in tbcli and not in the editor.
+ */
+struct Eject
+{
+  /** The open map's path. */
+  std::string path;
+  /** The open map, serialized as the editor would save it. */
+  std::string bytes;
+  /** The live rev of the map that the bytes hold. */
+  std::string rev;
+};
+
+/**
  * The outcome of one tbcli invocation: everything a caller observes from the process.
  */
 struct RunResult
@@ -38,6 +53,11 @@ struct RunResult
   std::string out;
   std::string err;
   int exitCode = 0;
+  /**
+   * In a live session, `verify --compile` and `rooms` eject the open map instead of
+   * printing output; runOnEject then runs them on it.
+   */
+  std::optional<Eject> eject = std::nullopt;
 };
 
 /** What tbcli reports for the given error: its envelope on stdout and its exit code. */
@@ -61,16 +81,38 @@ RunResult run(const std::vector<std::string>& args, std::string_view in = {});
  * block `{live, epoch, map}`, and `apply` and the ops edit the open map as one undo
  * step and write nothing (see applyLive), `undo` undoes the agent's own most recent
  * batch (see undoLive), and `save` saves the open map or a copy of it (see saveLive);
- * undo and save fail with `no_session` in run. A command that names
- * another map fails with `no_session`. The editor's configuration is authoritative, so
- * `--game-config` and `--fgd` fail with `invalid_argument`. Relative paths are resolved
- * against the working directory of the caller, so arguments should come from
- * forwardableInvocation.
+ * undo and save fail with `no_session` in run. `verify --compile` and `rooms` don't
+ * compile in the editor: they eject the open map (see Eject) for runOnEject. A command
+ * that names another map fails with `no_session`. The editor's configuration is
+ * authoritative, so `--game-config` and `--fgd` fail with `invalid_argument`. Relative
+ * paths are resolved against the working directory of the caller, so arguments should
+ * come from forwardableInvocation.
  *
  * Must be called on the thread that owns the session's map. Never throws.
  */
 RunResult run(
   const std::vector<std::string>& args, std::string_view in, LiveSession& session);
+
+/**
+ * The command `live-rev <map>`, which tbcli sends the editor after a compile to tell
+ * whether the map moved on: it prints `{"rev": <live rev>}` in a live session and fails
+ * with `no_session` otherwise. It is the live link's, not the agent's, so the usage does
+ * not list it.
+ */
+inline constexpr auto LiveRevCommand = std::string_view{"live-rev"};
+
+/** Reads the live rev of an ejected map's session, or nothing if it can't be read. */
+using LiveRevReader = std::function<std::optional<std::string>()>;
+
+/**
+ * Runs `verify --compile` or `rooms` in file mode on the map that the editor ejected
+ * for it, which is never written, and reports the rev of the ejected bytes. Then reads
+ * the live rev with `liveRev`, and marks the result `stale: true` if the map moved on
+ * during the compile, or if the live rev can't be read. The output is otherwise the
+ * same as file mode's on the same bytes. Never throws.
+ */
+RunResult runOnEject(
+  const std::vector<std::string>& args, const Eject& eject, const LiveRevReader& liveRev);
 
 /**
  * The command of the given command line if it changes the map or its file (apply,
@@ -81,8 +123,6 @@ std::optional<std::string> mutatingCommand(const std::vector<std::string>& args)
 /**
  * The absolute path of the map that the given command line runs against, if its
  * command takes one, can run in a live session and the command line is well-formed.
- * `rooms` and `verify --compile` can't run in a live session yet, so they run in file
- * mode.
  */
 std::optional<std::filesystem::path> liveMapArgument(
   const std::vector<std::string>& args);

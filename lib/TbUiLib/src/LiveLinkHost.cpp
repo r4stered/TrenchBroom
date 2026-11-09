@@ -343,6 +343,14 @@ void LiveLinkHost::readRequest(QLocalSocket* socket, std::string& buffer)
         [&](cli::Invocation invocation) {
           // the session has an agent now, which must learn when it ends
           m_attached = true;
+          if (
+            !invocation.args.empty() && invocation.args.front() == cli::LiveRevCommand)
+          {
+            // reading the rev changes nothing, so it doesn't wait for a busy mapper,
+            // which would hold back a finished compile's result for up to a minute
+            reply(socket, serve(invocation));
+            return;
+          }
           m_queue.push_back(
             std::make_unique<Request>(
               socket, std::move(invocation), Clock::now() + m_busyTimeout));

@@ -211,6 +211,13 @@ std::optional<Frame> exchangeFrames(
   const std::string& endpoint, std::string_view request);
 
 /**
+ * The live rev of the map that the editor of the given rendezvous has open, or nothing
+ * if it can't be read, such as when the editor has closed the map. The editor answers
+ * at once, even while the mapper is busy.
+ */
+std::optional<std::string> readLiveRev(const Rendezvous& rendezvous);
+
+/**
  * Runs the command through the live link of the editor that has its map open, as
  * published in the given rendezvous directory. Returns nothing if the command should
  * run in file mode instead: with LinkMode::File, for commands without a map, and

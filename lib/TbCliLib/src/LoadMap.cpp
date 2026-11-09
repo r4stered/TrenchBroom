@@ -319,14 +319,23 @@ LoadedMap loadMap(
   const std::filesystem::path& mapPath, const Config& config, Logger& logger)
 {
   const auto absPath = std::filesystem::absolute(mapPath).lexically_normal();
-  const auto bytes = readFile(absPath);
+  auto bytes = readFile(absPath);
   if (!bytes)
   {
     throw CliError{ErrorCode::FileNotFound, fmt::format("cannot read map {}", absPath)};
   }
+  return loadMap(absPath, std::move(*bytes), config, logger);
+}
 
+LoadedMap loadMap(
+  const std::filesystem::path& mapPath,
+  std::string bytes,
+  const Config& config,
+  Logger& logger)
+{
+  const auto absPath = std::filesystem::absolute(mapPath).lexically_normal();
   if (
-    const auto format = headerFormat(*bytes); format && *format != mdl::MapFormat::Valve)
+    const auto format = headerFormat(bytes); format && *format != mdl::MapFormat::Valve)
   {
     throw notValve220(*format);
   }
@@ -334,17 +343,21 @@ LoadedMap loadMap(
   auto result = LoadedMap{};
   result.gameInfo = std::make_unique<mdl::GameInfo>(makeGameInfo(config, logger));
   const auto& gameInfo = *result.gameInfo;
-  result.rev = computeRev(*bytes);
-  result.bytes = *bytes;
+  result.rev = computeRev(bytes);
+  result.bytes = std::move(bytes);
   result.taskManager = std::make_unique<kdl::task_manager>();
   result.resourceManager = std::make_unique<gl::ResourceManager>();
 
   logger.info() << "Loading document from " << absPath;
 
   const auto start = std::chrono::steady_clock::now();
-  auto status = ProblemCollectingParserStatus{logger, *bytes, result.loadProblems};
+  auto status = ProblemCollectingParserStatus{logger, result.bytes, result.loadProblems};
   auto worldNode = readWorld(
-    *bytes, mdl::MapFormat::Valve, gameInfo.gameConfig, status, *result.taskManager);
+    result.bytes,
+    mdl::MapFormat::Valve,
+    gameInfo.gameConfig,
+    status,
+    *result.taskManager);
   result.loadMs = msSince(start);
 
   if (!worldNode)
@@ -354,7 +367,7 @@ LoadedMap loadMap(
     // instead of reporting a parse error. Only failed loads pay for this.
     if (
       const auto otherFormat =
-        readableOtherFormat(*bytes, gameInfo.gameConfig, *result.taskManager))
+        readableOtherFormat(result.bytes, gameInfo.gameConfig, *result.taskManager))
     {
       throw notValve220(*otherFormat);
     }

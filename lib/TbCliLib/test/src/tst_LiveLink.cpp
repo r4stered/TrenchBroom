@@ -207,6 +207,22 @@ TEST_CASE("LiveLink")
     CHECK(decoded.out == result.out);
     CHECK(decoded.err == result.err);
     CHECK(decoded.exitCode == result.exitCode);
+    CHECK(!decoded.eject.has_value());
+
+    SECTION("an eject carries map bytes that aren't valid UTF-8")
+    {
+      const auto ejected = RunResult{
+        "", "", 0, Eject{"/maps/x.map", std::string{"caf\xe9\x00\xff", 6}, "live-ab:3"}};
+      const auto ejectReply = decodeFrame(encodeReply(ejected));
+      REQUIRE(ejectReply.has_value());
+      const auto decodedEject = decodeReply(ejectReply->first);
+      REQUIRE(decodedEject.eject.has_value());
+      CHECK(decodedEject.eject->path == "/maps/x.map");
+      CHECK(decodedEject.eject->bytes == ejected.eject->bytes);
+      CHECK(decodedEject.eject->rev == "live-ab:3");
+      CHECK(decodedEject.out.empty());
+      CHECK(decodedEject.exitCode == 0);
+    }
   }
 
   SECTION("runLive")

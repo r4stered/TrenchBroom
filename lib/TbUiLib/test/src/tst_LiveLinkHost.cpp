@@ -42,6 +42,7 @@
 #include <filesystem>
 #include <future>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -342,6 +343,71 @@ TEST_CASE("LiveLinkHost")
 
     const auto shown = run({"show", mapArg, "layer:0/entity:0"});
     CHECK_THAT(shown.out, ContainsSubstring(value));
+  }
+
+  SECTION("compiles eject the open map's bytes intact, at its live rev")
+  {
+    // a property value in Latin-1, which isn't valid UTF-8
+    run(
+      {"apply", mapArg, "-"},
+      R"([{"op": "set_property", "target": "layer:0/entity:0", "key": "note", "value": ")"
+        + std::string{"caf\xe9"} + R"("}])");
+    logger.messages.clear();
+
+    const auto rendezvous = *cli::readRendezvous(*host->rendezvousFile());
+    const auto request = [&](std::vector<std::string> args) {
+      auto future = std::async(std::launch::async, [&, args = std::move(args)]() {
+        return cli::exchangeFrames(
+          rendezvous.endpoint, cli::encodeRequest({args, {}}, rendezvous.token));
+      });
+      const auto reply = await(future);
+      REQUIRE(reply.has_value());
+      return cli::decodeReply(*reply);
+    };
+
+    auto saved = std::ostringstream{};
+    map.saveTo(saved);
+    REQUIRE_THAT(saved.str(), ContainsSubstring(std::string{"caf\xe9"}));
+    for (const auto& args : std::vector<std::vector<std::string>>{
+           {"verify", mapArg, "--compile"}, {"rooms", mapArg}})
+    {
+      const auto ejected = request(args);
+      CHECK(ejected.exitCode == 0);
+      REQUIRE(ejected.eject.has_value());
+      CHECK(ejected.eject->path == mapArg);
+      CHECK(ejected.eject->rev == host->rev());
+      CHECK(ejected.eject->bytes == saved.str());
+    }
+    CHECK(env.loadFile("live.map") == MapText);
+    // reads, which change nothing
+    CHECK(logger.messages.empty());
+  }
+
+  SECTION("tbcli compiles an ejected map itself")
+  {
+    // without a tbcli.json, tbcli has no game config to load the ejected bytes with,
+    // which the editor never needs
+    checkError(run({"verify", mapArg, "--compile"}), "config_error");
+    checkError(run({"rooms", mapArg}), "config_error");
+    CHECK(logger.messages.empty());
+  }
+
+  SECTION("readLiveRev reads the live rev at once, even while the mapper is busy")
+  {
+    run({"apply", mapArg, "-"}, createBox);
+    const auto rendezvous = *cli::readRendezvous(*host->rendezvousFile());
+
+    map.startTransaction("mapper drag", mdl::TransactionScope::LongRunning);
+    auto future =
+      std::async(std::launch::async, [&]() { return cli::readLiveRev(rendezvous); });
+    CHECK(await(future) == host->rev());
+    map.cancelTransaction();
+
+    auto other = rendezvous;
+    other.token = "stale";
+    auto refused =
+      std::async(std::launch::async, [&]() { return cli::readLiveRev(other); });
+    CHECK(await(refused) == std::nullopt);
   }
 
   SECTION("a wrong token gives bad_token")

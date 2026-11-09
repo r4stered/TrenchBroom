@@ -20,6 +20,7 @@
 #include "CliTestUtils.h"
 #include "FakeEditorHost.h"
 #include "cli/CliError.h"
+#include "cli/Compile.h"
 #include "cli/Guide.h"
 #include "fs/TestUtils.h"
 #include "mdl/BrushFaceHandle.h"
@@ -34,7 +35,10 @@
 #include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 
+#include <filesystem>
 #include <memory>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -1221,10 +1225,19 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("live-rev prints the live rev")
+  {
+    liveJson({"apply", fixture.map, "-"}, "[]");
+    CHECK(
+      liveJson({std::string{LiveRevCommand}, fixture.map})
+      == Json{Json::Object{{"rev", editor.rev()}}});
+  }
+
   SECTION("live-only commands give no_session in file mode")
   {
     checkError(runCli({"undo", fixture.map}), "no_session", 1);
     checkError(runCli({"save", fixture.map}), "no_session", 1);
+    checkError(runCli({std::string{LiveRevCommand}, fixture.map}), "no_session", 1);
     CHECK(fixture.unchanged());
   }
 
@@ -1253,6 +1266,121 @@ TEST_CASE("run with a live session")
   }
 }
 
+TEST_CASE("runOnEject")
+{
+  // a compilable map whose qbsp is the fake compiler, open in the editor
+  auto env = CliTestEnvironment{};
+  auto compilers = Json::object();
+  compilers.set(
+    std::string{QbspTool}, arg(setUpFakeCompiler(env, QbspTool, "rooms_prt1")));
+  auto config = quakeConfig();
+  config.set("compilers", std::move(compilers));
+  env.writeConfig({}, config);
+  const auto map = arg(env.copyFixture("compiled/rooms_prt1.map", "rooms_prt1.map"));
+  auto editor = FakeEditorHost{map};
+
+  const auto args = GENERATE(
+    std::vector<std::string>{"verify", "--compile"}, std::vector<std::string>{"rooms"});
+  auto command = args;
+  command.insert(command.begin() + 1, map);
+  INFO(command.front());
+
+  const auto ejectOpenMap = [&]() {
+    const auto result = editor.run(command);
+    INFO(result.out);
+    REQUIRE(result.exitCode == 0);
+    CHECK(result.out.empty());
+    REQUIRE(result.eject.has_value());
+    return *result.eject;
+  };
+  const auto liveRev = [&]() { return std::optional{editor.rev()}; };
+  const auto ejectedJson = [&](const Eject& eject, const LiveRevReader& rev) {
+    const auto result = runOnEject(command, eject, rev);
+    INFO(result.out);
+    INFO(result.err);
+    REQUIRE(result.exitCode == 0);
+    return parseOutput(result);
+  };
+  // file mode on the same bytes, whose line numbers the output reports
+  const auto runFileMode = [&](const Eject& eject) {
+    env.writeFile("rooms_prt1.map", eject.bytes);
+    return runCli(command);
+  };
+  const auto withoutRevAndTimings = [](const RunResult& result) {
+    return withoutKeys(parseOutput(result), {"rev", "stages"});
+  };
+  const auto moveBrush = [&]() {
+    const auto result =
+      editor.run({"translate", map, "--target", "layer:0/brush:0", "--delta", "0,0,8"});
+    REQUIRE(result.exitCode == 0);
+  };
+
+  SECTION("the editor ejects the open map at its live rev instead of compiling")
+  {
+    // the open map differs from its file
+    moveBrush();
+
+    const auto eject = ejectOpenMap();
+    CHECK(eject.path == map);
+    CHECK(eject.rev == editor.rev());
+
+    auto stream = std::ostringstream{};
+    editor.map().saveTo(stream);
+    CHECK(eject.bytes == stream.str());
+    CHECK(env.readFile("rooms_prt1.map") != eject.bytes);
+  }
+
+  SECTION("the command runs on the ejected bytes")
+  {
+    moveBrush();
+    const auto eject = ejectOpenMap();
+    ejectedJson(eject, liveRev);
+    CHECK(env.readFile("tools/qbsp.input") == eject.bytes);
+  }
+
+  SECTION("output matches file mode on the same bytes, at the rev of the bytes")
+  {
+    moveBrush();
+    const auto eject = ejectOpenMap();
+    const auto live = runOnEject(command, eject, liveRev);
+    CHECK(parseOutput(live)["rev"] == Json{eject.rev});
+    CHECK(parseOutput(live).find("stale") == nullptr);
+
+    const auto fileMode = runFileMode(eject);
+    CHECK(live.exitCode == fileMode.exitCode);
+    CHECK(withoutRevAndTimings(live) == withoutRevAndTimings(fileMode));
+  }
+
+  SECTION("the result is stale if the map moved on during the compile")
+  {
+    const auto eject = ejectOpenMap();
+    // tbcli reads the live rev once the compile is done, by when the mapper edited
+    const auto live = ejectedJson(eject, [&]() {
+      moveBrush();
+      return std::optional{editor.rev()};
+    });
+    CHECK(live["rev"] == Json{eject.rev});
+    CHECK(live["stale"] == Json{true});
+  }
+
+  SECTION("the result is stale if the live rev can't be read afterwards")
+  {
+    const auto eject = ejectOpenMap();
+    const auto live = ejectedJson(eject, []() { return std::optional<std::string>{}; });
+    CHECK(live["stale"] == Json{true});
+  }
+
+  SECTION("a failed compile reports its error, as in file mode")
+  {
+    std::filesystem::remove(env.path("tools") / "qbsp.replay");
+    const auto eject = ejectOpenMap();
+    const auto live = runOnEject(command, eject, liveRev);
+    const auto fileMode = runFileMode(eject);
+    CHECK(live.exitCode == fileMode.exitCode);
+    CHECK(withoutRevAndTimings(live) == withoutRevAndTimings(fileMode));
+  }
+}
+
 TEST_CASE("mutatingCommand")
 {
   CHECK(mutatingCommand({"apply", "x.map", "-"}) == "apply");
@@ -1275,9 +1403,8 @@ TEST_CASE("liveMapArgument")
   CHECK(liveMapArgument({"undo", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"save", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"ops"}) == std::nullopt);
-  // compiles run in file mode until the editor can send the map's bytes
-  CHECK(liveMapArgument({"rooms", "x.map"}) == std::nullopt);
-  CHECK(liveMapArgument({"verify", "x.map", "--compile"}) == std::nullopt);
+  CHECK(liveMapArgument({"rooms", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"verify", "x.map", "--compile"}) == cwd / "x.map");
   CHECK(liveMapArgument({"guide", "conventions", "x.map"}) == std::nullopt);
   CHECK(liveMapArgument({"describe", "x.map", "--help"}) == std::nullopt);
   CHECK(liveMapArgument({"describe", "x.map", "--frobnicate"}) == std::nullopt);

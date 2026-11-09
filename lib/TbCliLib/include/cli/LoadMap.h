@@ -83,7 +83,10 @@ private:
  */
 struct LoadedMap
 {
-  /** The short SHA-256 prefix of the file's bytes as they were loaded. */
+  /**
+   * The short SHA-256 prefix of the file's bytes as they were loaded, or the live rev of
+   * a map that the editor ejected.
+   */
   std::string rev;
   /** The file's bytes as they were loaded, which `verify --compile` compiles. */
   std::string bytes;
@@ -129,6 +132,16 @@ std::string computeRev(std::string_view bytes);
  */
 LoadedMap loadMap(
   const std::filesystem::path& mapPath, const Config& config, Logger& logger);
+
+/**
+ * Like loadMap, but reads the map from the given bytes instead of its file, such as the
+ * bytes of a map that the editor has open. The map keeps the given path.
+ */
+LoadedMap loadMap(
+  const std::filesystem::path& mapPath,
+  std::string bytes,
+  const Config& config,
+  Logger& logger);
 
 } // namespace cli
 } // namespace tb

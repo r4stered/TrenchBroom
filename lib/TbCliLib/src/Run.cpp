@@ -42,6 +42,7 @@
 #include "mdl/Map.h"
 #include "version/Version.h"
 
+#include "kd/contracts.h"
 #include "kd/overload.h"
 #include "kd/string_utils.h"
 
@@ -50,9 +51,11 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <functional>
 #include <iterator>
 #include <optional>
 #include <ranges>
+#include <sstream>
 #include <string_view>
 #include <variant>
 
@@ -866,16 +869,26 @@ public:
 
 /**
  * Opens the map given as the command's first argument: the live session's map if
- * there is a session, or else the map file.
+ * there is a session, the map that the editor ejected if there is one, or else the map
+ * file.
  */
 CommandMap openMapArgument(
-  const Arguments& arguments, Logger& logger, LiveSession* session)
+  const Arguments& arguments,
+  Logger& logger,
+  LiveSession* session,
+  const Eject* eject = nullptr)
 {
   const auto mapPath = std::filesystem::path{arguments.positionals[1]};
   if (!session)
   {
     auto config = loadConfig(mapPath, arguments.configOverrides);
-    auto loadedMap = loadMap(mapPath, config, logger);
+    auto loadedMap = eject ? loadMap(eject->path, eject->bytes, config, logger)
+                           : loadMap(mapPath, config, logger);
+    if (eject)
+    {
+      // the bytes are the open map at a live rev, not a file
+      loadedMap.rev = eject->rev;
+    }
     return CommandMap{std::move(config), std::move(loadedMap)};
   }
 
@@ -923,17 +936,26 @@ CommandMap openLiveMapArgument(
   return openMapArgument(arguments, logger, session);
 }
 
-/** Fails a command that cannot run in a live session yet. */
-void refuseLive(const CommandMap& map, const std::string_view command)
+/**
+ * Whether the command compiles the map, which a live session ejects for tbcli to
+ * compile instead of compiling it in the editor.
+ */
+bool compilesMap(const Arguments& arguments)
 {
-  if (map.session())
-  {
-    throw invalidArgument(
-      fmt::format(
-        "{} is not available in a live session yet; run it with tbcli --file on the "
-        "saved map",
-        command));
-  }
+  const auto& command = arguments.positionals.front();
+  return command == "rooms" || (command == "verify" && arguments.compile);
+}
+
+/**
+ * The open map of a live session, as the editor would save it, at the live rev, for a
+ * command that compiles it: the compile runs in tbcli, so that it never blocks the
+ * editor.
+ */
+Eject ejectMap(LiveSession& session)
+{
+  auto stream = std::ostringstream{};
+  session.map().saveTo(stream);
+  return Eject{session.map().path().string(), std::move(stream).str(), session.rev()};
 }
 
 /** Reads the batch of an apply command from a file or, given "-", from stdin. */
@@ -973,7 +995,7 @@ struct RawOutput
 /** What a command prints, and its exit code. */
 struct CommandResult
 {
-  std::variant<Json, RawOutput> output;
+  std::variant<Json, RawOutput, Eject> output;
   int exitCode = ExitCode::Ok;
 
   // NOLINTNEXTLINE(google-explicit-constructor): most commands only produce output
@@ -984,6 +1006,12 @@ struct CommandResult
 
   // NOLINTNEXTLINE(google-explicit-constructor): like the Json constructor
   CommandResult(RawOutput output_)
+    : output{std::move(output_)}
+  {
+  }
+
+  // NOLINTNEXTLINE(google-explicit-constructor): like the Json constructor
+  CommandResult(Eject output_)
     : output{std::move(output_)}
   {
   }
@@ -1055,10 +1083,17 @@ CommandResult runCommand(
   const Arguments& arguments,
   const std::string_view in,
   Logger& logger,
-  LiveSession* session)
+  LiveSession* session,
+  const Eject* eject)
 {
   const auto& positionals = arguments.positionals;
   const auto& command = positionals.front();
+  if (eject && !compilesMap(arguments))
+  {
+    throw CliError{
+      ErrorCode::InternalError,
+      fmt::format("{} does not run on an ejected map", command)};
+  }
 
   if (command == "describe")
   {
@@ -1116,6 +1151,14 @@ CommandResult runCommand(
     auto map = openLiveMapArgument(arguments, logger, session, command);
     return saveLive(*map.session(), arguments.applyOptions.output);
   }
+  if (command == LiveRevCommand)
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto map = openLiveMapArgument(arguments, logger, session, command);
+    auto result = Json::object();
+    result.set("rev", map.session()->rev());
+    return result;
+  }
   if (command == "verify")
   {
     checkArguments(arguments, command, {"a map file"});
@@ -1126,12 +1169,15 @@ CommandResult runCommand(
         fmt::format(
           "{} requires --compile", compileOptions.timeout ? "--timeout" : "--artifacts"));
     }
-    auto map = openMapArgument(arguments, logger, session);
+    auto map = openMapArgument(arguments, logger, session, eject);
+    if (compilesMap(arguments) && map.session())
+    {
+      return ejectMap(*map.session());
+    }
     auto options = arguments.verifyOptions;
     options.paging = arguments.paging;
     if (arguments.compile)
     {
-      refuseLive(map, "verify --compile");
       options.compile = compileOptions;
       options.compile->compilers = map.config().compilers;
     }
@@ -1150,8 +1196,11 @@ CommandResult runCommand(
     {
       throw usageError("--timeout cannot be used with --from-artifacts");
     }
-    auto map = openMapArgument(arguments, logger, session);
-    refuseLive(map, "rooms");
+    auto map = openMapArgument(arguments, logger, session, eject);
+    if (compilesMap(arguments) && map.session())
+    {
+      return ejectMap(*map.session());
+    }
     return rooms(map.ref(), *map.source(), map.config(), options);
   }
   if (command == "ops")
@@ -1221,8 +1270,17 @@ CliError withNodeHandle(const CliError& error, LiveSession& session)
   }
 }
 
+/**
+ * Runs the command against the map file, the live session's map if there is a session,
+ * or the map that the editor ejected if there is one, in which case `liveRev` tells
+ * whether the map moved on while the command ran.
+ */
 RunResult runWith(
-  const std::vector<std::string>& args, const std::string_view in, LiveSession* session)
+  const std::vector<std::string>& args,
+  const std::string_view in,
+  LiveSession* session,
+  const Eject* eject = nullptr,
+  const LiveRevReader& liveRev = {})
 {
   auto result = RunResult{};
   auto logger = StringLogger{result.err};
@@ -1248,11 +1306,21 @@ RunResult runWith(
       throw usageError("no command given");
     }
 
-    auto [output, exitCode] = runCommand(arguments, in, logger, session);
+    auto [output, exitCode] = runCommand(arguments, in, logger, session, eject);
     result.out = std::visit(
       kdl::overload(
-        [&](const Json& json) { return render(json, arguments.outputFormat); },
-        [](RawOutput& raw) { return std::move(raw.text); }),
+        [&](Json& json) {
+          if (eject && liveRev() != eject->rev)
+          {
+            json.set("stale", true);
+          }
+          return render(json, arguments.outputFormat);
+        },
+        [](RawOutput& raw) { return std::move(raw.text); },
+        [&](Eject& ejected) {
+          result.eject = std::move(ejected);
+          return std::string{};
+        }),
       output);
     result.exitCode = exitCode;
   }
@@ -1302,6 +1370,14 @@ RunResult run(
   return runWith(args, in, &session);
 }
 
+RunResult runOnEject(
+  const std::vector<std::string>& args, const Eject& eject, const LiveRevReader& liveRev)
+{
+  contract_pre(liveRev != nullptr);
+
+  return runWith(args, {}, nullptr, &eject, liveRev);
+}
+
 std::optional<std::string> mutatingCommand(const std::vector<std::string>& args)
 {
   const auto arguments = tryParseArguments(args);
@@ -1319,13 +1395,6 @@ std::optional<std::filesystem::path> liveMapArgument(const std::vector<std::stri
   if (
     !arguments || arguments->help || arguments->version
     || arguments->positionals.size() < 2 || !takesMap(arguments->positionals[0]))
-  {
-    return std::nullopt;
-  }
-
-  // compiles need the map's bytes, which the editor can't send yet
-  const auto& command = arguments->positionals[0];
-  if (command == "rooms" || (command == "verify" && arguments->compile))
   {
     return std::nullopt;
   }

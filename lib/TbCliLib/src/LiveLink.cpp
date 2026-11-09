@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <exception>
 #include <limits>
 
 #ifdef _WIN32
@@ -589,6 +590,15 @@ std::string encodeReply(const RunResult& result)
   auto header = Json::object();
   header.set("err", result.err);
   header.set("exitCode", result.exitCode);
+  if (result.eject)
+  {
+    // the map's bytes go in the payload, which needs no escaping
+    auto eject = Json::object();
+    eject.set("path", result.eject->path);
+    eject.set("rev", result.eject->rev);
+    header.set("eject", std::move(eject));
+    return encodeFrame(header, result.eject->bytes);
+  }
   return encodeFrame(header, result.out);
 }
 
@@ -596,10 +606,27 @@ RunResult decodeReply(const Frame& reply)
 {
   const auto* err = reply.header.find("err");
   const auto* exitCode = reply.header.find("exitCode");
-  if (!err || !err->isString() || !exitCode || !exitCode->isNumber())
-  {
+  const auto malformed = [] {
     return errorResult(
       CliError{ErrorCode::InternalError, "the editor sent a malformed reply"});
+  };
+  if (!err || !err->isString() || !exitCode || !exitCode->isNumber())
+  {
+    return malformed();
+  }
+  if (const auto* eject = reply.header.find("eject"))
+  {
+    const auto* path = eject->isObject() ? eject->find("path") : nullptr;
+    const auto* rev = eject->isObject() ? eject->find("rev") : nullptr;
+    if (!path || !path->isString() || !rev || !rev->isString())
+    {
+      return malformed();
+    }
+    return RunResult{
+      "",
+      err->asString(),
+      int(exitCode->asNumber()),
+      Eject{path->asString(), reply.payload, rev->asString()}};
   }
   return RunResult{reply.payload, err->asString(), int(exitCode->asNumber())};
 }
@@ -695,6 +722,37 @@ std::optional<Frame> exchangeFrames(
 #endif
 }
 
+std::optional<std::string> readLiveRev(const Rendezvous& rendezvous)
+{
+  try
+  {
+    const auto request = encodeRequest(
+      Invocation{{std::string{LiveRevCommand}, rendezvous.map}, {}}, rendezvous.token);
+    const auto reply = exchangeFrames(rendezvous.endpoint, request);
+    if (!reply)
+    {
+      return std::nullopt;
+    }
+    const auto result = decodeReply(*reply);
+    if (result.exitCode != 0)
+    {
+      return std::nullopt;
+    }
+    const auto json = parseJson(result.out);
+    if (!json.is_success())
+    {
+      return std::nullopt;
+    }
+    const auto* rev = json.value().find("rev");
+    return rev && rev->isString() ? std::optional{rev->asString()} : std::nullopt;
+  }
+  catch (const std::exception&)
+  {
+    // the compile's result is still worth reporting, as stale
+    return std::nullopt;
+  }
+}
+
 std::optional<RunResult> runLive(
   const std::vector<std::string>& args,
   const std::string_view in,
@@ -786,7 +844,14 @@ std::optional<RunResult> runLive(
       // the editor that wrote the rendezvous file is gone
       return sessionEndedOrNoSession();
     }
-    return decodeReply(*reply);
+    auto result = decodeReply(*reply);
+    if (!result.eject)
+    {
+      return result;
+    }
+
+    // the editor ejected the map for a compile, which runs here and not in the editor
+    return runOnEject(args, *result.eject, [&]() { return readLiveRev(*rendezvous); });
   }
   catch (const CliError& e)
   {
