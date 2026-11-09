@@ -108,6 +108,8 @@ std::string_view toString(const ErrorCode code)
     return "stale_session";
   case ErrorCode::UndoRefused:
     return "undo_refused";
+  case ErrorCode::TooOld:
+    return "too_old";
   case ErrorCode::InternalError:
     return "internal_error";
   }
@@ -189,6 +191,14 @@ CliError CliError::withNodeHandle(std::string nodeHandle) const
   return result;
 }
 
+CliError CliError::withConflicts(Json conflicts, Json changes) const
+{
+  auto result = *this;
+  result.m_conflicts = std::make_shared<const Json>(std::move(conflicts));
+  result.m_changes = std::make_shared<const Json>(std::move(changes));
+  return result;
+}
+
 Json CliError::toJson() const
 {
   auto error = Json::object();
@@ -222,6 +232,14 @@ Json CliError::toJson() const
       candidates.push(candidate);
     }
     error.set("candidates", std::move(candidates));
+  }
+  if (m_conflicts)
+  {
+    error.set("conflicts", *m_conflicts);
+  }
+  if (m_changes)
+  {
+    error.set("changes", *m_changes);
   }
 
   auto result = Json::object();

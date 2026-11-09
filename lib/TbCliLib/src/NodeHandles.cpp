@@ -122,11 +122,16 @@ NodeHandleTable::NodeHandleTable(mdl::Map& map, std::string epoch)
 
 std::string NodeHandleTable::handle(const mdl::Node& node)
 {
+  return handle(node.serialNumber());
+}
+
+std::string NodeHandleTable::handle(const uint64_t serialNumber)
+{
   const auto [it, inserted] =
-    m_handles.try_emplace(node.serialNumber(), m_serialNumbers.size() + 1);
+    m_handles.try_emplace(serialNumber, m_serialNumbers.size() + 1);
   if (inserted)
   {
-    m_serialNumbers.push_back(node.serialNumber());
+    m_serialNumbers.push_back(serialNumber);
   }
   return fmt::format("{}{}.{}", HandlePrefix, m_epoch, it->second);
 }
@@ -192,6 +197,28 @@ NodeOrFace NodeHandleTable::resolve(const std::string_view handle)
     }
   }
   return {node, parsed.faceIndex};
+}
+
+std::optional<uint64_t> NodeHandleTable::serialNumber(const std::string_view handle) const
+{
+  if (!isNodeHandle(handle))
+  {
+    return std::nullopt;
+  }
+  try
+  {
+    if (
+      const auto parsed = parseHandle(handle);
+      parsed.epoch == m_epoch && parsed.k <= m_serialNumbers.size())
+    {
+      return m_serialNumbers[parsed.k - 1];
+    }
+  }
+  catch (const CliError&)
+  {
+    // malformed
+  }
+  return std::nullopt;
 }
 
 mdl::Node* NodeHandleTable::findNode(const uint64_t serialNumber)

@@ -232,6 +232,146 @@ public:
   }
 };
 
+/** Where a rev given by the agent is in a live session's history. */
+enum class RevPlace
+{
+  /** not a live rev */
+  NotALiveRev,
+  /** a rev of another session */
+  OtherSession,
+  /** a rev of this session that the map has not reached */
+  Future,
+  /** older than the change log remembers */
+  TooOld,
+  /** a rev whose changes since the change log has */
+  Logged,
+};
+
+/** Where the given rev is in the session's history, and its counter if it has one. */
+std::pair<RevPlace, uint64_t> placeRev(LiveSession& session, const std::string_view rev)
+{
+  const auto parsed = parseLiveRev(rev);
+  if (!parsed)
+  {
+    return {RevPlace::NotALiveRev, 0};
+  }
+  if (parsed->epoch != session.epoch())
+  {
+    return {RevPlace::OtherSession, 0};
+  }
+
+  const auto& changeLog = session.changeLog();
+  const auto place = parsed->counter > changeLog.counter() ? RevPlace::Future
+                     : !changeLog.covers(parsed->counter)  ? RevPlace::TooOld
+                                                           : RevPlace::Logged;
+  return {place, parsed->counter};
+}
+
+/**
+ * Checks that the ops may run although the map moved on from the rev the agent expects:
+ * no node that they name by handle was touched since, and they name none by path, which
+ * may have shifted. Query targets are run against the current map, and only checked
+ * against their `expect`.
+ *
+ * @throw CliError `stale_rev` naming the conflicting targets, with the changes since the
+ * expected rev; or, without them, if the expected rev is not one of this session's or
+ * older than the change log remembers
+ */
+void checkExpectedRev(
+  LiveSession& session, const std::vector<Op>& ops, const std::string& expectRev)
+{
+  if (expectRev == session.rev())
+  {
+    return;
+  }
+
+  const auto staleRev = [&](const std::string_view reason) {
+    return CliError{
+      ErrorCode::StaleRev,
+      fmt::format(
+        "the map's rev is {}, not the expected {}{}; read it again before editing",
+        session.rev(),
+        expectRev,
+        reason)};
+  };
+
+  const auto [place, since] = placeRev(session, expectRev);
+  if (place != RevPlace::Logged && place != RevPlace::TooOld)
+  {
+    throw staleRev(", which is not a rev of this session");
+  }
+  if (place == RevPlace::TooOld)
+  {
+    throw staleRev(", which is older than the editor's change log remembers");
+  }
+
+  const auto changed = session.changeLog().changedSince(since);
+  auto& handles = session.handles();
+  auto conflicts = Json::array();
+  for (size_t i = 0; i < ops.size(); ++i)
+  {
+    for (const auto& arg : ops[i].def->args)
+    {
+      const auto* value = ops[i].args.find(arg.name);
+      if (!value || !addressesNodes(arg))
+      {
+        continue;
+      }
+
+      for (const auto& reference : nodeReferences(*value))
+      {
+        auto conflict = Json::object();
+        conflict.set("op_index", i);
+        conflict.set("node", reference);
+        if (!isNodeHandle(reference))
+        {
+          // the mapper's edits may have shifted the path
+          conflict.set("reason", "path");
+        }
+        else if (const auto serialNumber = handles.serialNumber(reference))
+        {
+          if (const auto* node = handles.findNode(*serialNumber))
+          {
+            const auto touch = howTouched(*node, changed);
+            if (!touch)
+            {
+              continue;
+            }
+            conflict.set("path", nodePath(*node));
+            conflict.set("reason", toString(*touch));
+          }
+          else if (changed.contains(*serialNumber))
+          {
+            conflict.set("reason", "removed");
+          }
+          else
+          {
+            // gone before the expected rev, which resolving the handle reports
+            continue;
+          }
+        }
+        else
+        {
+          // resolving the handle reports what is wrong with it
+          continue;
+        }
+        conflicts.push(std::move(conflict));
+      }
+    }
+  }
+
+  if (conflicts.size() > 0)
+  {
+    throw staleRev(
+      fmt::format(
+        ", and {} of the batch's targets {} changed since or named by "
+        "path (see conflicts and changes)",
+        conflicts.size(),
+        conflicts.size() == 1 ? "was" : "were"))
+      .withConflicts(std::move(conflicts), changeSummary(session, since));
+  }
+}
+
 void throwIfBusy(const mdl::Map& map)
 {
   if (map.commandProcessor().isTransactionActive())
@@ -420,22 +560,17 @@ Json applyLive(
   const ApplyOptions& options,
   const VerifyConfig& verifyConfig)
 {
-  if (options.expectRev && *options.expectRev != session.rev())
-  {
-    throw CliError{
-      ErrorCode::StaleRev,
-      fmt::format(
-        "the map's rev is {}, not the expected {}; read it again before editing",
-        session.rev(),
-        *options.expectRev)};
-  }
-
   auto& map = session.map();
   throwIfBusy(map);
+  if (options.expectRev)
+  {
+    checkExpectedRev(session, ops, *options.expectRev);
+  }
 
   auto& history = session.agentHistory();
   const auto revBefore = session.rev();
   const auto stepBefore = map.commandProcessor().undoCommandSerialNumber();
+  auto agentChanges = ChangeLog::AgentChanges{session.changeLog()};
 
   const auto selection = SavedSelection{map};
   // collated commands delete the nodes that the earlier one replaced, which ops of the
@@ -471,11 +606,13 @@ Json applyLive(
         }
       }
       map.cancelTransaction();
+      agentChanges.discard();
       rev = computeRev(bytes);
     }
     else if (options.dryRun)
     {
       map.cancelTransaction();
+      agentChanges.discard();
       rev = session.rev();
     }
     else
@@ -508,6 +645,7 @@ Json applyLive(
     {
       map.cancelTransaction();
     }
+    agentChanges.discard();
     if (!recorded)
     {
       history.requestDone(revBefore, session.rev(), std::nullopt);
@@ -523,6 +661,7 @@ Json undoLive(LiveSession& session)
 
   auto& history = session.agentHistory();
   const auto batch = history.mostRecentBatch(session.rev());
+  const auto agentChanges = ChangeLog::AgentChanges{session.changeLog()};
   const auto step = map.commandProcessor().undoCommandSerialNumber();
   if (!step)
   {
@@ -588,6 +727,107 @@ Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& 
   result.set("rev", session.rev());
   result.set("path", path.string());
   result.set("modified", map.modified());
+  return result;
+}
+
+Json changeSummary(LiveSession& session, const uint64_t since)
+{
+  const auto changes = session.changeLog().changesSince(since);
+
+  // whether each node was in the map at `since`, and its latest change
+  auto wasInMap = std::unordered_map<uint64_t, bool>{};
+  auto latest = std::unordered_map<uint64_t, const Change*>{};
+  for (const auto& change : changes)
+  {
+    wasInMap.try_emplace(change.serialNumber, change.kind != ChangeKind::Created);
+    latest[change.serialNumber] = &change;
+  }
+
+  auto& handles = session.handles();
+  auto result = Json::array();
+  for (const auto& change : changes)
+  {
+    if (latest[change.serialNumber] != &change)
+    {
+      continue;
+    }
+
+    const auto* node = handles.findNode(change.serialNumber);
+    const auto wasThere = wasInMap[change.serialNumber];
+    if (!wasThere && !node)
+    {
+      continue;
+    }
+
+    auto entry = Json::object();
+    entry.set(
+      "kind",
+      toString(
+        !wasThere ? ChangeKind::Created
+        : node    ? ChangeKind::Modified
+                  : ChangeKind::Removed));
+    if (node)
+    {
+      entry.set("path", nodePath(*node));
+    }
+    entry.set("handle", handles.handle(change.serialNumber));
+    entry.set("origin", toString(change.origin));
+    entry.set("rev", formatLiveRev(session.epoch(), change.counter));
+    if (change.via == ChangeVia::Undo)
+    {
+      entry.set("undo", true);
+    }
+    else if (change.via == ChangeVia::Redo)
+    {
+      entry.set("redo", true);
+    }
+    result.push(std::move(entry));
+  }
+  return result;
+}
+
+Json changesLive(LiveSession& session, const std::string_view since)
+{
+  const auto [place, counter] = placeRev(session, since);
+  if (place == RevPlace::NotALiveRev)
+  {
+    throw invalidArgument(
+      fmt::format(
+        "--since takes a live rev, live-<epoch>:<counter>, as reads in a live session "
+        "report it, not '{}'",
+        since));
+  }
+  if (place == RevPlace::OtherSession)
+  {
+    throw CliError{
+      ErrorCode::StaleSession,
+      fmt::format(
+        "the rev {} is from an earlier session of this map, which was reopened or "
+        "reloaded since; read the map again",
+        since)};
+  }
+
+  if (place == RevPlace::Future)
+  {
+    throw invalidArgument(
+      fmt::format(
+        "the map has not reached the rev {} yet; its rev is {}", since, session.rev()));
+  }
+  if (place == RevPlace::TooOld)
+  {
+    throw CliError{
+      ErrorCode::TooOld,
+      fmt::format(
+        "the rev {} is older than the editor's change log remembers; read the map again",
+        since)};
+  }
+
+  auto result = Json::object();
+  result.set("schema", "tbcli.changes/1");
+  result.set("session", "live");
+  result.set("rev", session.rev());
+  result.set("since", std::string{since});
+  result.set("changes", changeSummary(session, counter));
   return result;
 }
 

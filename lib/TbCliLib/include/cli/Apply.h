@@ -21,9 +21,11 @@
 
 #include "cli/Json.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace tb::mdl
@@ -141,10 +143,20 @@ std::string liveUndoName(const std::vector<Op>& ops);
  * their paths: `created_handles`, `modified_handles` and so on, and `bindings_handles`.
  * Targets may name nodes by handle as well as by path.
  *
- * @throw CliError `stale_rev` if the session's rev is not `expectRev`; `busy` if a
- * transaction is open; the error of the first failing op, with its `op_index`;
- * `write_failed` if the output cannot be written. The open map is unchanged in any of
- * these cases.
+ * `expectRev` may be an older rev of the session than the current one, as long as the
+ * batch could not be told apart from one at the current rev: nothing that it names by
+ * handle was touched since (see howTouched), and it names nothing by path, since paths
+ * shift. Query targets are run against the current map and checked by their `expect`
+ * only. Changes that only hide, show or select nodes don't count.
+ *
+ * @throw CliError `stale_rev` if the session's rev is not `expectRev` and the batch
+ * conflicts with the changes since, naming the conflicts as `conflicts`
+ * (`[{op_index, node, path?, reason}]`, with `reason` `path`, `removed`, `changed`,
+ * `ancestor_changed` or `descendant_changed`) and the changes as `changes` (see
+ * changeSummary); `stale_rev` without them if `expectRev` is not a rev of this session,
+ * or older than its change log remembers; `busy` if a transaction is open; the error of
+ * the first failing op, with its `op_index`; `write_failed` if the output cannot be
+ * written. The open map is unchanged in any of these cases.
  */
 Json applyLive(
   LiveSession& session,
@@ -180,5 +192,28 @@ Json undoLive(LiveSession& session);
  * names the map's own file; `busy` if a transaction is open.
  */
 Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& output);
+
+/**
+ * The nodes that changed in a live session after the given counter of its rev, as far
+ * as its change log has them, one entry per node, in the order of their latest changes:
+ * `[{kind, path?, handle, origin, rev, undo?, redo?}]`. `kind` is `created` for a node
+ * that is in the map now but was not then, `removed` for one that was in the map then
+ * but is not now, which has no `path`, and `modified` for one that was and is. A node
+ * that came and went again in between is left out. `origin` (`mapper` or `agent`), `rev`
+ * and `undo` or `redo` (true if the change undid or redid an undo step) are those of the
+ * node's latest change.
+ */
+Json changeSummary(LiveSession& session, uint64_t since);
+
+/**
+ * What changed in a live session's map since the given live rev:
+ * `{"schema": "tbcli.changes/1", "session": "live", "rev", "since", "changes"}`, with
+ * `changes` as changeSummary gives them.
+ *
+ * @throw CliError `invalid_argument` if `since` is no live rev, or a rev this session has
+ * not reached yet; `stale_session` if it is from another session of the map;
+ * `too_old` if it is older than the change log remembers
+ */
+Json changesLive(LiveSession& session, std::string_view since);
 
 } // namespace tb::cli

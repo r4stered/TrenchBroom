@@ -315,6 +315,44 @@ TEST_CASE("LiveLinkHost")
     CHECK_THAT(logger.messages.back(), StartsWith("AI: undo failed: undo_refused"));
   }
 
+  SECTION("changes lists the mapper's edits, undo and redo, and the agent's batches")
+  {
+    auto* light = map.worldNode().defaultLayer()->children().front();
+    const auto rev0 = host->rev();
+    const auto changes = [&]() {
+      const auto json = parse(run({"changes", mapArg, "--since", rev0}));
+      REQUIRE(json["schema"] == cli::Json{"tbcli.changes/1"});
+      auto result = std::vector<std::string>{};
+      for (const auto& change : json["changes"].asArray())
+      {
+        result.push_back(
+          change["kind"].asString() + " " + change["path"].asString() + " "
+          + change["origin"].asString() + (change.find("undo") ? " undo" : "")
+          + (change.find("redo") ? " redo" : ""));
+      }
+      return result;
+    };
+
+    mdl::selectNodes(map, {light});
+    REQUIRE(mdl::translateSelection(map, {0, 0, 8}));
+    CHECK(changes() == std::vector<std::string>{"modified layer:0/entity:0 mapper"});
+
+    map.undoCommand();
+    CHECK(changes() == std::vector<std::string>{"modified layer:0/entity:0 mapper undo"});
+
+    map.redoCommand();
+    CHECK(changes() == std::vector<std::string>{"modified layer:0/entity:0 mapper redo"});
+
+    run({"apply", mapArg, "-"}, createBox);
+    CHECK(
+      changes()
+      == std::vector<std::string>{
+        "modified layer:0/entity:0 mapper redo", "created layer:0/brush:0 agent"});
+
+    // a read, which stays out of the Console
+    CHECK(logger.messages.size() == 1);
+  }
+
   SECTION("save saves the open map, and reports a failed write without a dialog")
   {
     run({"apply", mapArg, "-"}, createBox);

@@ -318,6 +318,27 @@ std::vector<std::string> bindingReferences(const Json& target)
   return result;
 }
 
+std::vector<std::string> nodeReferences(const Json& target)
+{
+  auto result = std::vector<std::string>{};
+  const auto add = [&](const Json& element) {
+    if (const auto parsed = parsePathOrBinding(element); parsed && !parsed->isBinding)
+    {
+      result.push_back(parsed->text);
+    }
+  };
+
+  if (target.isArray())
+  {
+    std::ranges::for_each(target.asArray(), add);
+  }
+  else
+  {
+    add(target);
+  }
+  return result;
+}
+
 TargetResolver::TargetResolver(
   mdl::Map& map, const bool allowLocked, NodeHandleTable* handles)
   : m_map{map}

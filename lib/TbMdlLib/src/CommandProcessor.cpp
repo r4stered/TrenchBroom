@@ -216,6 +216,11 @@ std::optional<uint64_t> CommandProcessor::undoCommandSerialNumber() const
   return canUndo() ? std::optional{m_undoStack.back()->serialNumber()} : std::nullopt;
 }
 
+bool CommandProcessor::isRedoing() const
+{
+  return m_isRedoing;
+}
+
 const std::string* CommandProcessor::redoCommandName() const
 {
   return canRedo() ? &m_redoStack.back()->name() : nullptr;
@@ -318,6 +323,7 @@ bool CommandProcessor::redo()
   contract_pre(m_transactionStack.empty());
   contract_pre(!m_redoStack.empty());
 
+  const auto setIsRedoing = kdl::set_temp{m_isRedoing};
   auto command = popFromRedoStack();
   const auto result = executeCommand(*command);
   if (result)

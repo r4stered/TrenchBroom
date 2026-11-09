@@ -62,6 +62,7 @@ TEST_CASE("CliError")
       T{ErrorCode::Gone, 1},
       T{ErrorCode::StaleSession, 1},
       T{ErrorCode::UndoRefused, 1},
+      T{ErrorCode::TooOld, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);
@@ -116,6 +117,22 @@ TEST_CASE("CliError")
     CHECK(withCandidates.toJson() == parseJsonLiteral(R"({"error": {
         "code": "ambiguous_room_name", "message": "which A?",
         "candidates": ["layer:0/group:0/entity:0", "layer:0/group:1/entity:0"]
+      }})"));
+  }
+
+  SECTION("withConflicts")
+  {
+    const auto error = CliError{ErrorCode::StaleRev, "stale"};
+    const auto withConflicts = error.withConflicts(
+      parseJsonLiteral(R"([{"op_index": 0, "node": "layer:0", "reason": "path"}])"),
+      parseJsonLiteral(R"([{"kind": "removed", "handle": "n:ab12.1"}])"));
+    CHECK(
+      error.toJson()
+      == parseJsonLiteral(R"({"error": {"code": "stale_rev", "message": "stale"}})"));
+    CHECK(withConflicts.toJson() == parseJsonLiteral(R"({"error": {
+        "code": "stale_rev", "message": "stale",
+        "conflicts": [{"op_index": 0, "node": "layer:0", "reason": "path"}],
+        "changes": [{"kind": "removed", "handle": "n:ab12.1"}]
       }})"));
   }
 

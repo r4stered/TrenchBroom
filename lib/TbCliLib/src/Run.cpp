@@ -88,6 +88,12 @@ commands:
                         the mapper's Save does; with -o, write a copy to
                         out.map and leave the map's file and its unsaved
                         changes alone. Only ever save when the mapper asks
+  changes <map> --since <rev>
+                        live sessions only: the nodes created, modified and
+                        removed since a live rev, with their handles and
+                        current paths, who changed them (mapper or agent) and
+                        whether by undo or redo; too_old if the editor no
+                        longer remembers that far back
   <op> <map> --<arg> <value>...
                         run one op; tbcli <op> --help lists its arguments.
                         An op's target is --target <path>, or
@@ -261,7 +267,7 @@ bool changesMap(const std::string_view command)
   return isMutatingCommand(command) || command == "undo" || command == "save";
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 35>{{
+constexpr auto CommandOptions = std::array<CommandOption, 36>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -290,6 +296,7 @@ constexpr auto CommandOptions = std::array<CommandOption, 35>{{
   {"--room", "rooms"},
   {"--json", "ops"},
   {"--install", "guide"},
+  {"--since", "changes"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
@@ -369,6 +376,8 @@ struct Arguments
   /** --split-ratio, --cells, --room and --from-artifacts */
   RoomsOptions roomsOptions;
   ApplyOptions applyOptions;
+  /** changes --since: the live rev to list the changes since */
+  std::optional<std::string> since;
   /** guide --install: the directory to write the agent files into */
   std::optional<std::filesystem::path> guideInstall;
   /** The flags of an op's subcommand, as (name without dashes, value). */
@@ -656,6 +665,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--install")
     {
       result.guideInstall = std::filesystem::path{value()};
+    }
+    else if (name == "--since")
+    {
+      result.since = value();
     }
     else if (name == "--expect-rev")
     {
@@ -1151,6 +1164,16 @@ CommandResult runCommand(
     auto map = openLiveMapArgument(arguments, logger, session, command);
     return saveLive(*map.session(), arguments.applyOptions.output);
   }
+  if (command == "changes")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    if (!arguments.since)
+    {
+      throw usageError("changes requires --since <rev>");
+    }
+    auto map = openLiveMapArgument(arguments, logger, session, command);
+    return changesLive(*map.session(), *arguments.since);
+  }
   if (command == LiveRevCommand)
   {
     checkArguments(arguments, command, {"a map file"});
@@ -1239,7 +1262,7 @@ bool takesMap(const std::string_view command)
 {
   return command == "describe" || command == "query" || command == "show"
          || command == "fgd" || command == "verify" || command == "rooms"
-         || changesMap(command);
+         || command == "changes" || changesMap(command);
 }
 
 /**

@@ -65,6 +65,7 @@ private:
   Map& m_map;
 
   bool m_isCollationEnabled;
+  bool m_isRedoing = false;
 
   /**
    * Limits the time after which to succeeding commands can be collated.
@@ -182,6 +183,13 @@ public:
    * step on top of the undo stack is a step that was seen there before.
    */
   std::optional<uint64_t> undoCommandSerialNumber() const;
+
+  /**
+   * Indicates whether an undo step is being redone, which observers of
+   * `transactionDoneNotifier` can't tell apart from a step that is done for the first
+   * time otherwise.
+   */
+  bool isRedoing() const;
 
   /**
    * Returns the name of the command that will be executed when callind `redo`, or null if

@@ -1906,7 +1906,9 @@ Json opsJson()
 std::string_view mutatingOptionsHelp()
 {
   return R"(  --expect-rev <rev>    refuse to write unless the map's rev is <rev>
-                        (stale_rev, exit 3)
+                        (stale_rev, exit 3); in a live session, an older rev
+                        passes if nothing the batch names by handle was
+                        touched since and it names nothing by path
   --dry-run             return the full result and the would-be rev without
                         writing
   -o <out.map>          write the result to out.map instead of the map

@@ -25,6 +25,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -85,6 +86,12 @@ public:
   /** The handle of the given node, given out now if the node has none yet. */
   std::string handle(const mdl::Node& node);
 
+  /**
+   * The handle of the node with the given serial number, given out now if the node has
+   * none yet, such as a node that left the map before any command reported it.
+   */
+  std::string handle(uint64_t serialNumber);
+
   /** The handle of a face: the handle of its brush followed by `/face:<index>`. */
   std::string faceHandle(const mdl::BrushNode& brushNode, size_t faceIndex);
 
@@ -99,7 +106,13 @@ public:
    */
   NodeOrFace resolve(std::string_view handle);
 
-private:
+  /**
+   * The serial number of the node that the given handle names, or of the brush of a face
+   * handle, if it is a handle that this session gave out.
+   */
+  std::optional<uint64_t> serialNumber(std::string_view handle) const;
+
+  /** The node in the map with the given serial number, if there is one. */
   mdl::Node* findNode(uint64_t serialNumber);
 };
 

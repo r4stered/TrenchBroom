@@ -79,6 +79,8 @@ TEST_CASE("NodeHandleTable")
     CHECK(handles.handle(*brush1) == "n:ab12.2");
     // a node keeps its handle
     CHECK(handles.handle(*brush0) == "n:ab12.1");
+    // by serial number, as for a node that left the map before it was reported
+    CHECK(handles.handle(brush1->serialNumber()) == "n:ab12.2");
   }
 
   SECTION("faceHandle")
@@ -142,6 +144,29 @@ TEST_CASE("NodeHandleTable")
         errorCode([&]() { handles.resolve(layerHandle + "/face:0"); })
         == ErrorCode::InvalidPath);
     }
+  }
+
+  SECTION("serialNumber")
+  {
+    const auto handle1 = handles.handle(*brush1);
+    CHECK(handles.serialNumber(handle1) == brush1->serialNumber());
+    CHECK(handles.serialNumber(handle1 + "/face:2") == brush1->serialNumber());
+
+    // also for a node that is no longer in the map
+    mdl::removeNodes(map, {brush1});
+    CHECK(handles.serialNumber(handle1) == brush1->serialNumber());
+
+    CHECK(handles.serialNumber("n:ab12.9") == std::nullopt);
+    CHECK(handles.serialNumber("n:cd34.1") == std::nullopt);
+    CHECK(handles.serialNumber("n:ab12") == std::nullopt);
+    CHECK(handles.serialNumber("layer:0/brush:0") == std::nullopt);
+  }
+
+  SECTION("findNode")
+  {
+    CHECK(handles.findNode(brush0->serialNumber()) == brush0);
+    mdl::removeNodes(map, {brush0});
+    CHECK(handles.findNode(brush0->serialNumber()) == nullptr);
   }
 }
 

@@ -136,6 +136,11 @@ enum class ErrorCode
    * the mapper's edit
    */
   UndoRefused,
+  /**
+   * `changes --since` was given a rev older than the live session's change log
+   * remembers
+   */
+  TooOld,
   /** an unexpected failure inside tbcli */
   InternalError,
 };
@@ -145,7 +150,7 @@ std::string_view toString(ErrorCode code);
 /**
  * A failed command, rendered as the error envelope
  * `{"error": {"code", "message", "node"?, "node_handle"?, "line"?, "op_index"?, "issue"?,
- * "candidates"?}}` on stdout.
+ * "candidates"?, "conflicts"?, "changes"?}}` on stdout.
  *
  * Commands throw this and run() turns it into output and an exit code, so that every
  * failure, however deep, reaches the caller in the same shape.
@@ -160,6 +165,8 @@ private:
   std::optional<size_t> m_opIndex;
   std::shared_ptr<const Json> m_issue;
   std::vector<std::string> m_candidates;
+  std::shared_ptr<const Json> m_conflicts;
+  std::shared_ptr<const Json> m_changes;
 
 public:
   CliError(
@@ -188,6 +195,12 @@ public:
 
   /** This error, with the live session's handle of its node as `node_handle`. */
   CliError withNodeHandle(std::string nodeHandle) const;
+
+  /**
+   * This `stale_rev` error, naming the targets that changed since the expected rev as
+   * `conflicts`, and what changed as `changes`.
+   */
+  CliError withConflicts(Json conflicts, Json changes) const;
 
   Json toJson() const;
 };

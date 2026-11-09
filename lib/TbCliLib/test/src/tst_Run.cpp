@@ -27,12 +27,20 @@
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
+#include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Brushes.h"
+#include "mdl/Map_Entities.h"
+#include "mdl/Map_Geometry.h"
+#include "mdl/Map_Groups.h"
+#include "mdl/Map_NodeLocking.h"
+#include "mdl/Map_NodeVisibility.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Selection.h"
 #include "mdl/TransactionScope.h"
+#include "mdl/UpdateBrushFaceAttributes.h"
 #include "mdl/WorldNode.h"
 
 #include <filesystem>
@@ -1225,6 +1233,390 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("changes")
+  {
+    auto& map = editor.map();
+    auto* layer = map.worldNode().defaultLayer();
+    auto* playerStart = layer->children()[2];
+    auto* light = layer->children()[4];
+    const auto showLive = [&](const std::string& reference) {
+      return liveJson({"show", fixture.map, reference})["node"];
+    };
+    const auto lightHandle = showLive("layer:0/entity:2")["handle"].asString();
+    const auto playerStartHandle = showLive("layer:0/entity:0")["handle"].asString();
+    const auto changesSince = [&](const std::string& rev) {
+      return liveJson({"changes", fixture.map, "--since", rev});
+    };
+    const auto setLight = [&](const std::string& value) {
+      mdl::deselectAll(map);
+      mdl::selectNodes(map, {light});
+      // the edit is the most recent undo step
+      REQUIRE(mdl::setEntityProperty(map, "light", value));
+    };
+    const auto change = [](
+                          const std::string& kind,
+                          const std::string& handle,
+                          const std::optional<std::string>& path,
+                          const std::string& origin) {
+      auto result = Json::object();
+      result.set("kind", kind);
+      if (path)
+      {
+        result.set("path", *path);
+      }
+      result.set("handle", handle);
+      result.set("origin", origin);
+      return result;
+    };
+    // the changes without their revs, which the test doesn't predict
+    const auto withoutRevs = [](const Json& changes) {
+      auto result = Json::array();
+      for (const auto& entry : changes.asArray())
+      {
+        result.push(withoutKeys(entry, {"rev"}));
+      }
+      return result;
+    };
+
+    const auto rev0 = editor.rev();
+
+    SECTION("lists the nodes created, modified and removed since the rev, by whom")
+    {
+      setLight("200");
+      const auto created =
+        liveJson(
+          {"apply", fixture.map, "-"},
+          "[" + std::string{CreateBoxOp} + "]")["ops"][0]["created_handles"][0]
+          .asString();
+      mdl::removeNodes(map, {playerStart});
+
+      const auto json = changesSince(rev0);
+      CHECK(json["schema"] == Json{"tbcli.changes/1"});
+      CHECK(json["session"] == Json{"live"});
+      CHECK(json["rev"] == Json{editor.rev()});
+      CHECK(json["since"] == Json{rev0});
+
+      const auto& changes = json["changes"];
+      CHECK(
+        withoutRevs(changes)
+        == Json{Json::Array{
+          change("modified", lightHandle, "layer:0/entity:1", "mapper"),
+          change("created", created, "layer:0/brush:2", "agent"),
+          change("removed", playerStartHandle, std::nullopt, "mapper"),
+        }});
+      // the rev of each node's latest change, in order
+      CHECK(
+        liveRevCounter(changes[0]) > liveRevCounter(Json{Json::Object{{"rev", rev0}}}));
+      CHECK(liveRevCounter(changes[1]) > liveRevCounter(changes[0]));
+      CHECK(changes[2]["rev"] == Json{editor.rev()});
+
+      // only what changed after the given rev
+      CHECK(
+        withoutRevs(changesSince(changes[1]["rev"].asString())["changes"])
+        == Json{
+          Json::Array{change("removed", playerStartHandle, std::nullopt, "mapper")}});
+      CHECK(changesSince(editor.rev())["changes"] == Json::array());
+    }
+
+    SECTION("flags the changes of undo and redo, the agent's own undo too")
+    {
+      setLight("200");
+      const auto modifiedLight = [&](const std::string& origin) {
+        return change("modified", lightHandle, "layer:0/entity:2", origin);
+      };
+
+      map.undoCommand();
+      auto undone = modifiedLight("mapper");
+      undone.set("undo", true);
+      CHECK(withoutRevs(changesSince(rev0)["changes"]) == Json{Json::Array{undone}});
+
+      map.redoCommand();
+      auto redone = modifiedLight("mapper");
+      redone.set("redo", true);
+      CHECK(withoutRevs(changesSince(rev0)["changes"]) == Json{Json::Array{redone}});
+
+      const auto rev1 = editor.rev();
+      liveJson(
+        {"apply", fixture.map, "-"},
+        R"([{"op": "set_property", "target": ")" + lightHandle
+          + R"(", "key": "light", "value": "300"}])");
+      liveJson({"undo", fixture.map});
+      auto agentUndo = modifiedLight("agent");
+      agentUndo.set("undo", true);
+      CHECK(withoutRevs(changesSince(rev1)["changes"]) == Json{Json::Array{agentUndo}});
+    }
+
+    SECTION("leaves out nodes that came and went, and requests that changed nothing")
+    {
+      const auto box = "[" + std::string{CreateBoxOp} + "]";
+      liveJson({"apply", fixture.map, "-"}, box);
+      map.undoCommand();
+      liveJson({"apply", fixture.map, "-", "--dry-run"}, box);
+      liveJson({"apply", fixture.map, "-", "-o", arg(fixture.env.path("out.map"))}, box);
+      checkError(
+        editor.run(
+          {"apply", fixture.map, "-"},
+          R"([{"op": "set_property", "target": ")" + lightHandle
+            + R"(", "key": "light", "value": "300"},
+               {"op": "set_property", "target": "layer:0/brush:0", "key": "a",
+                "value": "b"}])"),
+        "wrong_node_kind",
+        1,
+        1);
+
+      CHECK(changesSince(rev0)["changes"] == Json::array());
+    }
+
+    SECTION("is too_old past the change log, and refuses revs it can't place")
+    {
+      auto small = FakeEditorHost{fixture.env.path(fixture.fileName), 2};
+      const auto smallRev0 = small.rev();
+      const auto smallJson = [&](const std::vector<std::string>& args) {
+        const auto result = small.run(args);
+        REQUIRE(result.exitCode == 0);
+        return parseOutput(result);
+      };
+      // the second change removes two nodes, which pushes the first one out of the log
+      auto* smallLayer = small.map().worldNode().defaultLayer();
+      mdl::removeNodes(small.map(), {smallLayer->children()[2]});
+      mdl::removeNodes(
+        small.map(), {smallLayer->children()[0], smallLayer->children()[2]});
+      const auto smallRev1 = small.rev();
+      mdl::removeNodes(small.map(), {smallLayer->children()[0]});
+
+      checkError(small.run({"changes", fixture.map, "--since", smallRev0}), "too_old", 1);
+      CHECK(
+        smallJson({"changes", fixture.map, "--since", smallRev1})["changes"].size() == 1);
+
+      checkError(
+        editor.run({"changes", fixture.map, "--since", smallRev1}), "stale_session", 1);
+      checkError(
+        editor.run({"changes", fixture.map, "--since", "live-" + editor.epoch() + ":99"}),
+        "invalid_argument",
+        2);
+      checkError(
+        editor.run({"changes", fixture.map, "--since", revOf(fixture.map)}),
+        "invalid_argument",
+        2);
+      checkError(editor.run({"changes", fixture.map}), "usage", 2);
+    }
+  }
+
+  SECTION("apply at an old rev")
+  {
+    auto& map = editor.map();
+    auto* layer = map.worldNode().defaultLayer();
+    auto* brush1 = layer->children()[1];
+    auto* playerStart = layer->children()[2];
+    auto* door = layer->children()[3];
+    auto* doorBrush = door->children()[0];
+    auto* light = layer->children()[4];
+    const auto handleAt = [&](const std::string& path) {
+      return liveJson({"show", fixture.map, path})["node"]["handle"].asString();
+    };
+    const auto brush0Handle = handleAt("layer:0/brush:0");
+    const auto doorHandle = handleAt("layer:0/entity:1");
+    const auto doorBrushHandle = handleAt("layer:0/entity:1/brush:0");
+    const auto lightHandle = handleAt("layer:0/entity:2");
+    const auto rev0 = editor.rev();
+
+    const auto setProperty = [](const std::string& target) {
+      return R"({"op": "set_property", "target": ")" + target
+             + R"(", "key": "_tb_test", "value": "1"})";
+    };
+    const auto translate = [](const std::string& target) {
+      return R"({"op": "translate", "target": ")" + target + R"(", "delta": [0, 0, 8]})";
+    };
+    const auto applyAt = [&](const std::string& rev, const std::string& op) {
+      return editor.run({"apply", fixture.map, "-", "--expect-rev", rev}, "[" + op + "]");
+    };
+    const auto mapperEdits = [&](mdl::Node* node) {
+      mdl::deselectAll(map);
+      mdl::selectNodes(map, {node});
+      REQUIRE(mdl::translateSelection(map, vm::vec3d{0, 0, 16}));
+      mdl::deselectAll(map);
+    };
+    const auto checkStaleRev = [&](const RunResult& result, const Json& conflicts) {
+      INFO(result.out);
+      CHECK(result.exitCode == 3);
+      const auto error = parseOutput(result)["error"];
+      CHECK(error["code"] == Json{"stale_rev"});
+      CHECK(error["conflicts"] == conflicts);
+      // the same summary as changes --since
+      CHECK(
+        error["changes"]
+        == liveJson({"changes", fixture.map, "--since", rev0})["changes"]);
+    };
+    const auto conflict = [](
+                            const std::string& node,
+                            const std::optional<std::string>& path,
+                            const std::string& reason) {
+      auto result = Json::object();
+      result.set("op_index", 0);
+      result.set("node", node);
+      if (path)
+      {
+        result.set("path", *path);
+      }
+      result.set("reason", reason);
+      return result;
+    };
+
+    SECTION("takes handles whose nodes the mapper's edits didn't touch")
+    {
+      // a sibling, hiding and showing, and selecting don't touch the target
+      mapperEdits(brush1);
+      mdl::hideNodes(map, {layer->children()[0]});
+      mdl::showAllNodes(map);
+      mdl::selectNodes(map, {layer->children()[0]});
+      REQUIRE(editor.rev() != rev0);
+
+      const auto result = applyAt(rev0, translate(brush0Handle));
+      INFO(result.out);
+      CHECK(result.exitCode == 0);
+      CHECK(*map.undoCommandName() == "AI: translate");
+    }
+
+    SECTION("refuses handles whose nodes the mapper's edits touched")
+    {
+      SECTION("the node itself")
+      {
+        mapperEdits(light);
+        checkStaleRev(
+          applyAt(rev0, setProperty(lightHandle)),
+          Json{Json::Array{conflict(lightHandle, "layer:0/entity:2", "changed")}});
+      }
+
+      SECTION("an ancestor")
+      {
+        mdl::deselectAll(map);
+        mdl::selectNodes(map, {door});
+        REQUIRE(mdl::setEntityProperty(map, "speed", "50"));
+        checkStaleRev(
+          applyAt(rev0, translate(doorBrushHandle)),
+          Json{Json::Array{
+            conflict(doorBrushHandle, "layer:0/entity:1/brush:0", "ancestor_changed")}});
+      }
+
+      SECTION("a descendant of an entity")
+      {
+        // moving the door's only brush would move the door too
+        REQUIRE(
+          mdl::setBrushFaceAttributes(
+            map,
+            {mdl::BrushFaceHandle{*dynamic_cast<mdl::BrushNode*>(doorBrush), 0}},
+            mdl::UpdateBrushFaceAttributes{.materialName = "door"}));
+        checkStaleRev(
+          applyAt(rev0, setProperty(doorHandle)),
+          Json{
+            Json::Array{conflict(doorHandle, "layer:0/entity:1", "descendant_changed")}});
+      }
+
+      SECTION("a group, but not the group's other members, and a layer lock")
+      {
+        mdl::deselectAll(map);
+        mdl::selectNodes(map, {layer->children()[0], brush1});
+        auto* group = mdl::groupSelectedNodes(map, "g");
+        REQUIRE(group != nullptr);
+        mdl::deselectAll(map);
+        const auto groupHandle = handleAt("layer:0/group:0");
+        const auto memberHandle = handleAt("layer:0/group:0/brush:0");
+        const auto revGrouped = editor.rev();
+
+        REQUIRE(
+          mdl::setBrushFaceAttributes(
+            map,
+            {mdl::BrushFaceHandle{
+              *dynamic_cast<mdl::BrushNode*>(group->children()[1]), 0}},
+            mdl::UpdateBrushFaceAttributes{.materialName = "wall"}));
+
+        const auto dryRun = editor.run(
+          {"apply", fixture.map, "-", "--dry-run", "--expect-rev", revGrouped},
+          "[" + translate(memberHandle) + "]");
+        INFO(dryRun.out);
+        CHECK(dryRun.exitCode == 0);
+        CHECK(
+          parseOutput(applyAt(revGrouped, translate(groupHandle)))["error"]["conflicts"]
+          == Json{
+            Json::Array{conflict(groupHandle, "layer:0/group:0", "descendant_changed")}});
+
+        mdl::lockNodes(map, {layer});
+        CHECK(
+          parseOutput(applyAt(revGrouped, translate(memberHandle)))["error"]["conflicts"]
+          == Json{Json::Array{
+            conflict(memberHandle, "layer:0/group:0/brush:0", "ancestor_changed")}});
+      }
+
+      SECTION("a removed node")
+      {
+        mdl::removeNodes(map, {light});
+        checkStaleRev(
+          applyAt(rev0, setProperty(lightHandle)),
+          Json{Json::Array{conflict(lightHandle, std::nullopt, "removed")}});
+      }
+
+      SECTION("names every conflict, with the op that has it")
+      {
+        mapperEdits(light);
+        const auto result = editor.run(
+          {"apply", fixture.map, "-", "--expect-rev", rev0},
+          "[" + translate(brush0Handle) + ", " + setProperty(lightHandle) + "]");
+        auto expected = conflict(lightHandle, "layer:0/entity:2", "changed");
+        expected.set("op_index", 1);
+        checkStaleRev(result, Json{Json::Array{expected}});
+      }
+    }
+
+    SECTION("refuses paths unless the rev is the current one")
+    {
+      mapperEdits(brush1);
+      checkStaleRev(
+        applyAt(rev0, translate("layer:0/brush:0")),
+        Json{Json::Array{conflict("layer:0/brush:0", std::nullopt, "path")}});
+
+      const auto result = applyAt(editor.rev(), translate("layer:0/brush:0"));
+      CHECK(result.exitCode == 0);
+    }
+
+    SECTION("re-runs queries against the current map, checked by their expect")
+    {
+      mdl::removeNodes(map, {playerStart});
+      const auto query = [](const std::string& expect) {
+        return R"({"op": "set_property", "target": {"query": "classname == \"light\"",
+                   "expect": )"
+               + expect + R"(}, "key": "light", "value": "250"})";
+      };
+
+      const auto result = applyAt(rev0, query("1"));
+      INFO(result.out);
+      CHECK(result.exitCode == 0);
+      CHECK(
+        liveJson({"show", fixture.map, lightHandle})["node"]["properties"]["light"]
+        == Json{"250"});
+      checkError(applyAt(rev0, query("2")), "expect_mismatch", 1, 0);
+    }
+
+    SECTION("is strict when the rev is older than the change log or not this session's")
+    {
+      auto small = FakeEditorHost{fixture.env.path(fixture.fileName), 1};
+      const auto smallLight = parseOutput(small.run(
+        {"show", fixture.map, "layer:0/entity:2"}))["node"]["handle"]
+                                .asString();
+      const auto smallRev0 = small.rev();
+      auto* smallLayer = small.map().worldNode().defaultLayer();
+      mdl::removeNodes(
+        small.map(), {smallLayer->children()[0], smallLayer->children()[1]});
+
+      const auto result = small.run(
+        {"apply", fixture.map, "-", "--expect-rev", smallRev0},
+        "[" + setProperty(smallLight) + "]");
+      checkError(result, "stale_rev", 3);
+
+      checkError(applyAt(smallRev0, setProperty(lightHandle)), "stale_rev", 3);
+      checkError(applyAt("live-0:0", setProperty(lightHandle)), "stale_rev", 3);
+    }
+  }
+
   SECTION("live-rev prints the live rev")
   {
     liveJson({"apply", fixture.map, "-"}, "[]");
@@ -1237,6 +1629,7 @@ TEST_CASE("run with a live session")
   {
     checkError(runCli({"undo", fixture.map}), "no_session", 1);
     checkError(runCli({"save", fixture.map}), "no_session", 1);
+    checkError(runCli({"changes", fixture.map, "--since", "live-0:0"}), "no_session", 1);
     checkError(runCli({std::string{LiveRevCommand}, fixture.map}), "no_session", 1);
     CHECK(fixture.unchanged());
   }
@@ -1402,6 +1795,7 @@ TEST_CASE("liveMapArgument")
   CHECK(liveMapArgument({"verify", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"undo", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"save", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"changes", "x.map", "--since", "live-ab12:3"}) == cwd / "x.map");
   CHECK(liveMapArgument({"ops"}) == std::nullopt);
   CHECK(liveMapArgument({"rooms", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"verify", "x.map", "--compile"}) == cwd / "x.map");

@@ -375,6 +375,28 @@ TEST_CASE("CommandProcessor")
     CHECK(serialNumber3 != serialNumber2);
   }
 
+  SECTION("isRedoing")
+  {
+    auto command = std::make_unique<TestCommand>("command", !K(updateModificationCount));
+    command->expectDo(true);
+    command->expectUndo(true);
+    command->expectDo(true);
+
+    auto redoingWhenDone = std::vector<bool>{};
+    notifierConnection += commandProcessor.transactionDoneNotifier.connect(
+      [&](const std::string&, bool, bool) {
+        redoingWhenDone.push_back(commandProcessor.isRedoing());
+      });
+
+    CHECK(!commandProcessor.isRedoing());
+    commandProcessor.executeAndStore(std::move(command));
+    CHECK(commandProcessor.undo());
+    CHECK(commandProcessor.redo());
+    CHECK(!commandProcessor.isRedoing());
+
+    CHECK(redoingWhenDone == std::vector<bool>{false, true});
+  }
+
   SECTION("doSuccessfulCommandAndFailAtUndo")
   {
     /*

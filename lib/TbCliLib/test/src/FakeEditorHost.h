@@ -24,6 +24,7 @@
 #include "cli/Run.h"
 #include "mdl/MapFixture.h"
 
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -46,8 +47,13 @@ private:
   AgentHistory m_agentHistory;
 
 public:
-  /** Opens the map file at the given absolute path, as the editor would. */
-  explicit FakeEditorHost(const std::filesystem::path& mapPath);
+  /**
+   * Opens the map file at the given absolute path, as the editor would, with a change
+   * log that keeps the given number of changes.
+   */
+  explicit FakeEditorHost(
+    const std::filesystem::path& mapPath,
+    size_t changeLogCapacity = ChangeLog::DefaultCapacity);
   ~FakeEditorHost() override;
 
   mdl::Map& map() override;
@@ -55,6 +61,7 @@ public:
   std::string rev() const override;
   NodeHandleTable& handles() override;
   AgentHistory& agentHistory() override;
+  ChangeLog& changeLog() override;
 
   /** Runs tbcli against this editor's map. Paths are passed as UTF-8 strings. */
   RunResult run(const std::vector<std::string>& args, std::string_view in = {});

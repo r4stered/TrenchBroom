@@ -151,6 +151,11 @@ cli::AgentHistory& LiveLinkHost::agentHistory()
   return m_agentHistory;
 }
 
+cli::ChangeLog& LiveLinkHost::changeLog()
+{
+  return m_rev->changeLog();
+}
+
 void LiveLinkHost::documentWasLoaded()
 {
   // a loaded or reloaded map is a new map, so its revs start a new epoch

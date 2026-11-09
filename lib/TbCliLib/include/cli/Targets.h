@@ -159,6 +159,12 @@ void recordMoveOutcome(
 std::vector<std::string> bindingReferences(const Json& target);
 
 /**
+ * The node paths and node handles that the given target refers to: not its bindings,
+ * and not the nodes that a query matches.
+ */
+std::vector<std::string> nodeReferences(const Json& target);
+
+/**
  * One element of a target. It is resolved against the input rev, unless it is a binding,
  * which names nodes that an earlier op of the batch creates.
  */

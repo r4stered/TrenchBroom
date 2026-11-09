@@ -155,6 +155,16 @@ TEST_CASE("Targets")
     CHECK(bindingReferences(parseJsonLiteral(R"({"query": "true"})")).empty());
   }
 
+  SECTION("nodeReferences")
+  {
+    CHECK(nodeReferences(Json{"$a"}).empty());
+    CHECK(nodeReferences(Json{"layer:0"}) == std::vector<std::string>{"layer:0"});
+    CHECK(
+      nodeReferences(parseJsonLiteral(R"(["$a", "layer:0", "n:ab12.1"])"))
+      == std::vector<std::string>{"layer:0", "n:ab12.1"});
+    CHECK(nodeReferences(parseJsonLiteral(R"({"query": "true"})")).empty());
+  }
+
   SECTION("queryTargetFromFlags")
   {
     CHECK(

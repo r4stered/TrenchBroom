@@ -116,6 +116,7 @@ public:
   std::string rev() const override;
   cli::NodeHandleTable& handles() override;
   cli::AgentHistory& agentHistory() override;
+  cli::ChangeLog& changeLog() override;
 
 private:
   void documentWasLoaded();
