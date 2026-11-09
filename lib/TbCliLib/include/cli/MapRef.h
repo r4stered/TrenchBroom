@@ -33,6 +33,8 @@ class Map;
 namespace tb::cli
 {
 
+class NodeHandleTable;
+
 /** Something the map reader skipped or changed while loading. */
 struct LoadProblem
 {
@@ -56,6 +58,11 @@ struct MapRef
    * problems is lossy: saving would not write back what the file holds.
    */
   const std::vector<LoadProblem>& loadProblems;
+  /**
+   * The node handles of the live session whose map this is, which commands accept as
+   * well as node paths and report next to them; null in file mode.
+   */
+  NodeHandleTable* handles = nullptr;
 };
 
 /**

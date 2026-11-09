@@ -23,6 +23,7 @@
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
 #include "cli/MapContents.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodePath.h"
 #include "mdl/BezierPatch.h"
 #include "mdl/Brush.h"
@@ -67,12 +68,13 @@ bool isAxial(const vm::vec3d& normal)
 }
 
 /** The members that layers and groups share. */
-Json layerOrGroupToJson(const mdl::Node& node, const std::optional<mdl::IdType>& id)
+Json layerOrGroupToJson(
+  const mdl::Node& node, const std::optional<mdl::IdType>& id, NodeHandleTable* handles)
 {
   const auto summary = summarize(collectContents(node));
 
   auto result = Json::object();
-  result.set("path", nodePath(node));
+  setNodePath(result, "path", node, handles);
   result.set("id", idToJson(id));
   result.set("name", node.name());
   result.set("bounds", boundsToJson(summary));
@@ -116,19 +118,19 @@ Json boundsToJson(const Summary& summary)
   return summary.bounds ? toJson(*summary.bounds) : Json{};
 }
 
-Json layerToJson(const mdl::LayerNode& layerNode)
+Json layerToJson(const mdl::LayerNode& layerNode, NodeHandleTable* handles)
 {
-  auto result = layerOrGroupToJson(layerNode, layerNode.persistentId());
+  auto result = layerOrGroupToJson(layerNode, layerNode.persistentId(), handles);
   result.set("omit_from_export", layerNode.layer().omitFromExport());
   return result;
 }
 
-Json groupToJson(const mdl::GroupNode& groupNode)
+Json groupToJson(const mdl::GroupNode& groupNode, NodeHandleTable* handles)
 {
-  return layerOrGroupToJson(groupNode, groupNode.persistentId());
+  return layerOrGroupToJson(groupNode, groupNode.persistentId(), handles);
 }
 
-Json brushSummaryToJson(const mdl::BrushNode& brushNode)
+Json brushSummaryToJson(const mdl::BrushNode& brushNode, NodeHandleTable* handles)
 {
   const auto& brush = brushNode.brush();
 
@@ -144,44 +146,56 @@ Json brushSummaryToJson(const mdl::BrushNode& brushNode)
   }
 
   auto result = Json::object();
-  result.set("path", nodePath(brushNode));
+  setNodePath(result, "path", brushNode, handles);
   result.set("aabb", toJson(brushNode.logicalBounds()));
   result.set("axial_box", isAxialBox(brush));
   result.set("textures", std::move(textures));
-  result.set(
-    "entity",
-    brushNode.entity() ? nodePath(*brushNode.entity()) : std::string{WorldPath});
+  if (const auto* entityNode = brushNode.entity())
+  {
+    setNodePath(result, "entity", *entityNode, handles);
+  }
+  else
+  {
+    // a brush outside any map
+    result.set("entity", WorldPath);
+  }
   return result;
 }
 
-Json brushToJson(const mdl::BrushNode& brushNode, const bool raw)
+Json brushToJson(
+  const mdl::BrushNode& brushNode, const bool raw, NodeHandleTable* handles)
 {
   const auto& brush = brushNode.brush();
 
   auto faces = Json::array();
   for (size_t i = 0; i < brush.faceCount(); ++i)
   {
-    faces.push(faceToJson(brushNode, i, raw));
+    faces.push(faceToJson(brushNode, i, raw, handles));
   }
 
-  auto result = brushSummaryToJson(brushNode);
+  auto result = brushSummaryToJson(brushNode, handles);
   result.set("vertices", pointsToJson(brush.vertexPositions()));
   result.set("faces", std::move(faces));
   return result;
 }
 
-Json faceSummaryToJson(const mdl::BrushNode& brushNode, const size_t faceIndex)
+Json faceSummaryToJson(
+  const mdl::BrushNode& brushNode, const size_t faceIndex, NodeHandleTable* handles)
 {
   const auto& face = brushNode.brush().face(faceIndex);
 
   auto result = Json::object();
-  result.set("path", facePath(brushNode, faceIndex));
+  setFacePath(result, "path", brushNode, faceIndex, handles);
   result.set("normal", toJson(face.normal()));
   result.set("texture", face.materialName());
   return result;
 }
 
-Json faceToJson(const mdl::BrushNode& brushNode, const size_t faceIndex, const bool raw)
+Json faceToJson(
+  const mdl::BrushNode& brushNode,
+  const size_t faceIndex,
+  const bool raw,
+  NodeHandleTable* handles)
 {
   const auto& face = brushNode.brush().face(faceIndex);
   const auto uvAttributes = face.uvAttributes();
@@ -193,7 +207,7 @@ Json faceToJson(const mdl::BrushNode& brushNode, const size_t faceIndex, const b
   uv.set("scale", vec2ToJson(uvAttributes.scale));
   uv.set("rotation", double(uvAttributes.rotation));
 
-  auto result = faceSummaryToJson(brushNode, faceIndex);
+  auto result = faceSummaryToJson(brushNode, faceIndex, handles);
   result.set("uv", std::move(uv));
   result.set("vertices", pointsToJson(face.vertexPositions()));
   if (raw)
@@ -203,25 +217,33 @@ Json faceToJson(const mdl::BrushNode& brushNode, const size_t faceIndex, const b
   return result;
 }
 
-Json patchSummaryToJson(const mdl::PatchNode& patchNode)
+Json patchSummaryToJson(const mdl::PatchNode& patchNode, NodeHandleTable* handles)
 {
   auto result = Json::object();
-  result.set("path", nodePath(patchNode));
+  setNodePath(result, "path", patchNode, handles);
   result.set("aabb", toJson(patchNode.logicalBounds()));
   result.set("texture", patchNode.patch().materialName());
   return result;
 }
 
-Json nodeSummaryToJson(const mdl::Node& node)
+Json nodeSummaryToJson(const mdl::Node& node, NodeHandleTable* handles)
 {
   return node.accept(
     kdl::overload(
-      [](const mdl::WorldNode& worldNode) { return boundedEntityToJson(worldNode); },
-      [](const mdl::LayerNode& layerNode) { return layerToJson(layerNode); },
-      [](const mdl::GroupNode& groupNode) { return groupToJson(groupNode); },
-      [](const mdl::EntityNode& entityNode) { return boundedEntityToJson(entityNode); },
-      [](const mdl::BrushNode& brushNode) { return brushSummaryToJson(brushNode); },
-      [](const mdl::PatchNode& patchNode) { return patchSummaryToJson(patchNode); }));
+      [&](const mdl::WorldNode& worldNode) {
+        return boundedEntityToJson(worldNode, handles);
+      },
+      [&](const mdl::LayerNode& layerNode) { return layerToJson(layerNode, handles); },
+      [&](const mdl::GroupNode& groupNode) { return groupToJson(groupNode, handles); },
+      [&](const mdl::EntityNode& entityNode) {
+        return boundedEntityToJson(entityNode, handles);
+      },
+      [&](const mdl::BrushNode& brushNode) {
+        return brushSummaryToJson(brushNode, handles);
+      },
+      [&](const mdl::PatchNode& patchNode) {
+        return patchSummaryToJson(patchNode, handles);
+      }));
 }
 
 } // namespace tb::cli

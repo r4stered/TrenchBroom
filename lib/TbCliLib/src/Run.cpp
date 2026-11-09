@@ -30,6 +30,7 @@
 #include "cli/Json.h"
 #include "cli/LiveSession.h"
 #include "cli/LoadMap.h"
+#include "cli/NodeHandles.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Query.h"
@@ -37,6 +38,7 @@
 #include "cli/Show.h"
 #include "cli/TextFormat.h"
 #include "cli/Verify.h"
+#include "mdl/BrushNode.h"
 #include "mdl/Map.h"
 #include "version/Version.h"
 
@@ -831,8 +833,12 @@ public:
   /** The map at its current rev. */
   MapRef ref()
   {
-    return m_session ? MapRef{m_session->map(), m_session->rev(), m_noLoadProblems}
-                     : m_loadedMap->ref();
+    if (!m_session)
+    {
+      return m_loadedMap->ref();
+    }
+    return MapRef{
+      m_session->map(), m_session->rev(), m_noLoadProblems, &m_session->handles()};
   }
 
   /** The bytes the map was loaded from; a live session's map has none. */
@@ -1137,6 +1143,34 @@ bool takesMap(const std::string_view command)
          || isMutatingCommand(command);
 }
 
+/**
+ * The given error with the handle of its node, if its node path or handle names a node
+ * in the session's map as the failed command left it.
+ */
+CliError withNodeHandle(const CliError& error, LiveSession& session)
+{
+  if (!error.node())
+  {
+    return error;
+  }
+  try
+  {
+    auto& handles = session.handles();
+    const auto nodeOrFace =
+      resolveNodeReference(session.map().worldNode(), *error.node(), &handles);
+    return error.withNodeHandle(
+      nodeOrFace.faceIndex
+        ? handles.faceHandle(
+            static_cast<const mdl::BrushNode&>(*nodeOrFace.node), *nodeOrFace.faceIndex)
+        : handles.handle(*nodeOrFace.node));
+  }
+  catch (const CliError&)
+  {
+    // a path of an earlier rev, or the handle of a node that is gone
+    return error;
+  }
+}
+
 RunResult runWith(
   const std::vector<std::string>& args, const std::string_view in, LiveSession* session)
 {
@@ -1175,7 +1209,7 @@ RunResult runWith(
   catch (const CliError& e)
   {
     // Errors are always reported as a JSON envelope so that callers can rely on it.
-    result.out = e.toJson().dump() + "\n";
+    result.out = (session ? withNodeHandle(e, *session) : e).toJson().dump() + "\n";
     result.exitCode = e.exitCode();
     // the usage helps with a malformed command line, not with a malformed batch
     if (e.code() == ErrorCode::Usage)

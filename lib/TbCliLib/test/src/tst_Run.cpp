@@ -23,12 +23,16 @@
 #include "cli/Guide.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Selection.h"
 #include "mdl/WorldNode.h"
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -64,6 +68,84 @@ size_t liveRevCounter(const Json& output)
 {
   const auto& rev = output["rev"].asString();
   return std::stoul(rev.substr(rev.find(':') + 1));
+}
+
+/** A node path in live output and the handle next to it. */
+struct PathAndHandle
+{
+  std::string path;
+  std::string handle;
+};
+
+/** A list of paths or handles, or one of them as a list of one. */
+Json asList(const Json& json)
+{
+  return json.isArray() ? json : Json{Json::Array{json}};
+}
+
+/**
+ * Collects the paths in live output that have a handle next to them: `path` and
+ * `handle`, `<key>` and `<key>_handle`, and the lists `<key>` and `<key>_handles`, or
+ * objects of paths or lists of them, as the apply result's `bindings`.
+ */
+void collectPathsAndHandles(const Json& json, std::vector<PathAndHandle>& result)
+{
+  const auto zip = [&](const Json& paths, const Json& handles) {
+    REQUIRE(paths.size() == handles.size());
+    for (size_t i = 0; i < paths.size(); ++i)
+    {
+      result.push_back({paths[i].asString(), handles[i].asString()});
+    }
+  };
+
+  if (json.isArray())
+  {
+    for (const auto& element : json.asArray())
+    {
+      collectPathsAndHandles(element, result);
+    }
+  }
+  else if (json.isObject())
+  {
+    for (const auto& [key, value] : json.asObject())
+    {
+      if (key == "path")
+      {
+        REQUIRE(json.find("handle") != nullptr);
+        result.push_back({value.asString(), json["handle"].asString()});
+      }
+      else if (
+        const auto* handle = json.find(key + "_handle"); handle && value.isString())
+      {
+        result.push_back({value.asString(), handle->asString()});
+      }
+      else if (const auto* handles = json.find(key + "_handles"); handles)
+      {
+        if (value.isObject())
+        {
+          for (const auto& [name, bound] : value.asObject())
+          {
+            zip(asList(bound), asList((*handles)[name]));
+          }
+        }
+        else
+        {
+          zip(value, *handles);
+        }
+      }
+      else
+      {
+        collectPathsAndHandles(value, result);
+      }
+    }
+  }
+}
+
+std::vector<PathAndHandle> pathsAndHandles(const Json& json)
+{
+  auto result = std::vector<PathAndHandle>{};
+  collectPathsAndHandles(json, result);
+  return result;
 }
 
 double maxY(const RunResult& result)
@@ -540,9 +622,9 @@ TEST_CASE("run with a live session")
       == Json{
         Json::Object{{"live", true}, {"epoch", editor.epoch()}, {"map", fixture.map}}});
 
-    // apart from the rev and the session block, as in file mode
+    // apart from the rev, the session block and the handles, as in file mode
     CHECK(
-      withoutKeys(json, {"rev", "session"})
+      withoutHandles(withoutKeys(json, {"rev", "session"}))
       == withoutKeys(runJson({"describe", fixture.map}), {"rev"}));
   }
 
@@ -601,9 +683,9 @@ TEST_CASE("run with a live session")
       CHECK(liveBrushCount() == brushesBefore);
       CHECK(!map.canUndoCommand());
 
-      // apart from the rev and the session, as in file mode
+      // apart from the rev, the session and the handles, as in file mode
       CHECK(
-        withoutKeys(json, {"rev", "session"})
+        withoutHandles(withoutKeys(json, {"rev", "session"}))
         == withoutKeys(parseOutput(fixture.apply(batch)), {"rev"}));
     }
 
@@ -680,7 +762,9 @@ TEST_CASE("run with a live session")
       // undoing the batch is a change too
       CHECK(json["rev"] == Json{editor.rev()});
       CHECK(liveBrushCount() == brushesBefore);
-      CHECK(json["ops"] == parseOutput(fixture.apply(batch, {"--dry-run"}))["ops"]);
+      CHECK(
+        withoutHandles(json["ops"])
+        == parseOutput(fixture.apply(batch, {"--dry-run"}))["ops"]);
       CHECK(!map.canUndoCommand());
     }
 
@@ -712,6 +796,209 @@ TEST_CASE("run with a live session")
         "stale_rev",
         3);
       liveJson({"apply", fixture.map, "-", "--expect-rev", editor.rev()}, batch);
+    }
+  }
+
+  SECTION("node handles")
+  {
+    auto& map = editor.map();
+    const auto showLive = [&](const std::string& reference) {
+      return liveJson({"show", fixture.map, reference})["node"];
+    };
+    const auto applyLive = [&](const std::string& batch) {
+      return liveJson({"apply", fixture.map, "-"}, batch);
+    };
+    // every path in the output has a handle, which names the node at that path
+    const auto checkHandles = [&](const Json& json) {
+      const auto pairs = pathsAndHandles(json);
+      CHECK(!pairs.empty());
+      for (const auto& [path, handle] : pairs)
+      {
+        CAPTURE(path, handle);
+        CHECK_THAT(handle, StartsWith("n:" + editor.epoch() + "."));
+        CHECK(showLive(handle)["path"] == Json{path});
+      }
+    };
+
+    auto* playerStart = map.worldNode().defaultLayer()->children()[2];
+    const auto light = showLive("layer:0/entity:2")["handle"].asString();
+    const auto deleteLight = R"([{"op": "delete", "target": ")" + light + R"("}])";
+
+    SECTION("every path in a read has a handle next to it")
+    {
+      checkHandles(liveJson({"describe", fixture.map}));
+      checkHandles(liveJson({"query", fixture.map}));
+      checkHandles(liveJson({"query", fixture.map, R"(material == "__TB_empty")"}));
+      checkHandles(liveJson({"show", fixture.map, "world"}));
+      checkHandles(liveJson({"show", fixture.map, "layer:0"}));
+      checkHandles(liveJson({"show", fixture.map, "layer:0/brush:0"}));
+      checkHandles(liveJson({"show", fixture.map, "layer:0/entity:1"}));
+
+      const auto brush = showLive("layer:0/brush:0");
+      CHECK(brush["entity_handle"] == showLive("world")["handle"]);
+      CHECK(brush["faces"][2]["handle"] == Json{brush["handle"].asString() + "/face:2"});
+    }
+
+    SECTION("every path in an apply result has a handle next to it")
+    {
+      const auto json = applyLive(R"([
+        {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16],
+         "material": "floor", "as": "$box"},
+        {"op": "set_property", "target": "layer:0/entity:1", "key": "speed",
+         "value": "50"}
+      ])");
+      const auto& ops = json["ops"];
+      CHECK(ops[0]["created_handles"].size() == 1);
+      CHECK(ops[0]["removed_handles"] == Json::array());
+      CHECK(json["bindings_handles"]["$box"] == ops[0]["created_handles"][0]);
+      CHECK(ops[1]["modified_handles"].size() == 1);
+      checkHandles(json);
+
+      // removed paths are those of the input rev, with the handles of their nodes
+      const auto removed = applyLive(deleteLight)["ops"][0];
+      CHECK(removed["removed"] == Json{Json::Array{"layer:0/entity:2"}});
+      CHECK(removed["removed_handles"] == Json{Json::Array{light}});
+    }
+
+    SECTION("every path in a verify result has a handle next to it")
+    {
+      auto entity = std::make_unique<mdl::EntityNode>(
+        mdl::Entity{{{"classname", "no_such_class"}, {"origin", "0 0 0"}}});
+      auto nodes = std::vector<std::unique_ptr<mdl::Node>>{};
+      nodes.push_back(std::move(entity));
+      mdl::addNodes(map, *map.worldNode().defaultLayer(), std::move(nodes));
+
+      const auto json = liveJson({"verify", fixture.map});
+      REQUIRE(json["issues"]["total"].asNumber() > 0);
+      checkHandles(json["issues"]);
+    }
+
+    SECTION("an error names its node by handle too")
+    {
+      const auto result = editor.run(
+        {"apply", fixture.map, "-"},
+        R"([{"op": "set_property", "target": "layer:0/brush:0", "key": "a",
+             "value": "b"}])");
+      checkError(result, "wrong_node_kind", 1, 0);
+      const auto error = parseOutput(result)["error"];
+      CHECK(error["node"] == Json{"layer:0/brush:0"});
+      CHECK(error["node_handle"] == showLive("layer:0/brush:0")["handle"]);
+
+      // in file mode, there is none
+      CHECK(
+        parseOutput(runCli(
+          {"apply", fixture.map, "-"},
+          R"([{"op": "set_property", "target": "layer:0/brush:0", "key": "a",
+               "value": "b"}])"))["error"]
+          .find("node_handle")
+        == nullptr);
+    }
+
+    SECTION("a node keeps its handle across commands")
+    {
+      const auto queryHandles = [&]() {
+        auto result = std::vector<std::string>{};
+        for (const auto& pair : pathsAndHandles(liveJson({"query", fixture.map})))
+        {
+          result.push_back(pair.handle);
+        }
+        return result;
+      };
+      const auto before = queryHandles();
+      applyLive("[" + std::string{CreateBoxOp} + "]");
+      const auto after = queryHandles();
+      REQUIRE(after.size() > before.size());
+      CHECK(std::vector(after.begin(), after.begin() + long(before.size())) == before);
+    }
+
+    SECTION("a handle names its node after the mapper shifted the node's path")
+    {
+      mdl::removeNodes(map, {playerStart});
+      CHECK(showLive(light)["path"] == Json{"layer:0/entity:1"});
+
+      applyLive(
+        R"([{"op": "set_property", "target": ")" + light
+        + R"(", "key": "light", "value": "250"}])");
+      CHECK(showLive("layer:0/entity:1")["properties"]["light"] == Json{"250"});
+
+      // as an op's target flag too
+      liveJson(
+        {"set_property",
+         fixture.map,
+         "--target",
+         light,
+         "--key",
+         "light",
+         "--value",
+         "100"});
+      CHECK(showLive(light)["properties"]["light"] == Json{"100"});
+    }
+
+    SECTION("a face handle names the face")
+    {
+      const auto face = showLive("layer:0/brush:1")["faces"][3];
+      const auto& handle = face["handle"].asString();
+      CHECK(showLive(handle)["path"] == face["path"]);
+      CHECK(
+        liveJson({"query", fixture.map, "--touching", handle})
+        == liveJson({"query", fixture.map, "--touching", face["path"].asString()}));
+    }
+
+    SECTION("verify takes a handle as its target")
+    {
+      const auto byHandle = liveJson({"verify", fixture.map, "--target", light});
+      CHECK(
+        byHandle == liveJson({"verify", fixture.map, "--target", "layer:0/entity:2"}));
+    }
+
+    SECTION("a deleted node's handle gives gone, and names the node again after undo")
+    {
+      applyLive(deleteLight);
+      checkError(editor.run({"show", fixture.map, light}), "gone", 1);
+      checkError(editor.run({"apply", fixture.map, "-"}, deleteLight), "gone", 1, 0);
+
+      map.undoCommand();
+      CHECK(showLive(light)["path"] == Json{"layer:0/entity:2"});
+    }
+
+    SECTION("a duplicate gets a handle of its own")
+    {
+      const auto original = showLive("layer:0/entity:0")["handle"];
+      mdl::selectNodes(map, {playerStart});
+      mdl::duplicateSelectedNodes(map);
+
+      const auto items = liveJson({"query", fixture.map})["items"].asArray();
+      const auto copy = items.back();
+      CHECK(copy["classname"] == Json{"info_player_start"});
+      CHECK(copy["handle"] != original);
+      CHECK(showLive(original.asString())["path"] == Json{"layer:0/entity:0"});
+    }
+
+    SECTION("a handle from an earlier session gives stale_session")
+    {
+      auto reopened = FakeEditorHost{fixture.env.path(fixture.fileName)};
+      REQUIRE(reopened.epoch() != editor.epoch());
+      checkError(reopened.run({"show", fixture.map, light}), "stale_session", 1);
+    }
+
+    SECTION("a handle that the session never gave out names nothing")
+    {
+      checkError(
+        editor.run({"show", fixture.map, "n:" + editor.epoch() + ".999"}),
+        "node_not_found",
+        1);
+      checkError(editor.run({"show", fixture.map, "n:nonsense"}), "invalid_path", 1);
+    }
+
+    SECTION("file mode reports no handles and takes none")
+    {
+      const auto describe = runJson({"describe", fixture.map});
+      CHECK(describe.find("session") == nullptr);
+      CHECK(withoutHandles(describe) == describe);
+
+      const auto brush = runJson({"show", fixture.map, "layer:0/brush:0"});
+      CHECK(withoutHandles(brush) == brush);
+      checkError(runCli({"show", fixture.map, light}), "invalid_path", 1);
     }
   }
 

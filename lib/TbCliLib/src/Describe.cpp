@@ -26,6 +26,7 @@
 #include "cli/Json.h"
 #include "cli/MapContents.h"
 #include "cli/MapRef.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "cli/Verify.h"
@@ -95,13 +96,15 @@ class TreeWriter
 {
 private:
   const LinkSets& m_linkSets;
+  NodeHandleTable* m_handles;
   size_t m_total = 0;
   size_t m_writtenGroups = 0;
   bool m_truncated = false;
 
 public:
-  explicit TreeWriter(const LinkSets& linkSets)
+  TreeWriter(const LinkSets& linkSets, NodeHandleTable* handles)
     : m_linkSets{linkSets}
+    , m_handles{handles}
   {
   }
 
@@ -122,7 +125,7 @@ private:
   Json writeLayer(const mdl::LayerNode& layerNode)
   {
     ++m_total;
-    auto result = layerToJson(layerNode);
+    auto result = layerToJson(layerNode, m_handles);
     result.set("groups", writeChildGroups(layerNode));
     return result;
   }
@@ -139,21 +142,21 @@ private:
     }
     ++m_writtenGroups;
 
-    auto result = groupToJson(groupNode);
+    auto result = groupToJson(groupNode, m_handles);
     if (
       const auto linkSet = m_linkSets.find(groupNode.linkId());
       linkSet != m_linkSets.end())
     {
-      auto siblings = Json::array();
+      auto siblings = NodePathList{m_handles};
       for (const auto* sibling : linkSet->second)
       {
         if (sibling != &groupNode)
         {
-          siblings.push(nodePath(*sibling));
+          siblings.push(*sibling);
         }
       }
       result.set("link_id", groupNode.linkId());
-      result.set("siblings", std::move(siblings));
+      std::move(siblings).setOn(result, "siblings");
     }
     result.set("groups", writeChildGroups(groupNode));
     return result;
@@ -279,7 +282,8 @@ Json textures(const std::vector<const mdl::BrushNode*>& brushes, const bool chec
 Json keyEntities(
   const mdl::WorldNode& worldNode,
   const std::vector<const mdl::EntityNode*>& entities,
-  const std::vector<std::string>& keyEntityClasses)
+  const std::vector<std::string>& keyEntityClasses,
+  NodeHandleTable* handles)
 {
   const auto isOfKeyClass = [&](const mdl::EntityNode* entityNode) {
     return kdl::ranges::contains(keyEntityClasses, entityNode->entity().classname());
@@ -294,8 +298,8 @@ Json keyEntities(
   std::ranges::copy(
     entities | std::views::filter(isLinked), std::back_inserter(keyEntities));
 
-  return capped(keyEntities, MaxKeyEntities, [](const auto* entityNode) {
-    return boundedEntityToJson(*entityNode);
+  return capped(keyEntities, MaxKeyEntities, [&](const auto* entityNode) {
+    return boundedEntityToJson(*entityNode, handles);
   });
 }
 
@@ -354,7 +358,8 @@ std::vector<const mdl::EntityProperty*> linkProperties(
  * properties (`targetname` and the declared link targets) have that value, in file
  * order. Sources whose value names no entity are dangling.
  */
-Json linkGraph(const std::vector<const mdl::EntityNode*>& entities)
+Json linkGraph(
+  const std::vector<const mdl::EntityNode*>& entities, NodeHandleTable* handles)
 {
   auto entitiesByName =
     std::unordered_map<std::string, std::vector<const mdl::EntityNode*>>{};
@@ -400,16 +405,16 @@ Json linkGraph(const std::vector<const mdl::EntityNode*>& entities)
   }
 
   auto result = Json::object();
-  result.set("edges", capped(links, MaxLinks, [](const auto& link) {
+  result.set("edges", capped(links, MaxLinks, [&](const auto& link) {
                auto edge = Json::object();
-               edge.set("from", nodePath(*link.from));
-               edge.set("to", nodePath(*link.to));
+               setNodePath(edge, "from", *link.from, handles);
+               setNodePath(edge, "to", *link.to, handles);
                edge.set("key", link.property->key());
                return edge;
              }));
-  result.set("dangling", capped(dangling, MaxDanglingLinks, [](const auto& link) {
+  result.set("dangling", capped(dangling, MaxDanglingLinks, [&](const auto& link) {
                auto edge = Json::object();
-               edge.set("from", nodePath(*link.from));
+               setNodePath(edge, "from", *link.from, handles);
                edge.set("key", link.property->key());
                edge.set("target", link.property->value());
                return edge;
@@ -452,15 +457,22 @@ Json describe(
   result.set("rev", mapRef.rev);
   result.set("counts", countsToJson(summary));
   result.set("bounds", boundsToJson(summary));
-  result.set("layers", TreeWriter{linkSets}.write(worldNode));
+  result.set("layers", TreeWriter{linkSets, mapRef.handles}.write(worldNode));
   result.set("entity_classes", entityClasses(contents.entities));
   result.set("textures", textures(contents.brushes, !map.gamePath().empty()));
   result.set(
     "key_entities",
-    keyEntities(worldNode, contents.entities, cli::keyEntityClasses(keyEntityClasses)));
-  result.set("link_graph", linkGraph(contents.entities));
+    keyEntities(
+      worldNode,
+      contents.entities,
+      cli::keyEntityClasses(keyEntityClasses),
+      mapRef.handles));
+  result.set("link_graph", linkGraph(contents.entities, mapRef.handles));
   result.set(
-    "built_rooms", capped(collectBuiltRooms(worldNode), MaxBuiltRooms, builtRoomToJson));
+    "built_rooms",
+    capped(collectBuiltRooms(worldNode), MaxBuiltRooms, [&](const auto& room) {
+      return builtRoomToJson(room, mapRef.handles);
+    }));
   auto issues = Json::object();
   setIssueCounts(issues, issueReport.issues);
   result.set("issues", std::move(issues));

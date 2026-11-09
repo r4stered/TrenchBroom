@@ -26,6 +26,7 @@
 #include "cli/LinkedGroups.h"
 #include "cli/LiveSession.h"
 #include "cli/LoadMap.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
 #include "cli/Targets.h"
@@ -129,12 +130,13 @@ CliError lossyLoad(const std::vector<LoadProblem>& problems)
  * The paths in the new rev of those of the given nodes that are still in the map, or
  * whose copies are (see TargetResolver::replace), each once.
  */
-Json newPaths(
+NodePathList newPaths(
   const std::vector<mdl::Node*>& nodes,
   const TargetResolver& targets,
-  const std::unordered_map<const mdl::Node*, std::string>& paths)
+  const std::unordered_map<const mdl::Node*, std::string>& paths,
+  NodeHandleTable* handles)
 {
-  auto result = Json::array();
+  auto result = NodePathList{handles};
   auto seen = std::unordered_set<const mdl::Node*>{};
   for (auto* node : nodes)
   {
@@ -143,7 +145,7 @@ Json newPaths(
       const auto it = paths.find(current);
       it != paths.end() && seen.insert(current).second)
     {
-      result.push(it->second);
+      result.push(it->second, *current);
     }
   }
   return result;
@@ -154,14 +156,15 @@ Json newPaths(
  */
 Json issuesJson(
   const std::vector<VerifyIssue>& issues,
-  const std::unordered_map<const mdl::Node*, std::string>& paths)
+  const std::unordered_map<const mdl::Node*, std::string>& paths,
+  NodeHandleTable* handles)
 {
   auto result = Json::array();
   for (const auto& issue : issues)
   {
     if (paths.contains(issue.node))
     {
-      result.push(issueToJson(issue, paths));
+      result.push(issueToJson(issue, paths, handles));
     }
   }
   return result;
@@ -235,11 +238,12 @@ BatchResult runBatch(
   mdl::Map& map,
   const std::vector<Op>& ops,
   const bool allowLocked,
-  const VerifyConfig& verifyConfig)
+  const VerifyConfig& verifyConfig,
+  NodeHandleTable* handles)
 {
   contract_pre(!map.isCommandCollationEnabled());
 
-  auto targets = TargetResolver{map, allowLocked};
+  auto targets = TargetResolver{map, allowLocked, handles};
 
   // resolve every node path and query before anything changes
   auto resolved = std::vector<ResolvedArgs>{};
@@ -271,18 +275,18 @@ BatchResult runBatch(
   }
 
   const auto paths = nodePaths(map.worldNode());
-  auto result = BatchResult{Json::array(), Json::object()};
+  auto result = BatchResult{Json::array(), Json::object(), Json::object()};
   for (size_t i = 0; i < ops.size(); ++i)
   {
     const auto& outcome = outcomes[i];
 
     // nodes that a batch creates and removes again have no path in either rev
-    auto removed = Json::array();
+    auto removed = NodePathList{handles};
     for (const auto* node : outcome.removed)
     {
       if (const auto path = targets.inputPath(*node))
       {
-        removed.push(*path);
+        removed.push(*path, *node);
       }
     }
 
@@ -292,29 +296,35 @@ BatchResult runBatch(
       warnings.push(warning);
     }
 
-    auto created = newPaths(outcome.created, targets, paths);
+    auto created = newPaths(outcome.created, targets, paths, handles);
     // a binding whose nodes are all gone from the new rev is left out
     if (const auto binding = ops[i].binding(); binding && created.size() > 0)
     {
       const auto bindsOne = created.size() == 1 && !ops[i].def->bindsList;
-      result.bindings.set(*binding, bindsOne ? created[0] : created);
+      const auto bound = [&](const Json& list) { return bindsOne ? list[0] : list; };
+      result.bindings.set(*binding, bound(created.paths()));
+      if (handles)
+      {
+        result.bindingHandles.set(*binding, bound(created.handles()));
+      }
     }
 
     auto opResult = Json::object();
     opResult.set("ok", true);
-    opResult.set("created", std::move(created));
-    opResult.set("modified", newPaths(outcome.modified, targets, paths));
-    opResult.set("removed", std::move(removed));
+    std::move(created).setOn(opResult, "created");
+    newPaths(outcome.modified, targets, paths, handles).setOn(opResult, "modified");
+    std::move(removed).setOn(opResult, "removed");
     opResult.set("warnings", std::move(warnings));
-    opResult.set("issues_introduced", issuesJson(introduced[i], paths));
+    opResult.set("issues_introduced", issuesJson(introduced[i], paths, handles));
     if (!outcome.instancesAffected.empty())
     {
-      opResult.set(
-        "instances_affected", newPaths(outcome.instancesAffected, targets, paths));
+      newPaths(outcome.instancesAffected, targets, paths, handles)
+        .setOn(opResult, "instances_affected");
     }
     if (!outcome.stalePlacements.empty())
     {
-      opResult.set("stale_placements", newPaths(outcome.stalePlacements, targets, paths));
+      newPaths(outcome.stalePlacements, targets, paths, handles)
+        .setOn(opResult, "stale_placements");
     }
     result.ops.push(std::move(opResult));
   }
@@ -347,7 +357,7 @@ Json apply(
   // collated commands delete the nodes that the earlier one replaced, which ops of the
   // batch still refer to
   map.setIsCommandCollationEnabled(false);
-  auto batch = runBatch(map, ops, options.allowLocked, verifyConfig);
+  auto batch = runBatch(map, ops, options.allowLocked, verifyConfig, nullptr);
 
   const auto bytes = serialize(map);
   if (!options.dryRun)
@@ -429,7 +439,8 @@ Json applyLive(
   {
     // ops select what they edit, and a selected face would soft-lock linked copies
     mdl::deselectAll(map);
-    auto batch = runBatch(map, ops, options.allowLocked, verifyConfig);
+    auto batch =
+      runBatch(map, ops, options.allowLocked, verifyConfig, &session.handles());
     selection.restore(map);
 
     auto rev = std::string{};
@@ -470,6 +481,7 @@ Json applyLive(
     result.set("rev", std::move(rev));
     result.set("ops", std::move(batch.ops));
     result.set("bindings", std::move(batch.bindings));
+    result.set(handleKey("bindings", true), std::move(batch.bindingHandles));
     return result;
   }
   catch (...)

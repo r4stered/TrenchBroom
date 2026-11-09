@@ -21,7 +21,7 @@
 
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
-#include "cli/NodePath.h"
+#include "cli/NodeHandles.h"
 #include "mdl/EntityDefinition.h"
 #include "mdl/EntityDefinitionUtils.h"
 #include "mdl/EntityNode.h"
@@ -99,12 +99,12 @@ Json decodeSpawnflags(const int spawnflags, const mdl::EntityDefinition* definit
 
 } // namespace
 
-Json entityToJson(const mdl::EntityNodeBase& node)
+Json entityToJson(const mdl::EntityNodeBase& node, NodeHandleTable* handles)
 {
   const auto& entity = node.entity();
 
   auto result = Json::object();
-  result.set("path", nodePath(node));
+  setNodePath(result, "path", node, handles);
   result.set("classname", entity.classname());
 
   node.accept(
@@ -145,9 +145,9 @@ Json entityToJson(const mdl::EntityNodeBase& node)
   return result;
 }
 
-Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode)
+Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode, NodeHandleTable* handles)
 {
-  auto result = entityToJson(entityNode);
+  auto result = entityToJson(entityNode, handles);
   const auto& properties = result["properties"].asObject();
 
   auto truncated = properties.size() > MaxPropertiesPerEntity;

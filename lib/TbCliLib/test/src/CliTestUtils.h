@@ -130,6 +130,12 @@ Json parseOutput(const RunResult& result);
 /** The given JSON object without the members with the given keys. */
 Json withoutKeys(const Json& object, const std::vector<std::string_view>& keys);
 
+/**
+ * The given JSON without the node handles that live output puts next to node paths:
+ * every member named `handle` or ending in `_handle` or `_handles`, at any depth.
+ */
+Json withoutHandles(const Json& json);
+
 /** Parses a JSON literal written in a test, failing the test if it is not valid JSON. */
 Json parseJsonLiteral(std::string_view str);
 

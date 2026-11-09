@@ -20,13 +20,12 @@
 #include "cli/Show.h"
 
 #include "cli/BuiltRooms.h"
-#include "cli/CappedList.h"
 #include "cli/EntityJson.h"
 #include "cli/Json.h"
 #include "cli/MapContents.h"
 #include "cli/MapRef.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodeJson.h"
-#include "cli/NodePath.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GroupNode.h"
@@ -36,9 +35,8 @@
 #include "mdl/WorldNode.h"
 
 #include "kd/overload.h"
-#include "kd/ranges/to.h"
 
-#include <vector>
+#include <ranges>
 
 namespace tb::cli
 {
@@ -47,34 +45,50 @@ namespace
 
 constexpr auto MaxChildren = size_t{200};
 
-Json childPaths(const mdl::Node& node)
+/**
+ * `{items, total, truncated}` for the paths of the node's first children, with
+ * `items_handles` in a live session.
+ */
+Json childPaths(const mdl::Node& node, NodeHandleTable* handles)
 {
-  return capped(
-    node.children() | kdl::ranges::to<std::vector>(), MaxChildren, [](const auto* child) {
-      return Json{nodePath(*child)};
-    });
+  const auto& children = node.children();
+
+  auto items = NodePathList{handles};
+  for (const auto* child : children | std::views::take(MaxChildren))
+  {
+    items.push(*child);
+  }
+
+  auto result = Json::object();
+  std::move(items).setOn(result, "items");
+  result.set("total", children.size());
+  result.set("truncated", children.size() > MaxChildren);
+  return result;
 }
 
 /** A group with its children and, if it is linked, the paths of its siblings. */
-Json groupInFullToJson(const mdl::GroupNode& groupNode, const mdl::WorldNode& worldNode)
+Json groupInFullToJson(
+  const mdl::GroupNode& groupNode,
+  const mdl::WorldNode& worldNode,
+  NodeHandleTable* handles)
 {
-  auto result = groupToJson(groupNode);
+  auto result = groupToJson(groupNode, handles);
 
-  auto siblings = Json::array();
+  auto siblings = NodePathList{handles};
   for (const auto* other : collectContents(worldNode).groups)
   {
     if (other != &groupNode && other->linkId() == groupNode.linkId())
     {
-      siblings.push(nodePath(*other));
+      siblings.push(*other);
     }
   }
   if (siblings.size() > 0)
   {
     result.set("link_id", groupNode.linkId());
-    result.set("siblings", std::move(siblings));
+    std::move(siblings).setOn(result, "siblings");
   }
 
-  result.set("children", childPaths(groupNode));
+  result.set("children", childPaths(groupNode, handles));
   return result;
 }
 
@@ -102,33 +116,41 @@ void addBuiltRoom(Json& json, const mdl::Node& node, const mdl::WorldNode& world
   }
 }
 
-Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bool raw)
+Json nodeToJson(
+  const mdl::Node& node,
+  const mdl::WorldNode& worldNode,
+  const bool raw,
+  NodeHandleTable* handles)
 {
   auto json = node.accept(
     kdl::overload(
-      [](const mdl::WorldNode& world) {
-        auto result = entityToJson(world);
-        result.set("layers", childPaths(world));
+      [&](const mdl::WorldNode& world) {
+        auto result = entityToJson(world, handles);
+        result.set("layers", childPaths(world, handles));
         return result;
       },
-      [](const mdl::LayerNode& layerNode) {
-        auto result = layerToJson(layerNode);
-        result.set("children", childPaths(layerNode));
+      [&](const mdl::LayerNode& layerNode) {
+        auto result = layerToJson(layerNode, handles);
+        result.set("children", childPaths(layerNode, handles));
         return result;
       },
       [&](const mdl::GroupNode& groupNode) {
-        return groupInFullToJson(groupNode, worldNode);
+        return groupInFullToJson(groupNode, worldNode, handles);
       },
-      [](const mdl::EntityNode& entityNode) {
-        auto result = entityToJson(entityNode);
+      [&](const mdl::EntityNode& entityNode) {
+        auto result = entityToJson(entityNode, handles);
         if (entityNode.hasChildren())
         {
-          result.set("brushes", childPaths(entityNode));
+          result.set("brushes", childPaths(entityNode, handles));
         }
         return result;
       },
-      [&](const mdl::BrushNode& brushNode) { return brushToJson(brushNode, raw); },
-      [](const mdl::PatchNode& patchNode) { return patchSummaryToJson(patchNode); }));
+      [&](const mdl::BrushNode& brushNode) {
+        return brushToJson(brushNode, raw, handles);
+      },
+      [&](const mdl::PatchNode& patchNode) {
+        return patchSummaryToJson(patchNode, handles);
+      }));
   addBuiltRoom(json, node, worldNode);
   return json;
 }
@@ -138,17 +160,19 @@ Json nodeToJson(const mdl::Node& node, const mdl::WorldNode& worldNode, const bo
 Json show(const MapRef& mapRef, const std::string_view path, const bool raw)
 {
   auto& worldNode = mapRef.map.worldNode();
-  const auto resolved = resolveNodePath(worldNode, path);
+  const auto resolved = resolveNodeReference(worldNode, path, mapRef.handles);
 
   auto result = Json::object();
   result.set("schema", "tbcli.show/1");
   result.set("rev", mapRef.rev);
   result.set(
     "node",
-    resolved.faceIndex
-      ? faceToJson(
-          static_cast<const mdl::BrushNode&>(*resolved.node), *resolved.faceIndex, raw)
-      : nodeToJson(*resolved.node, worldNode, raw));
+    resolved.faceIndex ? faceToJson(
+                           static_cast<const mdl::BrushNode&>(*resolved.node),
+                           *resolved.faceIndex,
+                           raw,
+                           mapRef.handles)
+                       : nodeToJson(*resolved.node, worldNode, raw, mapRef.handles));
   return result;
 }
 

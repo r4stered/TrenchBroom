@@ -614,14 +614,14 @@ const auto ArgTypes = std::array<ArgTypeTraits, 17>{{
   {ArgType::String, "<string>", "a string", isString, stringSchema, stringFromFlag},
   {ArgType::NodePath,
    "<path>",
-   "a node path or a binding such as \"$room\"",
+   "a node path (or in a live session a node handle) or a binding such as \"$room\"",
    isPathOrBinding,
    nodePathSchema,
    stringFromFlag},
   {ArgType::Target,
    "<path>",
-   "a node path, a binding, a non-empty list of them, or "
-   "{\"query\": <ql>, \"expect\": <n> | \"any\"}",
+   "a node path (or in a live session a node handle), a binding, a non-empty list of "
+   "them, or {\"query\": <ql>, \"expect\": <n> | \"any\"}",
    isTarget,
    targetSchema,
    stringFromFlag},

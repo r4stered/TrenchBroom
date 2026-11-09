@@ -124,6 +124,10 @@ enum class ErrorCode
   SessionEnded,
   /** the editor has the map open, but its "Accept AI connections" preference is off */
   LinkDisabled,
+  /** a node handle names a node that is no longer in the map */
+  Gone,
+  /** a node handle is from an earlier live session, before the map was reopened */
+  StaleSession,
   /** an unexpected failure inside tbcli */
   InternalError,
 };
@@ -132,7 +136,7 @@ std::string_view toString(ErrorCode code);
 
 /**
  * A failed command, rendered as the error envelope
- * `{"error": {"code", "message", "node"?, "line"?, "op_index"?, "issue"?,
+ * `{"error": {"code", "message", "node"?, "node_handle"?, "line"?, "op_index"?, "issue"?,
  * "candidates"?}}` on stdout.
  *
  * Commands throw this and run() turns it into output and an exit code, so that every
@@ -143,6 +147,7 @@ class CliError : public std::runtime_error
 private:
   ErrorCode m_code;
   std::optional<std::string> m_node;
+  std::optional<std::string> m_nodeHandle;
   std::optional<size_t> m_line;
   std::optional<size_t> m_opIndex;
   std::shared_ptr<const Json> m_issue;
@@ -172,6 +177,9 @@ public:
    * `candidates`.
    */
   CliError withCandidates(std::vector<std::string> candidates) const;
+
+  /** This error, with the live session's handle of its node as `node_handle`. */
+  CliError withNodeHandle(std::string nodeHandle) const;
 
   Json toJson() const;
 };

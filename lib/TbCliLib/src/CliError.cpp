@@ -102,6 +102,10 @@ std::string_view toString(const ErrorCode code)
     return "session_ended";
   case ErrorCode::LinkDisabled:
     return "link_disabled";
+  case ErrorCode::Gone:
+    return "gone";
+  case ErrorCode::StaleSession:
+    return "stale_session";
   case ErrorCode::InternalError:
     return "internal_error";
   }
@@ -176,6 +180,13 @@ CliError CliError::withCandidates(std::vector<std::string> candidates) const
   return result;
 }
 
+CliError CliError::withNodeHandle(std::string nodeHandle) const
+{
+  auto result = *this;
+  result.m_nodeHandle = std::move(nodeHandle);
+  return result;
+}
+
 Json CliError::toJson() const
 {
   auto error = Json::object();
@@ -184,6 +195,10 @@ Json CliError::toJson() const
   if (m_node)
   {
     error.set("node", *m_node);
+  }
+  if (m_nodeHandle)
+  {
+    error.set("node_handle", *m_nodeHandle);
   }
   if (m_line)
   {

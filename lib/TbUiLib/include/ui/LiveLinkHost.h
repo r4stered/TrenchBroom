@@ -86,6 +86,7 @@ private:
   QTimer* m_retryTimer = nullptr;
   std::string m_token;
   std::unique_ptr<cli::LiveRev> m_rev;
+  std::unique_ptr<cli::NodeHandleTable> m_handles;
   std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
   bool m_attached = false;
@@ -112,6 +113,7 @@ public:
   mdl::Map& map() override;
   std::string epoch() const override;
   std::string rev() const override;
+  cli::NodeHandleTable& handles() override;
 
 private:
   void documentWasLoaded();

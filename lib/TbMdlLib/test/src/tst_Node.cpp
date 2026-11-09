@@ -366,6 +366,29 @@ TEST_CASE("Node")
     CHECK(clones[1] != nodeB);
   }
 
+  SECTION("serialNumber")
+  {
+    const auto worldBounds = vm::bbox3d{8192.0};
+
+    const auto nodeA = std::make_unique<TestNode>();
+    const auto nodeB = std::make_unique<TestNode>();
+    CHECK(nodeA->serialNumber() == nodeA->serialNumber());
+    CHECK(nodeA->serialNumber() != nodeB->serialNumber());
+
+    const auto clone = nodeA->clone(worldBounds);
+    CHECK(clone->serialNumber() != nodeA->serialNumber());
+    CHECK(clone->serialNumber() != nodeB->serialNumber());
+
+    // a node created after another one is destroyed does not take its number
+    const auto serialNumberB = nodeB->serialNumber();
+    auto nodeC = std::make_unique<TestNode>();
+    const auto serialNumberC = nodeC->serialNumber();
+    nodeC.reset();
+    const auto nodeD = std::make_unique<TestNode>();
+    CHECK(nodeD->serialNumber() != serialNumberC);
+    CHECK(nodeD->serialNumber() != serialNumberB);
+  }
+
   SECTION("depth")
   {
     auto rootNode = TestNode{};

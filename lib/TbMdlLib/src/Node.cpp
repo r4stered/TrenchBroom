@@ -29,6 +29,7 @@
 #include "kd/ranges/to.h"
 
 #include <algorithm>
+#include <atomic>
 #include <ranges>
 #include <string>
 #include <unordered_map>
@@ -38,9 +39,29 @@
 namespace tb::mdl
 {
 
-Node::Node() = default;
+namespace
+{
+
+uint64_t nextSerialNumber()
+{
+  // nodes are created on worker threads too, such as while a map is loaded
+  static auto serialNumber = std::atomic<uint64_t>{0};
+  return serialNumber.fetch_add(1, std::memory_order_relaxed);
+}
+
+} // namespace
+
+Node::Node()
+  : m_serialNumber{nextSerialNumber()}
+{
+}
 
 Node::~Node() = default;
+
+uint64_t Node::serialNumber() const
+{
+  return m_serialNumber;
+}
 
 const std::string& Node::name() const
 {

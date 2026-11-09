@@ -45,6 +45,7 @@ class Validator;
 namespace tb::cli
 {
 
+class NodeHandleTable;
 struct VerifyConfig;
 
 /** Where a leaking map's hole is, as the `leak` issue reports it. */
@@ -142,11 +143,13 @@ IssueReport collectIssues(
 /**
  * The issue record `{type, severity, key, message, node, line, origin? | bounds?,
  * tool?, unreliable_mapping?, trail?, nearest_brushes?, fixes}`, with the node's path
- * taken from the given paths, which must contain it.
+ * taken from the given paths, which must contain it. In a live session (given its node
+ * handles), `node_handle` and `nearest_brushes_handles` go next to the paths.
  */
 Json issueToJson(
   const VerifyIssue& issue,
-  const std::unordered_map<const mdl::Node*, std::string>& paths);
+  const std::unordered_map<const mdl::Node*, std::string>& paths,
+  NodeHandleTable* handles);
 
 /**
  * The record of the `leak` issue that verify reports for the given compile, which must

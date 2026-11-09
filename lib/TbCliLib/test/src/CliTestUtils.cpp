@@ -186,6 +186,33 @@ Json withoutKeys(const Json& object, const std::vector<std::string_view>& keys)
   return result;
 }
 
+Json withoutHandles(const Json& json)
+{
+  if (json.isArray())
+  {
+    auto result = Json::array();
+    for (const auto& element : json.asArray())
+    {
+      result.push(withoutHandles(element));
+    }
+    return result;
+  }
+  if (json.isObject())
+  {
+    auto result = Json::object();
+    for (const auto& member : json.asObject())
+    {
+      const auto& key = member.key;
+      if (key != "handle" && !key.ends_with("_handle") && !key.ends_with("_handles"))
+      {
+        result.set(key, withoutHandles(member.value));
+      }
+    }
+    return result;
+  }
+  return json;
+}
+
 Json parseJsonLiteral(const std::string_view str)
 {
   auto json = parseJson(str);

@@ -207,7 +207,7 @@ TEST_CASE("show")
     auto logger = NullLogger{};
     const auto loadedMap = loadFixtureMap("maps/query.map", logger);
     const auto noLoadProblems = std::vector<LoadProblem>{};
-    const auto mapRef = MapRef{*loadedMap.map, "borrowed", noLoadProblems};
+    const auto mapRef = MapRef{*loadedMap.map, "borrowed", noLoadProblems, nullptr};
 
     const auto json = show(mapRef, "layer:0/entity:1", false);
     CHECK(json["rev"] == Json{"borrowed"});

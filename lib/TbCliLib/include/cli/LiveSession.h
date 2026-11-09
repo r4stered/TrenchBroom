@@ -32,6 +32,8 @@ class Map;
 namespace tb::cli
 {
 
+class NodeHandleTable;
+
 /**
  * A map that a running editor has open, as tbcli's commands see it when they run against
  * it instead of loading the map file: the editor host, or a fake one in tests.
@@ -57,6 +59,9 @@ public:
    * every change to the map (do, undo and redo), never on selection changes.
    */
   virtual std::string rev() const = 0;
+
+  /** The node handles of this session, which share its epoch. */
+  virtual NodeHandleTable& handles() = 0;
 };
 
 /**

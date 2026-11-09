@@ -55,6 +55,7 @@ mdl::MapFixtureConfig quakeEditorConfig()
 FakeEditorHost::FakeEditorHost(const std::filesystem::path& mapPath)
   : m_map{m_fixture.load(mapPath, quakeEditorConfig())}
   , m_rev{m_map}
+  , m_handles{m_map, m_rev.epoch()}
 {
   // MapFixture turns collation off, the editor has it on
   m_map.setIsCommandCollationEnabled(true);
@@ -75,6 +76,11 @@ std::string FakeEditorHost::epoch() const
 std::string FakeEditorHost::rev() const
 {
   return m_rev.str();
+}
+
+NodeHandleTable& FakeEditorHost::handles()
+{
+  return m_handles;
 }
 
 RunResult FakeEditorHost::run(

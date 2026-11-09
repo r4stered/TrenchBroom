@@ -81,7 +81,7 @@ TEST_CASE("EntityJson")
 
     SECTION("worldspawn has neither origin nor aabb")
     {
-      CHECK(entityToJson(worldNode) == parseJsonLiteral(R"({
+      CHECK(entityToJson(worldNode, nullptr) == parseJsonLiteral(R"({
         "path": "world", "classname": "worldspawn",
         "properties": {"classname": "worldspawn", "wad": "a.wad"},
         "definition": "missing"})"));
@@ -93,7 +93,7 @@ TEST_CASE("EntityJson")
         addEntity(worldNode, {{"classname", "monster"}, {"origin", "1 2.5 3"}});
       entityNode.setDefinition(&definition);
 
-      CHECK(entityToJson(entityNode) == parseJsonLiteral(R"({
+      CHECK(entityToJson(entityNode, nullptr) == parseJsonLiteral(R"({
         "path": "layer:0/entity:0", "classname": "monster", "origin": [1, 2.5, 3],
         "properties": {"classname": "monster", "origin": "1 2.5 3"},
         "definition": "found"})"));
@@ -107,9 +107,9 @@ TEST_CASE("EntityJson")
         std::make_unique<mdl::BrushNode>(
           builder.createCube(64.0, "material") | kdl::value()));
 
-      CHECK(entityToJson(entityNode)["aabb"] == parseJsonLiteral(R"(
+      CHECK(entityToJson(entityNode, nullptr)["aabb"] == parseJsonLiteral(R"(
         {"min": [-32, -32, -32], "max": [32, 32, 32]})"));
-      CHECK(entityToJson(entityNode).find("origin") == nullptr);
+      CHECK(entityToJson(entityNode, nullptr).find("origin") == nullptr);
     }
 
     SECTION("spawnflags are decoded to the names the definition gives them")
@@ -120,7 +120,7 @@ TEST_CASE("EntityJson")
 
       // bits without a name are given by value
       CHECK(
-        entityToJson(entityNode)["spawnflags"]
+        entityToJson(entityNode, nullptr)["spawnflags"]
         == parseJsonLiteral(R"(["Ambush", 2, 4])"));
     }
 
@@ -129,7 +129,7 @@ TEST_CASE("EntityJson")
       auto& entityNode =
         addEntity(worldNode, {{"classname", "unknown"}, {"spawnflags", "5"}});
 
-      const auto json = entityToJson(entityNode);
+      const auto json = entityToJson(entityNode, nullptr);
       CHECK(json["definition"] == Json{"missing"});
       CHECK(json["spawnflags"] == parseJsonLiteral("[1, 4]"));
     }
@@ -141,7 +141,7 @@ TEST_CASE("EntityJson")
         addEntity(worldNode, {{"classname", "monster"}, {"spawnflags", spawnflags}});
       entityNode.setDefinition(&definition);
 
-      const auto json = entityToJson(entityNode);
+      const auto json = entityToJson(entityNode, nullptr);
       CHECK(json["properties"]["spawnflags"] == Json{spawnflags});
       CHECK(json.find("spawnflags") == nullptr);
     }
@@ -158,7 +158,8 @@ TEST_CASE("EntityJson")
     {
       auto& entityNode =
         addEntity(worldNode, {{"classname", "light"}, {"origin", "0 0 0"}});
-      CHECK(boundedEntityToJson(entityNode) == entityToJson(entityNode));
+      CHECK(
+        boundedEntityToJson(entityNode, nullptr) == entityToJson(entityNode, nullptr));
     }
 
     SECTION("long values are cut without splitting UTF-8 sequences")
@@ -168,7 +169,7 @@ TEST_CASE("EntityJson")
         worldNode,
         {{"classname", "info_null"}, {"message", std::string(255, 'm') + "\xC3\xA9"}});
 
-      const auto json = boundedEntityToJson(entityNode);
+      const auto json = boundedEntityToJson(entityNode, nullptr);
       CHECK(json["properties"]["message"] == Json{std::string(255, 'm')});
       CHECK(json["properties_truncated"] == Json{true});
     }
@@ -182,7 +183,7 @@ TEST_CASE("EntityJson")
       }
       auto& entityNode = addEntity(worldNode, std::move(properties));
 
-      const auto json = boundedEntityToJson(entityNode);
+      const auto json = boundedEntityToJson(entityNode, nullptr);
       CHECK(json["properties"].size() == 64);
       CHECK(json["properties_truncated"] == Json{true});
     }

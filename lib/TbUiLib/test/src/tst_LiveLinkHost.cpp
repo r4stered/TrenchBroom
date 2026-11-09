@@ -235,6 +235,14 @@ TEST_CASE("LiveLinkHost")
 
     CHECK(logger.messages.size() == 1);
     CHECK_THAT(logger.messages.back(), StartsWith("AI: apply done (live-"));
+
+    // the new brush's handle names it
+    const auto& created = applied["ops"][0];
+    REQUIRE(created["created_handles"].size() == 1);
+    CHECK(
+      parse(
+        run({"show", mapArg, created["created_handles"][0].asString()}))["node"]["path"]
+      == created["created"][0]);
   }
 
   SECTION("reads write no Console line, failures do")
@@ -363,13 +371,16 @@ TEST_CASE("LiveLinkHost")
 
   SECTION("after Save As, the session is under the new path and not the old one")
   {
-    run({"describe", mapArg});
+    const auto layer =
+      parse(run({"show", mapArg, "layer:0"}))["node"]["handle"].asString();
 
     const auto newPath = env.dir() / "renamed.map";
     REQUIRE(map.saveAs(newPath).is_success());
 
     const auto described = parse(run({"describe", newPath.string()}));
     CHECK(described["session"]["map"] == cli::Json{newPath.string()});
+    // a new session, so the handles of the old one are stale
+    checkError(run({"show", newPath.string(), layer}), "stale_session");
     CHECK(!std::filesystem::exists(cli::rendezvousPath(rendezvousDir, mapPath)));
 
     // the agent learns where the map went instead of editing the old file
@@ -386,12 +397,16 @@ TEST_CASE("LiveLinkHost")
     const auto rendezvous = cli::readRendezvous(*host->rendezvousFile());
     const auto described = parse(run({"describe", mapArg}));
 
+    const auto layer =
+      parse(run({"show", mapArg, "layer:0"}))["node"]["handle"].asString();
+
     REQUIRE(map.save().is_success());
 
     CHECK(cli::readRendezvous(*host->rendezvousFile()) == rendezvous);
     CHECK(
       parse(run({"describe", mapArg}))["session"]["epoch"]
       == described["session"]["epoch"]);
+    CHECK(parse(run({"show", mapArg, layer}))["node"]["path"] == cli::Json{"layer:0"});
   }
 
   SECTION("an untitled map has no session until it is saved")

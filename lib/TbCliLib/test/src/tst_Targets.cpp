@@ -277,7 +277,7 @@ TEST_CASE("TargetResolver")
 
   SECTION("inputPath")
   {
-    const auto targets = TargetResolver{map, false};
+    const auto targets = TargetResolver{map, false, nullptr};
     const auto brush = resolveNodePath(worldNode, "layer:0/group:0/brush:1");
     CHECK(targets.inputPath(*brush.node) == "layer:0/group:0/brush:1");
 
@@ -290,7 +290,7 @@ TEST_CASE("TargetResolver")
   {
     SECTION("resolves paths up front and keeps bindings for later")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       const auto resolved =
         targets.resolve(parseJsonLiteral(R"(["layer:0/brush:0", "$box"])"));
       REQUIRE(resolved.size() == 2);
@@ -304,7 +304,8 @@ TEST_CASE("TargetResolver")
     SECTION("a path that addresses nothing fails")
     {
       CHECK(
-        errorCode([&]() { TargetResolver{map, false}.resolve(Json{"layer:0/brush:9"}); })
+        errorCode(
+          [&]() { TargetResolver{map, false, nullptr}.resolve(Json{"layer:0/brush:9"}); })
         == ErrorCode::NodeNotFound);
     }
 
@@ -312,16 +313,16 @@ TEST_CASE("TargetResolver")
     {
       const auto query =
         parseJsonLiteral(R"({"query": "type is \"brush\"", "expect": 5})");
-      CHECK(TargetResolver{map, false}.resolve(query).size() == 5);
+      CHECK(TargetResolver{map, false, nullptr}.resolve(query).size() == 5);
       CHECK(
-        errorCode([&]() { TargetResolver{map, true}.resolve(query); })
+        errorCode([&]() { TargetResolver{map, true, nullptr}.resolve(query); })
         == ErrorCode::ExpectMismatch);
     }
   }
 
   SECTION("bind")
   {
-    auto targets = TargetResolver{map, false};
+    auto targets = TargetResolver{map, false, nullptr};
     const auto resolved = targets.resolve(Json{"$pair"});
     auto* groupNode = resolveNodePath(worldNode, "layer:0/group:0").node;
     targets.bind("$pair", groupNode->children() | kdl::ranges::to<std::vector>());
@@ -332,7 +333,7 @@ TEST_CASE("TargetResolver")
 
   SECTION("replace")
   {
-    auto targets = TargetResolver{map, false};
+    auto targets = TargetResolver{map, false, nullptr};
     const auto resolved = targets.resolve(Json{"layer:0/brush:0"});
 
     auto* layer = resolveNodePath(worldNode, "layer:0").node;
@@ -349,7 +350,7 @@ TEST_CASE("TargetResolver")
 
   SECTION("current")
   {
-    auto targets = TargetResolver{map, false};
+    auto targets = TargetResolver{map, false, nullptr};
     auto* brush = resolveNodePath(worldNode, "layer:0/brush:0").node;
     const auto copy = brush->clone(map.worldBounds());
     const auto copyOfCopy = brush->clone(map.worldBounds());
@@ -365,7 +366,7 @@ TEST_CASE("TargetResolver")
   {
     SECTION("expands layers, groups and brush entities to their brushes if asked")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       const auto resolved = targets.resolve(
         parseJsonLiteral(R"(["layer:0/entity:0", "layer:0/group:0", "layer:2"])"));
       CHECK(
@@ -380,7 +381,7 @@ TEST_CASE("TargetResolver")
 
     SECTION("lists each node once")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       const auto resolved =
         targets.resolve(parseJsonLiteral(R"(["layer:0/group:0/brush:1", "layer:0"])"));
       CHECK(
@@ -395,7 +396,7 @@ TEST_CASE("TargetResolver")
 
     SECTION("does not expand unless asked")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       const auto resolved = targets.resolve(Json{"layer:0/group:0"});
       CHECK(
         errorCode([&]() {
@@ -406,7 +407,7 @@ TEST_CASE("TargetResolver")
 
     SECTION("a container without brushes cannot be expanded")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       auto* brushNode = resolveNodePath(worldNode, "layer:2/brush:0").node;
       const auto resolved = targets.resolve(Json{"layer:2"});
       mdl::removeNodes(map, {brushNode});
@@ -417,7 +418,7 @@ TEST_CASE("TargetResolver")
 
     SECTION("a removed node fails")
     {
-      const auto targets = TargetResolver{map, false};
+      const auto targets = TargetResolver{map, false, nullptr};
       auto* brushNode = resolveNodePath(worldNode, "layer:0/brush:0").node;
       const auto resolved = targets.resolve(Json{"layer:0/brush:0"});
       mdl::removeNodes(map, {brushNode});
@@ -428,22 +429,24 @@ TEST_CASE("TargetResolver")
 
     SECTION("an expanded container with locked brushes is locked")
     {
-      const auto resolved = TargetResolver{map, false}.resolve(Json{"layer:1"});
+      const auto resolved = TargetResolver{map, false, nullptr}.resolve(Json{"layer:1"});
       CHECK(
-        errorCode(
-          [&]() { TargetResolver{map, false}.nodes(resolved, brushRules, "op: target"); })
+        errorCode([&]() {
+          TargetResolver{map, false, nullptr}.nodes(resolved, brushRules, "op: target");
+        })
         == ErrorCode::Locked);
       CHECK(
-        paths(TargetResolver{map, true}.nodes(resolved, brushRules, "op: target"))
+        paths(
+          TargetResolver{map, true, nullptr}.nodes(resolved, brushRules, "op: target"))
         == std::vector<std::string>{"layer:1/brush:0"});
     }
 
     SECTION("a locked node is accepted if the rules do not refuse locked nodes")
     {
-      const auto resolved = TargetResolver{map, false}.resolve(Json{"layer:1"});
+      const auto resolved = TargetResolver{map, false, nullptr}.resolve(Json{"layer:1"});
       const auto rules = TargetRules{{TargetKind::Layer}, false, false};
       CHECK(
-        paths(TargetResolver{map, false}.nodes(resolved, rules, "op: target"))
+        paths(TargetResolver{map, false, nullptr}.nodes(resolved, rules, "op: target"))
         == std::vector<std::string>{"layer:1"});
     }
   }

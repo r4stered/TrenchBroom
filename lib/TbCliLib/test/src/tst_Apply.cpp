@@ -822,7 +822,7 @@ TEST_CASE("apply")
         {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "a", "as": "$box"},
         {"op": "delete", "target": "layer:0/brush:0"}
       ])"));
-      const auto result = runBatch(map, ops, false, VerifyConfig{});
+      const auto result = runBatch(map, ops, false, VerifyConfig{}, nullptr);
 
       REQUIRE(result.ops.size() == 2);
       CHECK(result.ops[1]["removed"] == parseJsonLiteral(R"(["layer:0/brush:0"])"));
@@ -845,7 +845,7 @@ TEST_CASE("apply")
           R"([{}, {{"op": "delete", "target": "layer:0/brush:7"}}])", CreateBoxOp)));
       try
       {
-        runBatch(map, ops, false, VerifyConfig{});
+        runBatch(map, ops, false, VerifyConfig{}, nullptr);
         FAIL("runBatch did not throw");
       }
       catch (const CliError& e)

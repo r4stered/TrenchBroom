@@ -59,6 +59,8 @@ TEST_CASE("CliError")
       T{ErrorCode::Busy, 1},
       T{ErrorCode::SessionEnded, 1},
       T{ErrorCode::LinkDisabled, 1},
+      T{ErrorCode::Gone, 1},
+      T{ErrorCode::StaleSession, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

@@ -125,18 +125,18 @@ TEST_CASE("NodeJson")
 
   SECTION("layerToJson")
   {
-    CHECK(layerToJson(*customLayer) == parseJsonLiteral(R"({
+    CHECK(layerToJson(*customLayer, nullptr) == parseJsonLiteral(R"({
       "path": "layer:1", "id": 3, "name": "Custom",
       "bounds": {"min": [0, 0, 100], "max": [8, 8, 200]},
       "counts": {"brushes": 1, "entities": 1, "faces": 6},
       "hidden": false, "locked": false, "omit_from_export": false
     })"));
-    CHECK(layerToJson(defaultLayer)["id"] == Json{});
+    CHECK(layerToJson(defaultLayer, nullptr)["id"] == Json{});
   }
 
   SECTION("groupToJson")
   {
-    CHECK(groupToJson(*group) == parseJsonLiteral(R"({
+    CHECK(groupToJson(*group, nullptr) == parseJsonLiteral(R"({
       "path": "layer:1/group:0", "id": 7, "name": "Room",
       "bounds": {"min": [0, 0, 100], "max": [8, 8, 200]},
       "counts": {"brushes": 1, "entities": 1, "faces": 6},
@@ -155,32 +155,34 @@ TEST_CASE("NodeJson")
 
   SECTION("brushSummaryToJson")
   {
-    CHECK(brushSummaryToJson(*brush) == parseJsonLiteral(R"({
+    CHECK(brushSummaryToJson(*brush, nullptr) == parseJsonLiteral(R"({
       "path": "layer:0/brush:0",
       "aabb": {"min": [0, 0, 0], "max": [64, 32, 16]},
       "axial_box": true,
       "textures": ["a", "top"],
       "entity": "world"
     })"));
-    CHECK(brushSummaryToJson(*entityBrush)["entity"] == Json{"layer:1/group:0/entity:0"});
+    CHECK(
+      brushSummaryToJson(*entityBrush, nullptr)["entity"]
+      == Json{"layer:1/group:0/entity:0"});
   }
 
   SECTION("brushToJson")
   {
-    const auto json = brushToJson(*brush, false);
+    const auto json = brushToJson(*brush, false, nullptr);
     CHECK(json["path"] == Json{"layer:0/brush:0"});
     CHECK(json["axial_box"] == Json{true});
     CHECK(json["vertices"].size() == 8);
     REQUIRE(json["faces"].size() == 6);
-    CHECK(json["faces"][topFace] == faceToJson(*brush, topFace, false));
+    CHECK(json["faces"][topFace] == faceToJson(*brush, topFace, false, nullptr));
     CHECK(json["faces"][0].find("points") == nullptr);
 
-    CHECK(brushToJson(*brush, true)["faces"][0].find("points") != nullptr);
+    CHECK(brushToJson(*brush, true, nullptr)["faces"][0].find("points") != nullptr);
   }
 
   SECTION("faceSummaryToJson")
   {
-    CHECK(rounded(faceSummaryToJson(*brush, topFace)) == [&]() {
+    CHECK(rounded(faceSummaryToJson(*brush, topFace, nullptr)) == [&]() {
       auto expected = Json::object();
       expected.set("path", topFacePath);
       expected.set("normal", parseJsonLiteral("[0, 0, 1]"));
@@ -191,7 +193,7 @@ TEST_CASE("NodeJson")
 
   SECTION("faceToJson")
   {
-    const auto json = rounded(faceToJson(*brush, topFace, false));
+    const auto json = rounded(faceToJson(*brush, topFace, false, nullptr));
     CHECK(json["path"] == Json{topFacePath});
     CHECK(json["normal"] == parseJsonLiteral("[0, 0, 1]"));
     CHECK(json["texture"] == Json{"top"});
@@ -203,7 +205,7 @@ TEST_CASE("NodeJson")
     CHECK(json["vertices"].size() == 4);
     CHECK(json.find("points") == nullptr);
 
-    const auto raw = rounded(faceToJson(*brush, topFace, true));
+    const auto raw = rounded(faceToJson(*brush, topFace, true, nullptr));
     REQUIRE(raw["points"].size() == 3);
     for (const auto& point : raw["points"].asArray())
     {
@@ -214,7 +216,7 @@ TEST_CASE("NodeJson")
 
   SECTION("patchSummaryToJson")
   {
-    CHECK(patchSummaryToJson(*patch) == parseJsonLiteral(R"({
+    CHECK(patchSummaryToJson(*patch, nullptr) == parseJsonLiteral(R"({
       "path": "layer:0/patch:0",
       "aabb": {"min": [0, 0, 0], "max": [2, 2, 1]},
       "texture": "patch"
@@ -223,18 +225,18 @@ TEST_CASE("NodeJson")
 
   SECTION("nodeSummaryToJson")
   {
-    CHECK(nodeSummaryToJson(worldNode)["path"] == Json{"world"});
-    CHECK(nodeSummaryToJson(worldNode)["classname"] == Json{"worldspawn"});
-    CHECK(nodeSummaryToJson(*customLayer) == layerToJson(*customLayer));
-    CHECK(nodeSummaryToJson(*group) == groupToJson(*group));
-    CHECK(nodeSummaryToJson(*brushEntity)["classname"] == Json{"func_door"});
-    CHECK(nodeSummaryToJson(*brush) == brushSummaryToJson(*brush));
-    CHECK(nodeSummaryToJson(*patch) == patchSummaryToJson(*patch));
+    CHECK(nodeSummaryToJson(worldNode, nullptr)["path"] == Json{"world"});
+    CHECK(nodeSummaryToJson(worldNode, nullptr)["classname"] == Json{"worldspawn"});
+    CHECK(nodeSummaryToJson(*customLayer, nullptr) == layerToJson(*customLayer, nullptr));
+    CHECK(nodeSummaryToJson(*group, nullptr) == groupToJson(*group, nullptr));
+    CHECK(nodeSummaryToJson(*brushEntity, nullptr)["classname"] == Json{"func_door"});
+    CHECK(nodeSummaryToJson(*brush, nullptr) == brushSummaryToJson(*brush, nullptr));
+    CHECK(nodeSummaryToJson(*patch, nullptr) == patchSummaryToJson(*patch, nullptr));
 
     // entity summaries are bounded
     brushEntity->setEntity(
       mdl::Entity{{{"classname", "func_door"}, {"message", std::string(1000, 'm')}}});
-    const auto json = nodeSummaryToJson(*brushEntity);
+    const auto json = nodeSummaryToJson(*brushEntity, nullptr);
     CHECK(json["properties"]["message"].asString().size() == 256);
     CHECK(json["properties_truncated"] == Json{true});
   }

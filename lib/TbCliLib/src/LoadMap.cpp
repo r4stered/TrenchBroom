@@ -302,7 +302,7 @@ LoadedMap::~LoadedMap() = default;
 
 MapRef LoadedMap::ref()
 {
-  return MapRef{*map, rev, loadProblems};
+  return MapRef{*map, rev, loadProblems, nullptr};
 }
 
 MapSource LoadedMap::source() const

@@ -39,6 +39,7 @@ namespace tb::cli
 {
 
 class Json;
+class NodeHandleTable;
 struct OpContext;
 
 /**
@@ -155,9 +156,11 @@ const BuiltRoom* builtRoomOf(const mdl::Node& node, const std::vector<BuiltRoom>
  * `{name, kind, params, status, instances, group}`: `params` is `{size, wall, place?}`,
  * or null if the carrier's keys are malformed; `group` is the first instance's group, or
  * null if it has none. `instances` lists the group of each instance, or its carrier if
- * it has no group: a room inside linked groups has one instance per linked copy.
+ * it has no group: a room inside linked groups has one instance per linked copy. In a
+ * live session (given its node handles), `instances_handles` and `group_handle` (unless
+ * `group` is null) go next to the paths.
  */
-Json builtRoomToJson(const BuiltRoom& room);
+Json builtRoomToJson(const BuiltRoom& room, NodeHandleTable* handles);
 
 /**
  * `add_room {name, size, min | place, wall, instance?, as?}`: a sealed rectangular room

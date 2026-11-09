@@ -25,6 +25,7 @@
 #include "cli/GeometryJson.h"
 #include "cli/Json.h"
 #include "cli/MapContents.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
@@ -756,13 +757,21 @@ BuiltRoom builtRoomOfCarrier(const mdl::EntityNode& carrier)
     {RoomInstance{&carrier, group}}};
 }
 
+/** The nodes that stand for the instances of a room: their groups, or their carriers. */
+std::vector<const mdl::Node*> instanceNodes(const BuiltRoom& room)
+{
+  return room.instances | std::views::transform([](const auto& instance) {
+           return instance.group ? static_cast<const mdl::Node*>(instance.group)
+                                 : static_cast<const mdl::Node*>(instance.carrier);
+         })
+         | kdl::ranges::to<std::vector>();
+}
+
 /** The paths of the instances of a room: their groups, or their carriers. */
 std::vector<std::string> instancePaths(const BuiltRoom& room)
 {
-  return room.instances | std::views::transform([](const auto& instance) {
-           return instance.group ? nodePath(*instance.group)
-                                 : nodePath(*instance.carrier);
-         })
+  return instanceNodes(room)
+         | std::views::transform([](const auto* node) { return nodePath(*node); })
          | kdl::ranges::to<std::vector>();
 }
 
@@ -3056,15 +3065,12 @@ const BuiltRoom* builtRoomOf(const mdl::Node& node, const std::vector<BuiltRoom>
   return it != rooms.end() ? &*it : nullptr;
 }
 
-Json builtRoomToJson(const BuiltRoom& room)
+Json builtRoomToJson(const BuiltRoom& room, NodeHandleTable* handles)
 {
-  const auto groupPath =
-    room.group() ? std::optional{nodePath(*room.group())} : std::nullopt;
-
-  auto instances = Json::array();
-  for (auto& path : instancePaths(room))
+  auto instances = NodePathList{handles};
+  for (const auto* node : instanceNodes(room))
   {
-    instances.push(std::move(path));
+    instances.push(*node);
   }
 
   auto result = Json::object();
@@ -3072,8 +3078,15 @@ Json builtRoomToJson(const BuiltRoom& room)
   result.set("kind", RoomKind);
   result.set("params", room.params ? paramsToJson(*room.params) : Json{});
   result.set("status", toString(room.status));
-  result.set("instances", std::move(instances));
-  result.set("group", groupPath ? Json{*groupPath} : Json{});
+  std::move(instances).setOn(result, "instances");
+  if (const auto* group = room.group())
+  {
+    setNodePath(result, "group", *group, handles);
+  }
+  else
+  {
+    result.set("group", nullptr);
+  }
   return result;
 }
 

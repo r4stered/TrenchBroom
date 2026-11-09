@@ -41,6 +41,7 @@ namespace tb::cli
 {
 
 class Json;
+class NodeHandleTable;
 struct OpOutcome;
 
 /**
@@ -181,6 +182,7 @@ class TargetResolver
 private:
   mdl::Map& m_map;
   bool m_allowLocked;
+  NodeHandleTable* m_handles;
   std::unordered_map<const mdl::Node*, std::string> m_inputPaths;
   std::map<std::string, std::vector<mdl::Node*>, std::less<>> m_bindings;
   std::unordered_map<const mdl::Node*, mdl::Node*> m_copies;
@@ -189,9 +191,10 @@ public:
   /**
    * Creates a resolver for the map in its current state, the input rev. Unless
    * `allowLocked` is set, locked nodes are dropped from query results and ops on locked
-   * nodes fail.
+   * nodes fail. In a live session (given its node handles), targets may name nodes by
+   * handle as well as by path.
    */
-  TargetResolver(mdl::Map& map, bool allowLocked);
+  TargetResolver(mdl::Map& map, bool allowLocked, NodeHandleTable* handles);
 
   /** The path of a node in the input rev, if it was in the map then. */
   std::optional<std::string> inputPath(const mdl::Node& node) const;

@@ -28,23 +28,25 @@ namespace tb::cli
 {
 
 class Json;
+class NodeHandleTable;
 
 /**
  * An entity in full: `{path, classname, origin | aabb, properties, definition,
- * spawnflags?}`.
+ * spawnflags?}`, and in a live session (given its node handles) `handle` next to
+ * `path`.
  *
  * Point entities have an `origin` and brush entities an `aabb`; worldspawn has
  * neither. `properties` holds only the properties actually set, in file order.
  * `definition` is `found` or `missing`. If spawnflags are set, `spawnflags` lists each
  * set bit by the name the entity definition gives it, or as its value if it has none.
  */
-Json entityToJson(const mdl::EntityNodeBase& node);
+Json entityToJson(const mdl::EntityNodeBase& node, NodeHandleTable* handles);
 
 /**
  * An entity as entityToJson writes it, but with at most 64 properties and values cut to
  * 256 bytes, so that one entity cannot flood a list of entities. If anything was cut,
  * `properties_truncated` is set.
  */
-Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode);
+Json boundedEntityToJson(const mdl::EntityNodeBase& entityNode, NodeHandleTable* handles);
 
 } // namespace tb::cli

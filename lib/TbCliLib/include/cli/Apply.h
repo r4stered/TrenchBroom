@@ -35,6 +35,7 @@ namespace tb::cli
 {
 
 class LiveSession;
+class NodeHandleTable;
 struct LoadedMap;
 struct Op;
 struct VerifyConfig;
@@ -64,6 +65,8 @@ struct BatchResult
   Json ops;
   /** The paths of the nodes that the ops bound, by binding name. */
   Json bindings;
+  /** In a live session, the handles of the nodes that the ops bound, by binding name. */
+  Json bindingHandles;
 };
 
 /**
@@ -74,7 +77,9 @@ struct BatchResult
  * delete the nodes that earlier ops of the batch replaced.
  *
  * `allowLocked` lets ops edit locked nodes and keeps locked nodes in query targets.
- * `issues_introduced` takes the severities and suppressions of `verifyConfig`.
+ * `issues_introduced` takes the severities and suppressions of `verifyConfig`. In a
+ * live session (given its node handles), targets may name nodes by handle, and every
+ * path in the result has its handle next to it (see handleKey).
  *
  * @throw CliError the error of the first failing op, with its `op_index`. The ops
  * before it have then already edited the map; undoing them is up to the caller.
@@ -83,7 +88,8 @@ BatchResult runBatch(
   mdl::Map& map,
   const std::vector<Op>& ops,
   bool allowLocked,
-  const VerifyConfig& verifyConfig);
+  const VerifyConfig& verifyConfig,
+  NodeHandleTable* handles);
 
 /**
  * Runs the given ops against the loaded map with runBatch, all or nothing, and writes
@@ -131,7 +137,9 @@ std::string liveUndoName(const std::vector<Op>& ops);
  * `dryRun`: then the result is written there, and the open map is left as it was, as
  * with `dryRun`. Returns the `tbcli.apply/1` result as apply does, with
  * `"session": "live"` and the live rev after the batch, or with `output`, the rev of
- * the (would-be) output file.
+ * the (would-be) output file, and with the handles of the session's nodes next to
+ * their paths: `created_handles`, `modified_handles` and so on, and `bindings_handles`.
+ * Targets may name nodes by handle as well as by path.
  *
  * @throw CliError `stale_rev` if the session's rev is not `expectRev`; `busy` if a
  * transaction is open; the error of the first failing op, with its `op_index`;

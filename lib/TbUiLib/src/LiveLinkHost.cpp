@@ -31,6 +31,7 @@
 #include "cli/FileUtils.h"
 #include "cli/Json.h"
 #include "cli/LiveLink.h"
+#include "cli/NodeHandles.h"
 #include "cli/Run.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
@@ -140,6 +141,11 @@ std::string LiveLinkHost::rev() const
   return m_rev->str();
 }
 
+cli::NodeHandleTable& LiveLinkHost::handles()
+{
+  return *m_handles;
+}
+
 void LiveLinkHost::documentWasLoaded()
 {
   // a loaded or reloaded map is a new map, so its revs start a new epoch
@@ -197,6 +203,8 @@ void LiveLinkHost::start()
   }
 
   m_rev = std::make_unique<cli::LiveRev>(m_document.map());
+  // handles of an earlier session give stale_session, since the epoch is new
+  m_handles = std::make_unique<cli::NodeHandleTable>(m_document.map(), m_rev->epoch());
 
   auto rendezvous = cli::Rendezvous{
     .map = path.string(),

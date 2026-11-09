@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <concepts>
+#include <cstdint>
 #include <memory>
 #include <ranges>
 #include <string>
@@ -56,6 +57,7 @@ class Object;
 class Node : public Taggable
 {
 private:
+  uint64_t m_serialNumber;
   Node* m_parent = nullptr;
   std::vector<std::unique_ptr<Node>> m_children;
   size_t m_descendantCount = 0;
@@ -86,6 +88,13 @@ public:
   ~Node() override;
 
 public: // getters
+  /**
+   * A number that no other node created by this process has, not even one that has
+   * been destroyed. Unlike the node's address, it tells a node apart from one that was
+   * created where a destroyed node used to be. Clones get numbers of their own.
+   */
+  uint64_t serialNumber() const;
+
   const std::string& name() const;
 
   /**

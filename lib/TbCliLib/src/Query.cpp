@@ -24,6 +24,7 @@
 #include "cli/Json.h"
 #include "cli/MapContents.h"
 #include "cli/MapRef.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodeJson.h"
 #include "cli/NodePath.h"
 #include "mdl/BrushFace.h"
@@ -133,18 +134,19 @@ bool isRelated(const NodeOrFace& match, const NodeOrFace& reference)
          || reference.node->isAncestorOf(*match.node);
 }
 
-Json matchToJson(const NodeOrFace& match)
+Json matchToJson(const NodeOrFace& match, NodeHandleTable* handles)
 {
   return match.faceIndex
            ? faceSummaryToJson(
-               static_cast<const mdl::BrushNode&>(*match.node), *match.faceIndex)
-           : nodeSummaryToJson(*match.node);
+               static_cast<const mdl::BrushNode&>(*match.node), *match.faceIndex, handles)
+           : nodeSummaryToJson(*match.node, handles);
 }
 
 /** The node or face that `--touching` compares with. */
-NodeOrFace resolveTouchingReference(mdl::WorldNode& worldNode, const std::string& path)
+NodeOrFace resolveTouchingReference(
+  mdl::WorldNode& worldNode, const std::string& path, NodeHandleTable* handles)
 {
-  const auto reference = resolveNodePath(worldNode, path);
+  const auto reference = resolveNodeReference(worldNode, path, handles);
   if (reference.node == &worldNode)
   {
     // the world contains everything, so nothing could touch it
@@ -194,9 +196,10 @@ Json query(const MapRef& mapRef, const QueryOptions& options)
   auto& map = mapRef.map;
 
   // resolve the reference first so that an invalid path fails regardless of the query
-  const auto touching = options.touching | kdl::optional_transform([&](const auto& path) {
-                          return resolveTouchingReference(map.worldNode(), path);
-                        });
+  const auto touching =
+    options.touching | kdl::optional_transform([&](const auto& path) {
+      return resolveTouchingReference(map.worldNode(), path, mapRef.handles);
+    });
   const auto touchingBounds = touching | kdl::optional_and_then(matchBounds);
 
   auto matches = queryMatches(map, options.query);
@@ -233,7 +236,9 @@ Json query(const MapRef& mapRef, const QueryOptions& options)
     return result;
   }
 
-  setPage(result, matches, options.paging, matchToJson);
+  setPage(result, matches, options.paging, [&](const auto& match) {
+    return matchToJson(match, mapRef.handles);
+  });
   return result;
 }
 

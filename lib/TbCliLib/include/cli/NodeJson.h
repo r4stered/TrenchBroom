@@ -35,7 +35,12 @@ namespace tb::cli
 {
 
 class Json;
+class NodeHandleTable;
 struct Summary;
+
+// In a live session (given its node handles), the writers below put the handle of each
+// node next to its path, as handleKey names it: `handle` next to `path`, and
+// `entity_handle` next to a brush's `entity`. Without handles, they write paths only.
 
 /** `{brushes, entities, faces}` */
 Json countsToJson(const Summary& summary);
@@ -48,10 +53,10 @@ Json boundsToJson(const Summary& summary);
  * the persistent id or null, `hidden` and `locked` are the effective states, which a
  * node inherits from its parent unless it sets its own.
  */
-Json layerToJson(const mdl::LayerNode& layerNode);
+Json layerToJson(const mdl::LayerNode& layerNode, NodeHandleTable* handles);
 
 /** A group: `{path, id, name, bounds, counts, hidden, locked}`, as for layers. */
-Json groupToJson(const mdl::GroupNode& groupNode);
+Json groupToJson(const mdl::GroupNode& groupNode, NodeHandleTable* handles);
 
 /** Whether the brush is exactly six axis-aligned faces: a box along the axes. */
 bool isAxialBox(const mdl::Brush& brush);
@@ -62,32 +67,34 @@ bool isAxialBox(const mdl::Brush& brush);
  * texture names in alphabetical order, and `entity` is the path of the entity the brush
  * belongs to (`world` for worldspawn brushes).
  */
-Json brushSummaryToJson(const mdl::BrushNode& brushNode);
+Json brushSummaryToJson(const mdl::BrushNode& brushNode, NodeHandleTable* handles);
 
 /**
  * A brush in full: its summary, its `vertices`, and `faces` in file order, each as
  * faceToJson writes it.
  */
-Json brushToJson(const mdl::BrushNode& brushNode, bool raw);
+Json brushToJson(const mdl::BrushNode& brushNode, bool raw, NodeHandleTable* handles);
 
 /** A face summary: `{path, normal, texture}`. */
-Json faceSummaryToJson(const mdl::BrushNode& brushNode, size_t faceIndex);
+Json faceSummaryToJson(
+  const mdl::BrushNode& brushNode, size_t faceIndex, NodeHandleTable* handles);
 
 /**
  * A face in full: `{path, normal, texture, uv, vertices}`, where `uv` holds the Valve 220
  * UV parameters `{u_axis, v_axis, offset, scale, rotation}`. With `raw`, `points` adds
  * the three plane points as written in the file.
  */
-Json faceToJson(const mdl::BrushNode& brushNode, size_t faceIndex, bool raw);
+Json faceToJson(
+  const mdl::BrushNode& brushNode, size_t faceIndex, bool raw, NodeHandleTable* handles);
 
 /** A patch summary: `{path, aabb, texture}`. */
-Json patchSummaryToJson(const mdl::PatchNode& patchNode);
+Json patchSummaryToJson(const mdl::PatchNode& patchNode, NodeHandleTable* handles);
 
 /**
  * The summary of any node: the world and entities as boundedEntityToJson writes them,
  * layers and groups as layerToJson and groupToJson, brushes and patches as their
  * summaries.
  */
-Json nodeSummaryToJson(const mdl::Node& node);
+Json nodeSummaryToJson(const mdl::Node& node, NodeHandleTable* handles);
 
 } // namespace tb::cli

@@ -28,6 +28,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadMap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapContents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapRef.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/NodeHandles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodeJson.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/NodePath.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Ops.cpp

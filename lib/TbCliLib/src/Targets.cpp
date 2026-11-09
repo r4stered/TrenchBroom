@@ -21,6 +21,7 @@
 
 #include "cli/CliError.h"
 #include "cli/Json.h"
+#include "cli/NodeHandles.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
 #include "cli/Query.h"
@@ -317,9 +318,11 @@ std::vector<std::string> bindingReferences(const Json& target)
   return result;
 }
 
-TargetResolver::TargetResolver(mdl::Map& map, const bool allowLocked)
+TargetResolver::TargetResolver(
+  mdl::Map& map, const bool allowLocked, NodeHandleTable* handles)
   : m_map{map}
   , m_allowLocked{allowLocked}
+  , m_handles{handles}
   , m_inputPaths{nodePaths(map.worldNode())}
 {
 }
@@ -336,9 +339,10 @@ ResolvedTarget TargetResolver::resolve(const Json& target) const
   const auto addPathOrBinding = [&](const Json& element) {
     auto parsed = parsePathOrBinding(element);
     contract_assert(parsed.has_value());
-    auto node = parsed->isBinding
-                  ? std::nullopt
-                  : std::optional{resolveNodePath(m_map.worldNode(), parsed->text)};
+    auto node =
+      parsed->isBinding
+        ? std::nullopt
+        : std::optional{resolveNodeReference(m_map.worldNode(), parsed->text, m_handles)};
     result.push_back(TargetElement{std::move(parsed->text), node});
   };
 

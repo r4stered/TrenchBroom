@@ -20,6 +20,7 @@
 #pragma once
 
 #include "cli/LiveSession.h"
+#include "cli/NodeHandles.h"
 #include "cli/Run.h"
 #include "mdl/MapFixture.h"
 
@@ -41,6 +42,7 @@ private:
   mdl::MapFixture m_fixture;
   mdl::Map& m_map;
   LiveRev m_rev;
+  NodeHandleTable m_handles;
 
 public:
   /** Opens the map file at the given absolute path, as the editor would. */
@@ -50,6 +52,7 @@ public:
   mdl::Map& map() override;
   std::string epoch() const override;
   std::string rev() const override;
+  NodeHandleTable& handles() override;
 
   /** Runs tbcli against this editor's map. Paths are passed as UTF-8 strings. */
   RunResult run(const std::vector<std::string>& args, std::string_view in = {});

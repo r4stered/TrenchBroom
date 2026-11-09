@@ -26,6 +26,7 @@
 #include "cli/GeometryJson.h"
 #include "cli/Leak.h"
 #include "cli/MapRef.h"
+#include "cli/NodeHandles.h"
 #include "cli/NodePath.h"
 #include "cli/Query.h"
 #include "cli/Sha256.h"
@@ -589,10 +590,12 @@ bool isNodePath(const std::string_view target)
          || target.starts_with("group:");
 }
 
-Selection selectTarget(mdl::Map& map, const std::string& target)
+/** The nodes or faces that a `--target` value names; in a live session, a handle too. */
+Selection selectTarget(mdl::Map& map, const std::string& target, NodeHandleTable* handles)
 {
-  return isNodePath(target) ? selectionOf({resolveNodePath(map.worldNode(), target)})
-                            : selectionOf(queryMatches(map, target));
+  return isNodePath(target) || (handles && isNodeHandle(target))
+           ? selectionOf({resolveNodeReference(map.worldNode(), target, handles)})
+           : selectionOf(queryMatches(map, target));
 }
 
 } // namespace
@@ -714,7 +717,8 @@ void setLocation(Json& result, const VerifyIssue& issue)
 void setLeakDetails(
   Json& result,
   const LeakDetails& leak,
-  const std::unordered_map<const mdl::Node*, std::string>& paths)
+  const std::unordered_map<const mdl::Node*, std::string>& paths,
+  NodeHandleTable* handles)
 {
   if (leak.trail.empty())
   {
@@ -735,19 +739,20 @@ void setLeakDetails(
     result.set("trail", std::move(trail));
   }
 
-  auto brushes = Json::array();
+  auto brushes = NodePathList{handles};
   for (const auto* brush : leak.nearestBrushes)
   {
-    brushes.push(paths.at(brush));
+    brushes.push(paths.at(brush), *brush);
   }
-  result.set("nearest_brushes", std::move(brushes));
+  std::move(brushes).setOn(result, "nearest_brushes");
 }
 
 } // namespace
 
 Json issueToJson(
   const VerifyIssue& issue,
-  const std::unordered_map<const mdl::Node*, std::string>& paths)
+  const std::unordered_map<const mdl::Node*, std::string>& paths,
+  NodeHandleTable* handles)
 {
   auto result = Json::object();
   result.set("type", issue.type->id);
@@ -755,11 +760,18 @@ Json issueToJson(
   result.set("key", issue.key);
   result.set("message", issue.message);
 
-  if (issue.node)
+  if (issue.node && issue.faceIndex)
   {
-    const auto& path = paths.at(issue.node);
-    result.set(
-      "node", issue.faceIndex ? fmt::format("{}/face:{}", path, *issue.faceIndex) : path);
+    setFacePath(
+      result,
+      "node",
+      static_cast<const mdl::BrushNode&>(*issue.node),
+      *issue.faceIndex,
+      handles);
+  }
+  else if (issue.node)
+  {
+    setNodePath(result, "node", paths.at(issue.node), *issue.node, handles);
   }
   else
   {
@@ -781,7 +793,7 @@ Json issueToJson(
   }
   if (issue.leak)
   {
-    setLeakDetails(result, *issue.leak, paths);
+    setLeakDetails(result, *issue.leak, paths, handles);
   }
 
   result.set("fixes", fixIdsJson(*issue.type));
@@ -797,7 +809,7 @@ Json leakIssueToJson(
   auto issues = std::vector<VerifyIssue>{
     leakIssue(compileResult, worldNode, !mapRef.loadProblems.empty(), keys)};
   applyConfig(map, config, issues);
-  return issueToJson(issues.front(), nodePaths(worldNode));
+  return issueToJson(issues.front(), nodePaths(worldNode), mapRef.handles);
 }
 
 namespace
@@ -805,10 +817,14 @@ namespace
 
 /** The unsuppressed issues the list filters keep, in file order. */
 std::vector<const VerifyIssue*> filterIssues(
-  mdl::Map& map, const std::vector<VerifyIssue>& issues, const VerifyOptions& options)
+  const MapRef& mapRef,
+  const std::vector<VerifyIssue>& issues,
+  const VerifyOptions& options)
 {
   const auto target =
-    options.target ? std::optional{selectTarget(map, *options.target)} : std::nullopt;
+    options.target
+      ? std::optional{selectTarget(mapRef.map, *options.target, mapRef.handles)}
+      : std::nullopt;
 
   auto result = std::vector<const VerifyIssue*>{};
   for (const auto& issue : issues)
@@ -974,7 +990,7 @@ VerifyResult verify(
 {
   auto& map = mapRef.map;
   const auto report = collectIssues(mapRef, config, options.compile, source);
-  const auto listed = filterIssues(map, report.issues, options);
+  const auto listed = filterIssues(mapRef, report.issues, options);
 
   const auto threshold = options.failOn.value_or(Severity::Error);
   const auto failing = hasUnsuppressedIssue(
@@ -982,7 +998,7 @@ VerifyResult verify(
 
   const auto paths = nodePaths(map.worldNode());
   auto issues = page(listed, options.paging, [&](const VerifyIssue* issue) {
-    return issueToJson(*issue, paths);
+    return issueToJson(*issue, paths, mapRef.handles);
   });
 
   auto stages = Json::array();
