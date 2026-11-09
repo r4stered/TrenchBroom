@@ -152,4 +152,18 @@ Json applyLive(
   const ApplyOptions& options,
   const VerifyConfig& verifyConfig);
 
+/**
+ * Undoes the agent's own most recent batch in a live session, through the editor's undo
+ * history, so that the mapper can redo it. After that, the batch before it is the
+ * agent's most recent one, as long as nothing else changes the map in between.
+ * Returns `{"schema": "tbcli.undo/1", "session": "live", "rev", "undone"}`, with the
+ * live rev after the undo and the name of the undone step.
+ *
+ * @throw CliError `undo_refused` if the most recent change to the map is not the
+ * agent's own batch: the mapper edited, selected, undid or redid something since the
+ * agent's last request, or there is nothing to undo; `busy` if a transaction is open.
+ * The map is unchanged in either case.
+ */
+Json undoLive(LiveSession& session);
+
 } // namespace tb::cli

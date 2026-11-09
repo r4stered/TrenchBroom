@@ -22,6 +22,8 @@
 #include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
 
+#include "kd/contracts.h"
+
 #include <fmt/format.h>
 
 #include <random>
@@ -56,6 +58,37 @@ const std::string& LiveRev::epoch() const
 std::string LiveRev::str() const
 {
   return fmt::format("live-{}:{}", m_epoch, m_counter);
+}
+
+void AgentHistory::requestDone(
+  const std::string& revBefore,
+  const std::string& revAfter,
+  const std::optional<uint64_t> storedBatch)
+{
+  if (revBefore != m_rev)
+  {
+    // the map changed without the agent since its last request
+    m_batches.clear();
+  }
+  if (storedBatch)
+  {
+    m_batches.push_back(*storedBatch);
+  }
+  m_rev = revAfter;
+}
+
+std::optional<uint64_t> AgentHistory::mostRecentBatch(const std::string& rev) const
+{
+  return rev == m_rev && !m_batches.empty() ? std::optional{m_batches.back()}
+                                            : std::nullopt;
+}
+
+void AgentHistory::batchUndone(const std::string& revAfter)
+{
+  contract_pre(!m_batches.empty());
+
+  m_batches.pop_back();
+  m_rev = revAfter;
 }
 
 } // namespace tb::cli

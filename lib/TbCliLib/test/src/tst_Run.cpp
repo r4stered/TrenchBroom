@@ -1002,6 +1002,128 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("undo")
+  {
+    auto& map = editor.map();
+    const auto box = "[" + std::string{CreateBoxOp} + "]";
+    const auto checkRefused = [&]() {
+      const auto brushesBefore = liveBrushCount();
+      const auto* undoName = map.undoCommandName();
+      const auto undoNameBefore = undoName ? std::optional{*undoName} : std::nullopt;
+      const auto revBefore = editor.rev();
+
+      checkError(editor.run({"undo", fixture.map}), "undo_refused", 1);
+
+      CHECK(liveBrushCount() == brushesBefore);
+      undoName = map.undoCommandName();
+      CHECK((undoName ? std::optional{*undoName} : std::nullopt) == undoNameBefore);
+      CHECK(editor.rev() == revBefore);
+    };
+
+    SECTION("undoes the agent's most recent batch")
+    {
+      const auto brushesBefore = liveBrushCount();
+      const auto applied = liveJson({"apply", fixture.map, "-"}, box);
+
+      const auto json = liveJson({"undo", fixture.map});
+      CHECK(json["schema"] == Json{"tbcli.undo/1"});
+      CHECK(json["session"] == Json{"live"});
+      CHECK(json["undone"] == Json{"AI: create_box"});
+      CHECK(json["rev"] == Json{editor.rev()});
+      CHECK(liveRevCounter(json) > liveRevCounter(applied));
+
+      CHECK(liveBrushCount() == brushesBefore);
+      CHECK(!map.canUndoCommand());
+      // it went through the editor's history, so the mapper can redo it
+      REQUIRE(map.redoCommandName() != nullptr);
+      CHECK(*map.redoCommandName() == "AI: create_box");
+      CHECK(fixture.unchanged());
+    }
+
+    SECTION("undoes the agent's batches one after another")
+    {
+      const auto brushesBefore = liveBrushCount();
+      liveJson({"apply", fixture.map, "-"}, box);
+      liveJson({"apply", fixture.map, "-"}, box);
+
+      liveJson({"undo", fixture.map});
+      CHECK(liveBrushCount() == brushesBefore + 1);
+      liveJson({"undo", fixture.map});
+      CHECK(liveBrushCount() == brushesBefore);
+      checkRefused();
+    }
+
+    SECTION("a dry run or a failed batch keeps the agent's batch undoable")
+    {
+      const auto brushesBefore = liveBrushCount();
+      liveJson({"apply", fixture.map, "-"}, box);
+      liveJson({"apply", fixture.map, "-", "--dry-run"}, box);
+      checkError(
+        editor.run(
+          {"apply", fixture.map, "-"},
+          R"([{"op": "set_property", "target": "layer:0/brush:0", "key": "a",
+               "value": "b"}])"),
+        "wrong_node_kind",
+        1,
+        0);
+
+      liveJson({"undo", fixture.map});
+      CHECK(liveBrushCount() == brushesBefore);
+    }
+
+    SECTION("is refused when the mapper changed the map after the batch")
+    {
+      liveJson({"apply", fixture.map, "-"}, box);
+      mdl::removeNodes(map, {map.worldNode().defaultLayer()->children()[2]});
+      checkRefused();
+    }
+
+    SECTION("is refused when the mapper changed the selection after the batch")
+    {
+      liveJson({"apply", fixture.map, "-"}, box);
+      mdl::selectAllNodes(map);
+      checkRefused();
+    }
+
+    SECTION("is refused after the mapper undid the batch, and after a redo")
+    {
+      liveJson({"apply", fixture.map, "-"}, box);
+      liveJson({"apply", fixture.map, "-"}, box);
+
+      // the agent's earlier batch is on top now, but the mapper's undo is more recent
+      map.undoCommand();
+      checkRefused();
+
+      map.redoCommand();
+      checkRefused();
+    }
+
+    SECTION("is refused when there is nothing to undo")
+    {
+      checkRefused();
+    }
+
+    SECTION("an empty batch is not a batch to undo")
+    {
+      mdl::removeNodes(map, {map.worldNode().defaultLayer()->children()[2]});
+      liveJson({"apply", fixture.map, "-"}, "[]");
+      checkRefused();
+    }
+
+    SECTION("takes no options")
+    {
+      liveJson({"apply", fixture.map, "-"}, box);
+      checkError(editor.run({"undo", fixture.map, "--dry-run"}), "usage", 2);
+      checkError(editor.run({"undo", fixture.map, "extra"}), "usage", 2);
+    }
+  }
+
+  SECTION("live-only commands give no_session in file mode")
+  {
+    checkError(runCli({"undo", fixture.map}), "no_session", 1);
+    CHECK(fixture.unchanged());
+  }
+
   SECTION("game config and FGD overrides are refused")
   {
     checkError(
@@ -1031,6 +1153,7 @@ TEST_CASE("mutatingCommand")
 {
   CHECK(mutatingCommand({"apply", "x.map", "-"}) == "apply");
   CHECK(mutatingCommand({"--format", "text", "translate", "x.map"}) == "translate");
+  CHECK(mutatingCommand({"undo", "x.map"}) == "undo");
   CHECK(mutatingCommand({"describe", "x.map"}) == std::nullopt);
   CHECK(mutatingCommand({"apply", "x.map", "-", "--help"}) == std::nullopt);
   CHECK(mutatingCommand({"apply", "x.map", "--frobnicate"}) == std::nullopt);
@@ -1044,6 +1167,7 @@ TEST_CASE("liveMapArgument")
   CHECK(liveMapArgument({"apply", "--dry-run", "maps/../x.map", "-"}) == cwd / "x.map");
   CHECK(liveMapArgument({"set_property", "x.map", "--target", "world"}) == cwd / "x.map");
   CHECK(liveMapArgument({"verify", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"undo", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"ops"}) == std::nullopt);
   // compiles run in file mode until the editor can send the map's bytes
   CHECK(liveMapArgument({"rooms", "x.map"}) == std::nullopt);

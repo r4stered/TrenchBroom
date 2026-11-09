@@ -76,6 +76,10 @@ commands:
   apply <map> <batch-file | ->
                         run a JSON array of ops, read from a file or stdin,
                         all or nothing, and write the map once
+  undo <map>            live sessions only: undo your own most recent batch, which
+                        must be the most recent change to the map; refused with
+                        undo_refused if the mapper changed the map or the
+                        selection since your last request
   <op> <map> --<arg> <value>...
                         run one op; tbcli <op> --help lists its arguments.
                         An op's target is --target <path>, or
@@ -238,6 +242,15 @@ struct CommandOption
 bool isMutatingCommand(const std::string_view command)
 {
   return command == "apply" || findOpDef(command) != nullptr;
+}
+
+/**
+ * Whether the command changes the map: the mutating commands, which take the mutating
+ * options, and undo, which takes none.
+ */
+bool changesMap(const std::string_view command)
+{
+  return isMutatingCommand(command) || command == "undo";
 }
 
 constexpr auto CommandOptions = std::array<CommandOption, 33>{{
@@ -885,6 +898,28 @@ CommandMap openMapArgument(
   return CommandMap{loadConfig(mapPath, overrides), *session};
 }
 
+/**
+ * Opens the map of a command that only runs in a live session, or fails with
+ * `no_session`.
+ */
+CommandMap openLiveMapArgument(
+  const Arguments& arguments,
+  Logger& logger,
+  LiveSession* session,
+  const std::string_view command)
+{
+  if (!session)
+  {
+    throw CliError{
+      ErrorCode::NoSession,
+      fmt::format(
+        "{} needs TrenchBroom to have {} open, and works only in a live session",
+        command,
+        arguments.positionals[1])};
+  }
+  return openMapArgument(arguments, logger, session);
+}
+
 /** Fails a command that cannot run in a live session yet. */
 void refuseLive(const CommandMap& map, const std::string_view command)
 {
@@ -1066,6 +1101,12 @@ CommandResult runCommand(
     const auto ops = parseBatch(readBatch(positionals[2], in));
     return runOps(arguments, ops, logger, session);
   }
+  if (command == "undo")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto map = openLiveMapArgument(arguments, logger, session, command);
+    return undoLive(*map.session());
+  }
   if (command == "verify")
   {
     checkArguments(arguments, command, {"a map file"});
@@ -1140,7 +1181,7 @@ bool takesMap(const std::string_view command)
 {
   return command == "describe" || command == "query" || command == "show"
          || command == "fgd" || command == "verify" || command == "rooms"
-         || isMutatingCommand(command);
+         || changesMap(command);
 }
 
 /**
@@ -1255,13 +1296,12 @@ RunResult run(
 std::optional<std::string> mutatingCommand(const std::vector<std::string>& args)
 {
   const auto arguments = tryParseArguments(args);
-  if (
-    !arguments || arguments->help || arguments->positionals.empty()
-    || !isMutatingCommand(arguments->positionals[0]))
+  if (!arguments || arguments->help || arguments->positionals.empty())
   {
     return std::nullopt;
   }
-  return arguments->positionals[0];
+  const auto& command = arguments->positionals[0];
+  return changesMap(command) ? std::optional{command} : std::nullopt;
 }
 
 std::optional<std::filesystem::path> liveMapArgument(const std::vector<std::string>& args)

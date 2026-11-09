@@ -21,6 +21,7 @@
 
 #include "base/Macros.h"
 
+#include <cstdint>
 #include <string>
 
 namespace tb::mdl
@@ -42,6 +43,9 @@ protected:
   CommandState m_state;
   std::string m_name;
 
+private:
+  uint64_t m_serialNumber;
+
 public:
   explicit Command(std::string name);
   virtual ~Command();
@@ -49,6 +53,12 @@ public:
 public:
   CommandState state() const;
   const std::string& name() const;
+
+  /**
+   * A number that no other command of this process has, not even one that is created
+   * after this one is destroyed.
+   */
+  uint64_t serialNumber() const;
 
   virtual bool performDo(Map& map);
 

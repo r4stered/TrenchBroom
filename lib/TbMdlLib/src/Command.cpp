@@ -19,14 +19,26 @@
 
 #include "mdl/Command.h"
 
+#include <atomic>
 #include <string>
 
 namespace tb::mdl
 {
+namespace
+{
+
+uint64_t nextSerialNumber()
+{
+  static auto serialNumber = std::atomic<uint64_t>{0};
+  return serialNumber.fetch_add(1, std::memory_order_relaxed);
+}
+
+} // namespace
 
 Command::Command(std::string name)
   : m_state{CommandState::Default}
   , m_name{std::move(name)}
+  , m_serialNumber{nextSerialNumber()}
 {
 }
 
@@ -40,6 +52,11 @@ Command::CommandState Command::state() const
 const std::string& Command::name() const
 {
   return m_name;
+}
+
+uint64_t Command::serialNumber() const
+{
+  return m_serialNumber;
 }
 
 bool Command::performDo(Map& map)

@@ -232,6 +232,16 @@ public:
   }
 };
 
+void throwIfBusy(const mdl::Map& map)
+{
+  if (map.commandProcessor().isTransactionActive())
+  {
+    // the editor host waits for the mapper's transaction before it runs a request
+    throw CliError{
+      ErrorCode::Busy, "the mapper is in the middle of an action; retry shortly"};
+  }
+}
+
 } // namespace
 
 BatchResult runBatch(
@@ -421,12 +431,11 @@ Json applyLive(
   }
 
   auto& map = session.map();
-  if (map.commandProcessor().isTransactionActive())
-  {
-    // the editor host waits for the mapper's transaction before it runs a request
-    throw CliError{
-      ErrorCode::Busy, "the mapper is in the middle of an action; retry shortly"};
-  }
+  throwIfBusy(map);
+
+  auto& history = session.agentHistory();
+  const auto revBefore = session.rev();
+  const auto stepBefore = map.commandProcessor().undoCommandSerialNumber();
 
   const auto selection = SavedSelection{map};
   // collated commands delete the nodes that the earlier one replaced, which ops of the
@@ -434,6 +443,8 @@ Json applyLive(
   const auto collationOff = CollationOff{map};
   map.startTransaction(liveUndoName(ops), mdl::TransactionScope::LongRunning);
   map.markTransactionAsCollationBarrier();
+  // whether the history knows how this request ended
+  auto recorded = false;
 
   try
   {
@@ -444,6 +455,7 @@ Json applyLive(
     selection.restore(map);
 
     auto rev = std::string{};
+    auto storedBatch = std::optional<uint64_t>{};
     if (options.output)
     {
       // as in file mode, with the rev of the (would-be) output file
@@ -472,8 +484,13 @@ Json applyLive(
       {
         throw CliError{ErrorCode::OpFailed, "the editor could not commit the batch"};
       }
+      // an empty batch stores no undo step
+      const auto stepAfter = map.commandProcessor().undoCommandSerialNumber();
+      storedBatch = stepAfter != stepBefore ? stepAfter : std::nullopt;
       rev = session.rev();
     }
+    history.requestDone(revBefore, session.rev(), storedBatch);
+    recorded = true;
 
     auto result = Json::object();
     result.set("schema", "tbcli.apply/1");
@@ -491,8 +508,53 @@ Json applyLive(
     {
       map.cancelTransaction();
     }
+    if (!recorded)
+    {
+      history.requestDone(revBefore, session.rev(), std::nullopt);
+    }
     throw;
   }
+}
+
+Json undoLive(LiveSession& session)
+{
+  auto& map = session.map();
+  throwIfBusy(map);
+
+  auto& history = session.agentHistory();
+  const auto batch = history.mostRecentBatch(session.rev());
+  const auto step = map.commandProcessor().undoCommandSerialNumber();
+  if (!step)
+  {
+    throw CliError{ErrorCode::UndoRefused, "there is nothing to undo"};
+  }
+  if (step != batch)
+  {
+    throw CliError{
+      ErrorCode::UndoRefused,
+      fmt::format(
+        "the most recent undo step, '{}', is not your own most recent batch: the map or "
+        "the selection changed without you since your last request. tbcli undo only "
+        "undoes your own most recent batch; edit the map back with apply instead, or "
+        "ask the mapper to undo",
+        *map.undoCommandName())};
+  }
+
+  const auto name = *map.undoCommandName();
+  map.undoCommand();
+  if (map.commandProcessor().undoCommandSerialNumber() == step)
+  {
+    throw CliError{
+      ErrorCode::OpFailed, fmt::format("the editor could not undo '{}'", name)};
+  }
+  history.batchUndone(session.rev());
+
+  auto result = Json::object();
+  result.set("schema", "tbcli.undo/1");
+  result.set("session", "live");
+  result.set("rev", session.rev());
+  result.set("undone", name);
+  return result;
 }
 
 } // namespace tb::cli

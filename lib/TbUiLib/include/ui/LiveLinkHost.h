@@ -87,6 +87,7 @@ private:
   std::string m_token;
   std::unique_ptr<cli::LiveRev> m_rev;
   std::unique_ptr<cli::NodeHandleTable> m_handles;
+  cli::AgentHistory m_agentHistory;
   std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
   bool m_attached = false;
@@ -114,6 +115,7 @@ public:
   std::string epoch() const override;
   std::string rev() const override;
   cli::NodeHandleTable& handles() override;
+  cli::AgentHistory& agentHistory() override;
 
 private:
   void documentWasLoaded();

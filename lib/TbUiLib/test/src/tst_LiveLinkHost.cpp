@@ -273,6 +273,31 @@ TEST_CASE("LiveLinkHost")
     CHECK(light->logicalBounds().center().z() == 64);
   }
 
+  SECTION("undo undoes the agent's batch in the editor's history, or is refused")
+  {
+    run({"apply", mapArg, "-"}, createBox);
+    CHECK(map.worldNode().defaultLayer()->childCount() == 2);
+    logger.messages.clear();
+
+    const auto undone = parse(run({"undo", mapArg}));
+    CHECK(undone["undone"] == cli::Json{"AI: create_box"});
+    CHECK(undone["rev"] == cli::Json{host->rev()});
+    CHECK(map.worldNode().defaultLayer()->childCount() == 1);
+    REQUIRE(map.redoCommandName() != nullptr);
+    CHECK(*map.redoCommandName() == "AI: create_box");
+    CHECK(logger.messages.size() == 1);
+    CHECK_THAT(logger.messages.back(), StartsWith("AI: undo done (live-"));
+
+    // the mapper's redo is on top now
+    map.redoCommand();
+    const auto refused = run({"undo", mapArg});
+    CHECK(refused.exitCode == 1);
+    CHECK(parse(refused)["error"]["code"] == cli::Json{"undo_refused"});
+    CHECK(map.worldNode().defaultLayer()->childCount() == 2);
+    CHECK(logger.messages.size() == 2);
+    CHECK_THAT(logger.messages.back(), StartsWith("AI: undo failed: undo_refused"));
+  }
+
   SECTION("request and reply payloads are binary-safe")
   {
     // a property value in Latin-1, which isn't valid UTF-8

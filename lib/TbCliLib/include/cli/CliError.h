@@ -112,7 +112,10 @@ enum class ErrorCode
    * on; the error lists every candidate
    */
   AmbiguousRoomName,
-  /** `--live` was given, but no running editor has the map open */
+  /**
+   * `--live` was given, or a command that only works in a live session, but no running
+   * editor has the map open
+   */
   NoSession,
   /** the live link refused the session token, such as one from a stale rendezvous */
   BadToken,
@@ -128,6 +131,11 @@ enum class ErrorCode
   Gone,
   /** a node handle is from an earlier live session, before the map was reopened */
   StaleSession,
+  /**
+   * `undo` would undo something other than the agent's own most recent batch, such as
+   * the mapper's edit
+   */
+  UndoRefused,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

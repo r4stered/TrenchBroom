@@ -106,6 +106,8 @@ std::string_view toString(const ErrorCode code)
     return "gone";
   case ErrorCode::StaleSession:
     return "stale_session";
+  case ErrorCode::UndoRefused:
+    return "undo_refused";
   case ErrorCode::InternalError:
     return "internal_error";
   }

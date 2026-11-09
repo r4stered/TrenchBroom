@@ -22,7 +22,9 @@
 #include "base/NotifierConnection.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace tb::mdl
 {
@@ -32,6 +34,7 @@ class Map;
 namespace tb::cli
 {
 
+class AgentHistory;
 class NodeHandleTable;
 
 /**
@@ -62,6 +65,52 @@ public:
 
   /** The node handles of this session, which share its epoch. */
   virtual NodeHandleTable& handles() = 0;
+
+  /** Which undo steps of this session are the agent's own batches. */
+  virtual AgentHistory& agentHistory() = 0;
+};
+
+/**
+ * Which undo steps of a live session are the agent's own batches, so that the agent can
+ * undo its own most recent batch and nothing else.
+ *
+ * The agent's batches count only while nothing else has changed the map since the
+ * agent's last request: once the rev has moved on without the agent, because the mapper
+ * edited, undid or redid something, none of them is the most recent change any more.
+ * The undo steps are told apart by their serial numbers, which also catches steps that
+ * don't change the rev, such as the mapper's selection changes.
+ */
+class AgentHistory
+{
+private:
+  /** The agent's batches on top of the undo stack, most recent last. */
+  std::vector<uint64_t> m_batches;
+  /** The rev at which m_batches are on top of the undo stack. */
+  std::string m_rev;
+
+public:
+  /**
+   * Records a request of the agent that ran from `revBefore` to `revAfter` and stored
+   * the undo step with the given serial number, or none, such as a dry run or a failed
+   * batch, which leave the undo stack as it was.
+   */
+  void requestDone(
+    const std::string& revBefore,
+    const std::string& revAfter,
+    std::optional<uint64_t> storedBatch);
+
+  /**
+   * The serial number of the agent's batch that is the most recent change to the map at
+   * the given rev, if there is one: the agent's most recent batch, if nothing else
+   * changed the map since the agent's last request.
+   */
+  std::optional<uint64_t> mostRecentBatch(const std::string& rev) const;
+
+  /**
+   * Records that the agent undid its most recent batch, which took the map to the given
+   * rev.
+   */
+  void batchUndone(const std::string& revAfter);
 };
 
 /**

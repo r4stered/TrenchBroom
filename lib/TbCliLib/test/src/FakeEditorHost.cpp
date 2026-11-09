@@ -83,6 +83,11 @@ NodeHandleTable& FakeEditorHost::handles()
   return m_handles;
 }
 
+AgentHistory& FakeEditorHost::agentHistory()
+{
+  return m_agentHistory;
+}
+
 RunResult FakeEditorHost::run(
   const std::vector<std::string>& args, const std::string_view in)
 {

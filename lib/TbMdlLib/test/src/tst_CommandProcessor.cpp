@@ -31,6 +31,7 @@
 #include "kd/vector_utils.h"
 
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <thread>
 #include <variant>
@@ -330,6 +331,48 @@ TEST_CASE("CommandProcessor")
         CN{CN::Type::Undone, commandPtr},
         TN{TN::Type::Undone, commandName, K(isObservable), !K(isModification)},
       });
+  }
+
+  SECTION("undoCommandSerialNumber")
+  {
+    commandProcessor.setIsCollationEnabled(false);
+    CHECK(commandProcessor.undoCommandSerialNumber() == std::nullopt);
+
+    auto command1 =
+      std::make_unique<TestCommand>("command 1", !K(updateModificationCount));
+    auto command2 =
+      std::make_unique<TestCommand>("command 2", !K(updateModificationCount));
+    command1->expectDo(true);
+    command2->expectDo(true);
+    command2->expectUndo(true);
+    command2->expectDo(true);
+
+    commandProcessor.executeAndStore(std::move(command1));
+    const auto serialNumber1 = commandProcessor.undoCommandSerialNumber();
+    REQUIRE(serialNumber1 != std::nullopt);
+
+    commandProcessor.executeAndStore(std::move(command2));
+    const auto serialNumber2 = commandProcessor.undoCommandSerialNumber();
+    REQUIRE(serialNumber2 != std::nullopt);
+    CHECK(serialNumber2 != serialNumber1);
+
+    // the same step keeps its number when it is undone and redone
+    CHECK(commandProcessor.undo());
+    CHECK(commandProcessor.undoCommandSerialNumber() == serialNumber1);
+    CHECK(commandProcessor.redo());
+    CHECK(commandProcessor.undoCommandSerialNumber() == serialNumber2);
+
+    // a step stored later never takes the number of an earlier one
+    commandProcessor.startTransaction("transaction", TransactionScope::Oneshot);
+    CHECK(commandProcessor.undoCommandSerialNumber() == std::nullopt);
+    auto command3 =
+      std::make_unique<TestCommand>("command 3", !K(updateModificationCount));
+    command3->expectDo(true);
+    commandProcessor.executeAndStore(std::move(command3));
+    commandProcessor.commitTransaction();
+    const auto serialNumber3 = commandProcessor.undoCommandSerialNumber();
+    CHECK(serialNumber3 != serialNumber1);
+    CHECK(serialNumber3 != serialNumber2);
   }
 
   SECTION("doSuccessfulCommandAndFailAtUndo")

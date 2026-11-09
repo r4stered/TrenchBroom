@@ -211,6 +211,11 @@ const std::string* CommandProcessor::undoCommandName() const
   return canUndo() ? &m_undoStack.back()->name() : nullptr;
 }
 
+std::optional<uint64_t> CommandProcessor::undoCommandSerialNumber() const
+{
+  return canUndo() ? std::optional{m_undoStack.back()->serialNumber()} : std::nullopt;
+}
+
 const std::string* CommandProcessor::redoCommandName() const
 {
   return canRedo() ? &m_redoStack.back()->name() : nullptr;

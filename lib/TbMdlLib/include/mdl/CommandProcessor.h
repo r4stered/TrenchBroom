@@ -22,7 +22,9 @@
 #include "base/Notifier.h"
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -172,6 +174,14 @@ public:
    * no command can be undone.
    */
   const std::string* undoCommandName() const;
+
+  /**
+   * Returns the serial number of the command that will be undone when calling `undo`, or
+   * nothing if no command can be undone. A command keeps its number while it is undone
+   * and redone, and when later commands are collated into it, so this tells whether the
+   * step on top of the undo stack is a step that was seen there before.
+   */
+  std::optional<uint64_t> undoCommandSerialNumber() const;
 
   /**
    * Returns the name of the command that will be executed when callind `redo`, or null if

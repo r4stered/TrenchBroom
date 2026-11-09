@@ -43,6 +43,7 @@ private:
   mdl::Map& m_map;
   LiveRev m_rev;
   NodeHandleTable m_handles;
+  AgentHistory m_agentHistory;
 
 public:
   /** Opens the map file at the given absolute path, as the editor would. */
@@ -53,6 +54,7 @@ public:
   std::string epoch() const override;
   std::string rev() const override;
   NodeHandleTable& handles() override;
+  AgentHistory& agentHistory() override;
 
   /** Runs tbcli against this editor's map. Paths are passed as UTF-8 strings. */
   RunResult run(const std::vector<std::string>& args, std::string_view in = {});
