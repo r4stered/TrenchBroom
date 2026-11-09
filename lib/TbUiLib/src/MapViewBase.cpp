@@ -80,6 +80,7 @@
 #include "ui/EnableDisableTagCallback.h"
 #include "ui/FlashSelectionAnimation.h"
 #include "ui/MapDocument.h"
+#include "ui/MapRendering.h"
 #include "ui/MapViewActivationTracker.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindow.h"
@@ -996,35 +997,12 @@ void MapViewBase::renderContents(gl::Gl& gl)
   const auto fontSize = static_cast<size_t>(pref(Preferences::RendererFontSize));
   const auto fontDescriptor = gl::FontDescriptor{fontPath, fontSize};
 
-  const auto& map = m_document.map();
-  const auto& grid = map.grid();
+  const auto pixelRatio = static_cast<float>(devicePixelRatioF());
 
   auto renderContext =
     render::RenderContext{gl, renderMode(), camera(), fontManager(), shaderManager()};
-  renderContext.setFilterMode(
-    pref(Preferences::TextureMinFilter), pref(Preferences::TextureMagFilter));
-  renderContext.setShowMaterials(
-    pref(Preferences::FaceRenderMode) == Preferences::FaceRenderModeTextured);
-  renderContext.setShowFaces(
-    pref(Preferences::FaceRenderMode) != Preferences::FaceRenderModeSkip);
-  renderContext.setShowEdges(pref(Preferences::ShowEdges));
-  renderContext.setShadeFaces(pref(Preferences::ShadeFaces));
-  renderContext.setShowPointEntities(pref(Preferences::ShowPointEntities));
-  renderContext.setShowPointEntityModels(pref(Preferences::ShowPointEntityModels));
-  renderContext.setShowEntityClassnames(pref(Preferences::ShowEntityClassnames));
-  renderContext.setShowGroupBounds(pref(Preferences::ShowGroupBounds));
-  renderContext.setShowBrushEntityBounds(pref(Preferences::ShowBrushEntityBounds));
-  renderContext.setShowPointEntityBounds(pref(Preferences::ShowPointEntityBounds));
-  renderContext.setShowFog(pref(Preferences::ShowFog));
-  renderContext.setShowGrid(grid.visible());
-  renderContext.setGridSize(grid.actualSize());
-  renderContext.setDpiScale(static_cast<float>(window()->devicePixelRatioF()));
-  renderContext.setSoftMapBounds(
-    pref(Preferences::ShowSoftMapBounds)
-      ? vm::bbox3f{softMapBounds(map).bounds.value_or(vm::bbox3d{})}
-      : vm::bbox3f{});
-
-  setupGL(renderContext);
+  setupMapRenderContext(renderContext, m_document.map(), pixelRatio);
+  setupMapRenderGL(gl, camera(), pixelRatio);
   setRenderOptions(renderContext);
 
   auto renderBatch = render::RenderBatch{vboManager()};
@@ -1046,31 +1024,6 @@ void MapViewBase::renderContents(gl::Gl& gl)
 void MapViewBase::preRender() {}
 
 void MapViewBase::renderGrid(render::RenderContext&, render::RenderBatch&) {}
-
-void MapViewBase::setupGL(render::RenderContext& context)
-{
-  auto& gl = context.gl();
-
-  const auto& viewport = context.camera().viewport();
-  const auto r = devicePixelRatioF();
-  const auto x = static_cast<int>(viewport.x * r);
-  const auto y = static_cast<int>(viewport.y * r);
-  const auto width = static_cast<int>(viewport.width * r);
-  const auto height = static_cast<int>(viewport.height * r);
-  gl.viewport(x, y, width, height);
-
-  if (pref(Preferences::EnableMSAA))
-  {
-    gl.enable(GL_MULTISAMPLE);
-  }
-  else
-  {
-    gl.disable(GL_MULTISAMPLE);
-  }
-  gl.enable(GL_BLEND);
-  gl.blendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-  gl.shadeModel(GL_SMOOTH);
-}
 
 void MapViewBase::renderCoordinateSystem(
   render::RenderContext& renderContext, render::RenderBatch& renderBatch)

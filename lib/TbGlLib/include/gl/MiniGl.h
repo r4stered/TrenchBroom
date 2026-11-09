@@ -191,6 +191,9 @@ using GLsizeiptr = std::intptr_t;
 #ifndef GL_MODELVIEW
 #define GL_MODELVIEW 0x1700
 #endif
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D
+#endif
 #ifndef GL_NEAREST
 #define GL_NEAREST 0x2600
 #endif
@@ -256,6 +259,9 @@ using GLsizeiptr = std::intptr_t;
 #endif
 #ifndef GL_SHORT
 #define GL_SHORT 0x1402
+#endif
+#ifndef GL_SMOOTH
+#define GL_SMOOTH 0x1D01
 #endif
 #ifndef GL_SRC_ALPHA
 #define GL_SRC_ALPHA 0x0302

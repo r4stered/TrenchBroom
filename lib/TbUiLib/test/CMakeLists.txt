@@ -20,6 +20,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LaunchGameEngine.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LaunchGameEngineDialog.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LayerListBox.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapRendering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapViewBar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MultiCompletionLineEdit.cpp
@@ -58,6 +59,7 @@ target_link_libraries(TbUiLibTest PRIVATE
   TbElLib
   TbElTestUtilsLib
   TbFsTestUtilsLib
+  TbGlTestUtilsLib
   TbMdlTestUtilsLib
   TbPreferencesLib
   TbRenderLib

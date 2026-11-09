@@ -337,7 +337,6 @@ private: // implement RenderView interface
     render::RenderContext& renderContext,
     render::RenderBatch& renderBatch) = 0;
 
-  void setupGL(render::RenderContext& renderContext);
   void renderCoordinateSystem(
     render::RenderContext& renderContext, render::RenderBatch& renderBatch);
   virtual void renderSoftWorldBounds(
