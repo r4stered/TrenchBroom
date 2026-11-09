@@ -23,6 +23,7 @@ target_sources(TbUiLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LiveLinkHost.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapRendering.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapViewBar.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapViewCapture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapWindow.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MultiCompletionLineEdit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_QPathUtils.cpp

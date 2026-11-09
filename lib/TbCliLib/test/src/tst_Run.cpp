@@ -21,7 +21,9 @@
 #include "FakeEditorHost.h"
 #include "cli/CliError.h"
 #include "cli/Compile.h"
+#include "cli/FileUtils.h"
 #include "cli/Guide.h"
+#include "cli/View.h"
 #include "fs/TestUtils.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
@@ -1233,6 +1235,174 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("view")
+  {
+    auto& map = editor.map();
+    auto* layer = map.worldNode().defaultLayer();
+    auto* brush0 = dynamic_cast<mdl::BrushNode*>(layer->children()[0]);
+    auto* brush1 = dynamic_cast<mdl::BrushNode*>(layer->children()[1]);
+    auto* light = layer->children()[4];
+    REQUIRE(brush0 != nullptr);
+    REQUIRE(brush1 != nullptr);
+
+    // a 2D view from above at zoom 1 on a screen with two physical pixels per logical
+    // pixel: the origin is at the center of the 800x600 logical viewport
+    const auto topDown = CameraPose{
+      .projection = CameraPose::Projection::Orthographic,
+      .position = {0, 0, 100},
+      .direction = {0, 0, -1},
+      .up = {0, 1, 0},
+      .viewport = {800, 600},
+    };
+    editor.setMapperView(
+      ViewCapture{
+        .png = "PNG of the mapper's view",
+        .image = {1600, 1200},
+        .camera = topDown,
+        .pixelRatio = 2.0f,
+      });
+
+    SECTION("captures the mapper's view and reports what it shows")
+    {
+      mdl::selectNodes(map, {brush0});
+      const auto revBefore = editor.rev();
+
+      const auto json = liveJson({"view", fixture.map});
+      CHECK(json["schema"] == Json{"tbcli.view/1"});
+      CHECK(json["session"] == Json{"live"});
+      CHECK(json["rev"] == Json{revBefore});
+      // looking is not a change
+      CHECK(editor.rev() == revBefore);
+
+      const auto imagePath = std::filesystem::path{json["image"]["path"].asString()};
+      CHECK(readFile(imagePath) == "PNG of the mapper's view");
+      CHECK(json["image"]["width"] == Json{1600});
+      CHECK(json["image"]["height"] == Json{1200});
+      // nothing is written next to the map
+      CHECK(imagePath.parent_path() != fixture.env.path(""));
+      CHECK(json.find("out") == nullptr);
+
+      CHECK(json["view"] == Json{"xy"});
+      CHECK(json["camera"] == toJson(topDown));
+      CHECK(json["pixel_ratio"] == Json{2});
+
+      // brush 0 spans -64..64 on x and y, so 128 logical pixels around the center,
+      // twice that in the image
+      const auto& nodes = json["selection"]["nodes"];
+      CHECK(nodes["total"] == Json{1});
+      REQUIRE(nodes["items"].size() == 1);
+      const auto& selected = nodes["items"][0];
+      CHECK(selected["path"] == Json{"layer:0/brush:0"});
+      CHECK(selected["handle"] == Json{editor.handles().handle(*brush0)});
+      CHECK(selected["box"] == Json{Json::Array{672, 472, 928, 728}});
+      CHECK(json["selection"]["faces"]["total"] == Json{0});
+
+      CHECK(json["hovered"] == Json{nullptr});
+    }
+
+    SECTION("reports the selected faces")
+    {
+      mdl::selectBrushFaces(map, {mdl::BrushFaceHandle{*brush1, 3}});
+
+      const auto json = liveJson({"view", fixture.map});
+      CHECK(json["selection"]["nodes"]["total"] == Json{0});
+      const auto& faces = json["selection"]["faces"];
+      REQUIRE(faces["items"].size() == 1);
+      CHECK(faces["items"][0]["path"] == Json{"layer:0/brush:1/face:3"});
+      CHECK(faces["items"][0]["handle"] == Json{editor.handles().faceHandle(*brush1, 3)});
+      CHECK(faces["items"][0]["box"].isArray());
+    }
+
+    SECTION("reports the node and face under the mouse")
+    {
+      auto capture = editor.captureMapperView();
+      capture.hovered = HoveredPick{brush1, 3, {0, 0, 128}};
+      editor.setMapperView(capture);
+
+      const auto json = liveJson({"view", fixture.map});
+      const auto& hovered = json["hovered"];
+      CHECK(hovered["path"] == Json{"layer:0/brush:1"});
+      CHECK(hovered["handle"] == Json{editor.handles().handle(*brush1)});
+      CHECK(hovered["face"] == Json{"layer:0/brush:1/face:3"});
+      CHECK(hovered["face_handle"] == Json{editor.handles().faceHandle(*brush1, 3)});
+      CHECK(hovered["point"] == Json{Json::Array{0, 0, 128}});
+      // brush 1 spans -64..-48 on x and -64..64 on y
+      CHECK(hovered["box"] == Json{Json::Array{672, 472, 704, 728}});
+
+      capture.hovered = HoveredPick{light, std::nullopt, {100, 0, 64}};
+      editor.setMapperView(capture);
+      const auto lightJson = liveJson({"view", fixture.map});
+      const auto& hoveredLight = lightJson["hovered"];
+      CHECK(hoveredLight["path"] == Json{"layer:0/entity:2"});
+      CHECK(hoveredLight.find("face") == nullptr);
+    }
+
+    SECTION("a node outside the image has no box")
+    {
+      mdl::selectNodes(map, {light});
+      auto capture = editor.captureMapperView();
+      capture.camera.position = {5000, 0, 100};
+      editor.setMapperView(capture);
+
+      const auto json = liveJson({"view", fixture.map});
+      CHECK(json["selection"]["nodes"]["items"][0]["box"] == Json{nullptr});
+    }
+
+    SECTION("--out copies the image")
+    {
+      const auto out = fixture.env.path("look.png");
+      const auto json = liveJson({"view", fixture.map, "--out", arg(out)});
+      CHECK(json["out"] == Json{arg(out)});
+      CHECK(readFile(out) == "PNG of the mapper's view");
+      CHECK(
+        std::filesystem::path{json["image"]["path"].asString()}.parent_path()
+        != out.parent_path());
+
+      checkError(
+        editor.run(
+          {"view", fixture.map, "--out", arg(fixture.env.path("missing/look.png"))}),
+        "write_failed",
+        1);
+      checkError(
+        editor.run({"view", fixture.map, "--out", fixture.map}), "invalid_argument", 2);
+      CHECK(fixture.unchanged());
+    }
+
+    SECTION("keeps only the latest images")
+    {
+      auto paths = std::vector<std::filesystem::path>{};
+      for (size_t i = 0; i < KeptViewImages + 5; ++i)
+      {
+        paths.emplace_back(liveJson({"view", fixture.map})["image"]["path"].asString());
+      }
+
+      const auto dir = paths.back().parent_path();
+      auto count = size_t{0};
+      for ([[maybe_unused]] const auto& entry : std::filesystem::directory_iterator{dir})
+      {
+        ++count;
+      }
+      CHECK(count == KeptViewImages);
+      CHECK(std::filesystem::exists(paths.back()));
+      CHECK(std::filesystem::exists(paths[5]));
+      CHECK(!std::filesystem::exists(paths[4]));
+      CHECK(!std::filesystem::exists(paths.front()));
+    }
+
+    SECTION("gives view_failed if the editor cannot capture its view")
+    {
+      editor.setMapperView(std::nullopt);
+      checkError(editor.run({"view", fixture.map}), "view_failed", 1);
+    }
+
+    SECTION("takes no other options")
+    {
+      checkError(editor.run({"view", fixture.map, "--dry-run"}), "usage", 2);
+      checkError(editor.run({"view", fixture.map, "extra"}), "usage", 2);
+      checkError(editor.run({"describe", fixture.map, "--out", "x.png"}), "usage", 2);
+    }
+  }
+
   SECTION("changes")
   {
     auto& map = editor.map();
@@ -1629,6 +1799,7 @@ TEST_CASE("run with a live session")
   {
     checkError(runCli({"undo", fixture.map}), "no_session", 1);
     checkError(runCli({"save", fixture.map}), "no_session", 1);
+    checkError(runCli({"view", fixture.map}), "no_session", 1);
     checkError(runCli({"changes", fixture.map, "--since", "live-0:0"}), "no_session", 1);
     checkError(runCli({std::string{LiveRevCommand}, fixture.map}), "no_session", 1);
     CHECK(fixture.unchanged());
@@ -1795,6 +1966,7 @@ TEST_CASE("liveMapArgument")
   CHECK(liveMapArgument({"verify", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"undo", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"save", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"view", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"changes", "x.map", "--since", "live-ab12:3"}) == cwd / "x.map");
   CHECK(liveMapArgument({"ops"}) == std::nullopt);
   CHECK(liveMapArgument({"rooms", "x.map"}) == cwd / "x.map");
@@ -1885,6 +2057,10 @@ TEST_CASE("forwardableInvocation")
       forwardableInvocation({"save", "x.map", "--output=out.map"}, "").args
       == std::vector<std::string>{
         "save", absolute("x.map"), "--output=" + absolute("out.map")});
+    CHECK(
+      forwardableInvocation({"view", "x.map", "--out", "look.png"}, "").args
+      == std::vector<std::string>{
+        "view", absolute("x.map"), "--out", absolute("look.png")});
   }
 
   SECTION("compilers are made absolute unless they are looked up in PATH")

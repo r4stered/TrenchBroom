@@ -110,6 +110,8 @@ std::string_view toString(const ErrorCode code)
     return "undo_refused";
   case ErrorCode::TooOld:
     return "too_old";
+  case ErrorCode::ViewFailed:
+    return "view_failed";
   case ErrorCode::InternalError:
     return "internal_error";
   }

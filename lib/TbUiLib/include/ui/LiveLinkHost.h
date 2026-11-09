@@ -28,6 +28,7 @@
 #include <chrono>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -66,6 +67,10 @@ class MapDocument;
  * they arrive, on the main thread. A request waits while a modal dialog is open, a mouse
  * button is held or a transaction is open, and fails with `busy` if that lasts longer
  * than the busy timeout.
+ *
+ * `tbcli view` captures the map view that the mapper last focused, which the map window
+ * provides. Its images go into a directory next to the rendezvous file that is deleted
+ * when the session ends.
  */
 class LiveLinkHost : public QObject, public cli::LiveSession
 {
@@ -73,6 +78,9 @@ class LiveLinkHost : public QObject, public cli::LiveSession
 public:
   static constexpr auto DefaultBusyTimeout = std::chrono::milliseconds{60'000};
   static constexpr auto BusyRetryInterval = std::chrono::milliseconds{100};
+
+  /** Captures the map view that the mapper last focused. */
+  using ViewCapturer = std::function<cli::ViewCapture()>;
 
 private:
   struct Request;
@@ -88,6 +96,8 @@ private:
   std::unique_ptr<cli::LiveRev> m_rev;
   std::unique_ptr<cli::NodeHandleTable> m_handles;
   cli::AgentHistory m_agentHistory;
+  std::unique_ptr<cli::ViewImages> m_viewImages;
+  ViewCapturer m_viewCapturer;
   std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
   bool m_attached = false;
@@ -105,6 +115,9 @@ public:
   /** How long a request may wait for the mapper before it fails with `busy`. */
   void setBusyTimeout(std::chrono::milliseconds busyTimeout);
 
+  /** Sets how to capture the mapper's view; without one, `view` fails. */
+  void setViewCapturer(ViewCapturer viewCapturer);
+
   /** The rendezvous file of the current session, if there is one. */
   const std::optional<std::filesystem::path>& rendezvousFile() const;
 
@@ -117,6 +130,8 @@ public:
   cli::NodeHandleTable& handles() override;
   cli::AgentHistory& agentHistory() override;
   cli::ChangeLog& changeLog() override;
+  cli::ViewCapture captureMapperView() override;
+  cli::ViewImages& viewImages() override;
 
 private:
   void documentWasLoaded();

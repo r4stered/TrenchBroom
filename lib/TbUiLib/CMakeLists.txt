@@ -109,6 +109,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewActivationTracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewBar.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewBase.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewCapture.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewContainer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapViewToolBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapWindow.cpp
@@ -297,6 +298,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewActivationTracker.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewBar.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewBase.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewCapture.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewContainer.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewLayout.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapViewToolBox.h

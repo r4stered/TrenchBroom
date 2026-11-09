@@ -60,6 +60,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TextFormat.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_TransformOps.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Verify.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_View.cpp
 )
 
 add_compile_definitions(CATCH_CONFIG_ENABLE_ALL_STRINGMAKERS=1)

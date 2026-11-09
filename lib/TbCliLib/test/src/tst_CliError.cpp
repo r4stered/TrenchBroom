@@ -63,6 +63,7 @@ TEST_CASE("CliError")
       T{ErrorCode::StaleSession, 1},
       T{ErrorCode::UndoRefused, 1},
       T{ErrorCode::TooOld, 1},
+      T{ErrorCode::ViewFailed, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

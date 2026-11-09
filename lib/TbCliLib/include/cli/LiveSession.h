@@ -44,6 +44,8 @@ namespace tb::cli
 class AgentHistory;
 class ChangeLog;
 class NodeHandleTable;
+class ViewImages;
+struct ViewCapture;
 
 /**
  * A map that a running editor has open, as tbcli's commands see it when they run against
@@ -79,6 +81,19 @@ public:
 
   /** Which nodes changed since a rev of this session, and who changed them. */
   virtual ChangeLog& changeLog() = 0;
+
+  /**
+   * Captures the map view that the mapper last focused, as it is on screen.
+   *
+   * @throw CliError `view_failed` if there is no view to capture or the capture failed
+   */
+  virtual ViewCapture captureMapperView() = 0;
+
+  /**
+   * The images of this session's views, in a temporary directory that goes away when
+   * the session ends.
+   */
+  virtual ViewImages& viewImages() = 0;
 };
 
 /**

@@ -38,6 +38,7 @@
 #include "cli/Show.h"
 #include "cli/TextFormat.h"
 #include "cli/Verify.h"
+#include "cli/View.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Map.h"
 #include "version/Version.h"
@@ -88,6 +89,15 @@ commands:
                         the mapper's Save does; with -o, write a copy to
                         out.map and leave the map's file and its unsaved
                         changes alone. Only ever save when the mapper asks
+  view <map> [--out <file.png>]
+                        live sessions only: what the mapper sees. Captures the
+                        map view the mapper last focused (3D or 2D) as a PNG and
+                        reports its path, the camera, the selection and the
+                        node under the mouse with their paths, handles and
+                        boxes [left, top, right, bottom] in image pixels, the
+                        pixel ratio and the rev. Images go to a temporary
+                        directory that keeps the latest 20; --out also copies
+                        the image to file.png
   changes <map> --since <rev>
                         live sessions only: the nodes created, modified and
                         removed since a live rev, with their handles and
@@ -267,7 +277,7 @@ bool changesMap(const std::string_view command)
   return isMutatingCommand(command) || command == "undo" || command == "save";
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 36>{{
+constexpr auto CommandOptions = std::array<CommandOption, 37>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -297,6 +307,7 @@ constexpr auto CommandOptions = std::array<CommandOption, 36>{{
   {"--json", "ops"},
   {"--install", "guide"},
   {"--since", "changes"},
+  {"--out", "view"},
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
@@ -378,6 +389,8 @@ struct Arguments
   ApplyOptions applyOptions;
   /** changes --since: the live rev to list the changes since */
   std::optional<std::string> since;
+  /** view --out: where to copy the image to */
+  std::optional<std::filesystem::path> viewOut;
   /** guide --install: the directory to write the agent files into */
   std::optional<std::filesystem::path> guideInstall;
   /** The flags of an op's subcommand, as (name without dashes, value). */
@@ -669,6 +682,10 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--since")
     {
       result.since = value();
+    }
+    else if (name == "--out")
+    {
+      result.viewOut = std::filesystem::path{pathValue()};
     }
     else if (name == "--expect-rev")
     {
@@ -1164,6 +1181,12 @@ CommandResult runCommand(
     auto map = openLiveMapArgument(arguments, logger, session, command);
     return saveLive(*map.session(), arguments.applyOptions.output);
   }
+  if (command == "view")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto map = openLiveMapArgument(arguments, logger, session, command);
+    return viewLive(*map.session(), arguments.viewOut);
+  }
   if (command == "changes")
   {
     checkArguments(arguments, command, {"a map file"});
@@ -1262,7 +1285,7 @@ bool takesMap(const std::string_view command)
 {
   return command == "describe" || command == "query" || command == "show"
          || command == "fgd" || command == "verify" || command == "rooms"
-         || command == "changes" || changesMap(command);
+         || command == "changes" || command == "view" || changesMap(command);
 }
 
 /**

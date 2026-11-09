@@ -80,8 +80,9 @@ RunResult run(const std::vector<std::string>& args, std::string_view in = {});
  * instead of loading the file: reads report the live rev, `describe` adds a `session`
  * block `{live, epoch, map}`, and `apply` and the ops edit the open map as one undo
  * step and write nothing (see applyLive), `undo` undoes the agent's own most recent
- * batch (see undoLive), and `save` saves the open map or a copy of it (see saveLive);
- * undo and save fail with `no_session` in run. `verify --compile` and `rooms` don't
+ * batch (see undoLive), `save` saves the open map or a copy of it (see saveLive), and
+ * `view` captures the mapper's view (see viewLive); undo, save and view fail with
+ * `no_session` in run. `verify --compile` and `rooms` don't
  * compile in the editor: they eject the open map (see Eject) for runOnEject. A command
  * that names another map fails with `no_session`. The editor's configuration is
  * authoritative, so `--game-config` and `--fgd` fail with `invalid_argument`. Relative
@@ -137,9 +138,9 @@ struct Invocation
 /**
  * The given command line and stdin rewritten so that they mean the same in another
  * process with another working directory, such as the editor: the map path and every
- * option that names a file (`--game-config`, `--fgd`, `--quake-dir`, `-o`,
- * `--artifacts`, `--from-artifacts` and compilers given as paths) are made absolute,
- * and the batch file of `apply` is read and passed as stdin.
+ * option that names a file (`--game-config`, `--fgd`, `--quake-dir`, `-o`, `--output`,
+ * `--out`, `--artifacts`, `--from-artifacts` and compilers given as paths) are made
+ * absolute, and the batch file of `apply` is read and passed as stdin.
  *
  * @throw CliError `file_not_found` if the batch file cannot be read, or the error of a
  * malformed command line

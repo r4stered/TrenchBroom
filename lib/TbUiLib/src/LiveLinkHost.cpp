@@ -33,6 +33,7 @@
 #include "cli/LiveLink.h"
 #include "cli/NodeHandles.h"
 #include "cli/Run.h"
+#include "cli/View.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
 #include "prefs/Preferences.h"
@@ -116,6 +117,11 @@ void LiveLinkHost::setBusyTimeout(const std::chrono::milliseconds busyTimeout)
   m_busyTimeout = busyTimeout;
 }
 
+void LiveLinkHost::setViewCapturer(ViewCapturer viewCapturer)
+{
+  m_viewCapturer = std::move(viewCapturer);
+}
+
 const std::optional<std::filesystem::path>& LiveLinkHost::rendezvousFile() const
 {
   return m_rendezvousFile;
@@ -154,6 +160,20 @@ cli::AgentHistory& LiveLinkHost::agentHistory()
 cli::ChangeLog& LiveLinkHost::changeLog()
 {
   return m_rev->changeLog();
+}
+
+cli::ViewCapture LiveLinkHost::captureMapperView()
+{
+  if (!m_viewCapturer)
+  {
+    throw cli::CliError{cli::ErrorCode::ViewFailed, "this editor has no map view"};
+  }
+  return m_viewCapturer();
+}
+
+cli::ViewImages& LiveLinkHost::viewImages()
+{
+  return *m_viewImages;
 }
 
 void LiveLinkHost::documentWasLoaded()
@@ -217,6 +237,12 @@ void LiveLinkHost::start()
   m_handles = std::make_unique<cli::NodeHandleTable>(m_document.map(), m_rev->epoch());
   m_agentHistory = cli::AgentHistory{};
 
+  const auto rendezvousFile = cli::rendezvousPath(m_rendezvousDir, path);
+  // per session, so that an image of an earlier session is never overwritten
+  m_viewImages = std::make_unique<cli::ViewImages>(
+    m_rendezvousDir
+    / fmt::format("{}-{}-views", rendezvousFile.stem().string(), m_rev->epoch()));
+
   auto rendezvous = cli::Rendezvous{
     .map = path.string(),
     .pid = int64_t(QCoreApplication::applicationPid()),
@@ -242,7 +268,6 @@ void LiveLinkHost::start()
     rendezvous.token = m_token;
   }
 
-  const auto rendezvousFile = cli::rendezvousPath(m_rendezvousDir, path);
   if (
     const auto writeError =
       cli::writeFileAtomically(rendezvousFile, cli::encodeRendezvous(rendezvous)))
@@ -295,6 +320,8 @@ void LiveLinkHost::stop()
 {
   m_sessionMap.reset();
   m_attached = false;
+  // deletes the session's view images
+  m_viewImages.reset();
 
   m_retryTimer->stop();
   m_queue.clear();

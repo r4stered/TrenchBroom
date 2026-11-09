@@ -20,6 +20,7 @@
 #include "FakeEditorHost.h"
 
 #include "CliTestUtils.h"
+#include "cli/CliError.h"
 #include "cli/FileUtils.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Map.h"
@@ -50,6 +51,18 @@ mdl::MapFixtureConfig quakeEditorConfig()
   };
 }
 
+/** Stands in for the PNG of a captured 4x3 view, which tbcli never decodes. */
+constexpr auto TinyPng = std::string_view{"PNG of a fake view"};
+
+ViewCapture defaultMapperView()
+{
+  return ViewCapture{
+    .png = std::string{TinyPng},
+    .image = {4, 3},
+    .camera = CameraPose{.viewport = {4, 3}},
+  };
+}
+
 } // namespace
 
 FakeEditorHost::FakeEditorHost(
@@ -57,6 +70,9 @@ FakeEditorHost::FakeEditorHost(
   : m_map{m_fixture.load(mapPath, quakeEditorConfig())}
   , m_rev{m_map, changeLogCapacity}
   , m_handles{m_map, m_rev.epoch()}
+  , m_mapperView{defaultMapperView()}
+  , m_viewDir{"tbcli-fake-editor-"}
+  , m_viewImages{m_viewDir.path() / "views"}
 {
   // MapFixture turns collation off, the editor has it on
   m_map.setIsCommandCollationEnabled(true);
@@ -92,6 +108,25 @@ AgentHistory& FakeEditorHost::agentHistory()
 ChangeLog& FakeEditorHost::changeLog()
 {
   return m_rev.changeLog();
+}
+
+ViewCapture FakeEditorHost::captureMapperView()
+{
+  if (!m_mapperView)
+  {
+    throw CliError{ErrorCode::ViewFailed, "the fake editor has no map view"};
+  }
+  return *m_mapperView;
+}
+
+ViewImages& FakeEditorHost::viewImages()
+{
+  return m_viewImages;
+}
+
+void FakeEditorHost::setMapperView(std::optional<ViewCapture> view)
+{
+  m_mapperView = std::move(view);
 }
 
 RunResult FakeEditorHost::run(

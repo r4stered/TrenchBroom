@@ -19,13 +19,16 @@
 
 #pragma once
 
+#include "cli/FileUtils.h"
 #include "cli/LiveSession.h"
 #include "cli/NodeHandles.h"
 #include "cli/Run.h"
+#include "cli/View.h"
 #include "mdl/MapFixture.h"
 
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +48,9 @@ private:
   LiveRev m_rev;
   NodeHandleTable m_handles;
   AgentHistory m_agentHistory;
+  std::optional<ViewCapture> m_mapperView;
+  TemporaryDirectory m_viewDir;
+  ViewImages m_viewImages;
 
 public:
   /**
@@ -62,6 +68,14 @@ public:
   NodeHandleTable& handles() override;
   AgentHistory& agentHistory() override;
   ChangeLog& changeLog() override;
+  ViewCapture captureMapperView() override;
+  ViewImages& viewImages() override;
+
+  /**
+   * Sets what captureMapperView returns, or makes it fail with `view_failed`. By
+   * default, it returns a 4x3 PNG of a perspective view.
+   */
+  void setMapperView(std::optional<ViewCapture> view);
 
   /** Runs tbcli against this editor's map. Paths are passed as UTF-8 strings. */
   RunResult run(const std::vector<std::string>& args, std::string_view in = {});

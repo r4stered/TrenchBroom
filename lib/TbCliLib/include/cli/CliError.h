@@ -141,6 +141,8 @@ enum class ErrorCode
    * remembers
    */
   TooOld,
+  /** `view`: the editor could not capture its view, such as when it has no map view */
+  ViewFailed,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

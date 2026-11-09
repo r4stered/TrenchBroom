@@ -18,6 +18,7 @@
  */
 
 #include <QCoreApplication>
+#include <QImage>
 
 #include "Observer.h"
 #include "base/Logger.h"
@@ -26,18 +27,21 @@
 #include "cli/LiveLink.h"
 #include "fs/TestEnvironment.h"
 #include "fs/TestUtils.h"
+#include "gl/PerspectiveCamera.h"
 #include "mdl/EntityNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Geometry.h"
 #include "mdl/Map_Selection.h"
+#include "mdl/PickResult.h"
 #include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 #include "prefs/Preferences.h"
 #include "ui/LiveLinkHost.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
+#include "ui/MapViewCapture.h"
 
 #include <chrono>
 #include <filesystem>
@@ -378,6 +382,53 @@ TEST_CASE("LiveLinkHost")
     CHECK(!map.modified());
     CHECK(env.loadFile("live.map") != MapText);
     CHECK_THAT(logger.messages.back(), StartsWith("AI: save done (live-"));
+  }
+
+  SECTION("view captures the mapper's view with the document's selection")
+  {
+    checkError(run({"view", mapArg}), "view_failed");
+
+    // the focused view, as the map window provides it
+    const auto camera = gl::PerspectiveCamera{
+      90.0f,
+      1.0f,
+      8000.0f,
+      {0, 0, 400, 300},
+      vm::vec3f{-256, 0, 64},
+      vm::vec3f{1, 0, 0},
+      vm::vec3f{0, 0, 1}};
+    host->setViewCapturer([&]() {
+      auto framebuffer = QImage{800, 600, QImage::Format_RGB32};
+      framebuffer.fill(Qt::black);
+      return makeViewCapture(framebuffer, camera, 2.0f, mdl::PickResult{});
+    });
+
+    auto* light = map.worldNode().defaultLayer()->children().front();
+    mdl::selectNodes(map, {light});
+    logger.messages.clear();
+
+    const auto viewed = parse(run({"view", mapArg}));
+    CHECK(viewed["rev"] == cli::Json{host->rev()});
+    CHECK(viewed["view"] == cli::Json{"3d"});
+    CHECK(viewed["camera"]["position"] == cli::Json{cli::Json::Array{-256, 0, 64}});
+    CHECK(viewed["pixel_ratio"] == cli::Json{2});
+    CHECK(viewed["image"]["width"] == cli::Json{800});
+    const auto& selected = viewed["selection"]["nodes"]["items"];
+    REQUIRE(selected.size() == 1);
+    CHECK(selected[0]["path"] == cli::Json{"layer:0/entity:0"});
+    // the light is ahead of the camera, in the middle of the image
+    CHECK(selected[0]["box"].isArray());
+    // looking changes nothing, so it gets no Console line
+    CHECK(logger.messages.empty());
+
+    // the images are next to the rendezvous file, not next to the map
+    const auto image = std::filesystem::path{viewed["image"]["path"].asString()};
+    CHECK(std::filesystem::exists(image));
+    CHECK(image.parent_path().parent_path() == rendezvousDir);
+
+    // and go away when the session ends
+    host.reset();
+    CHECK(!std::filesystem::exists(image.parent_path()));
   }
 
   SECTION("request and reply payloads are binary-safe")

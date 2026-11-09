@@ -96,6 +96,7 @@
 #include "ui/MapDocument.h"
 #include "ui/MapView2D.h"
 #include "ui/MapViewBase.h"
+#include "ui/MapViewCapture.h"
 #include "ui/MapViewToolBox.h"
 #include "ui/MapWindowManager.h"
 #include "ui/ObjExportDialog.h"
@@ -204,7 +205,9 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   bindEvents();
 
   // lets tbcli edit the open map; deleted with the other children, before the document
-  new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
+  auto* liveLinkHost = new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
+  liveLinkHost->setViewCapturer(
+    [this]() { return captureMapView(*currentMapViewBase()); });
 
   restoreWidgetGeometry(this);
   restoreWidgetState(this);

@@ -44,6 +44,7 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TextFormat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/TransformOps.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Verify.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/View.cpp
 
   PUBLIC FILE_SET headers TYPE HEADERS
     BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
