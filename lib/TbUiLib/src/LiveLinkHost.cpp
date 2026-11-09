@@ -163,7 +163,7 @@ void LiveLinkHost::start()
   m_token = randomHex(4);
 
   m_server = new QLocalServer{this};
-  // on Windows, this restricts the pipe to the current user
+  // restricts the pipe (Windows) or the socket file (macOS, Linux) to the current user
   m_server->setSocketOptions(QLocalServer::UserAccessOption);
   const auto name = QString::fromStdString("TrenchBroom-live-" + randomHex(4));
   if (!m_server->listen(name))
@@ -175,9 +175,14 @@ void LiveLinkHost::start()
   }
   connect(m_server, &QLocalServer::newConnection, this, &LiveLinkHost::newConnection);
 
+  if (const auto dirError = cli::prepareRendezvousDir(m_rendezvousDir))
+  {
+    m_document.logger().warn() << "Live link: " << *dirError;
+    stop();
+    return;
+  }
+
   const auto rendezvousFile = cli::rendezvousPath(m_rendezvousDir, path);
-  auto error = std::error_code{};
-  std::filesystem::create_directories(m_rendezvousDir, error);
   const auto rendezvous = cli::Rendezvous{
     .map = path.string(),
     .endpoint = m_server->fullServerName().toStdString(),

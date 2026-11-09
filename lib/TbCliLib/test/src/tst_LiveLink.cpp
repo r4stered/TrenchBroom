@@ -21,6 +21,8 @@
 #include "cli/CliError.h"
 #include "cli/LiveLink.h"
 
+#include <filesystem>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -37,16 +39,41 @@ TEST_CASE("LiveLink")
   SECTION("rendezvousPath")
   {
     const auto dir = env.path("live");
-    const auto path = rendezvousPath(dir, env.path("maps/a.map"));
+    const auto map = env.writeFile("maps/a.map", "");
+    const auto path = rendezvousPath(dir, map);
     CHECK(path.parent_path() == dir);
     CHECK(path.extension() == ".json");
     CHECK(path.stem().string().size() == 16);
 
     CHECK(rendezvousPath(dir, env.path("maps/../maps/a.map")) == path);
     CHECK(rendezvousPath(dir, env.path("maps/b.map")) != path);
+
+    // a differently cased path names the same map only where the file system ignores
+    // case, as on Windows and by default on macOS
+    const auto fileSystemIgnoresCase = std::filesystem::exists(env.path("MAPS/A.MAP"));
 #ifdef _WIN32
-    // Windows file systems ignore case
-    CHECK(rendezvousPath(dir, env.path("MAPS/A.map")) == path);
+    REQUIRE(fileSystemIgnoresCase);
+#endif
+    CHECK((rendezvousPath(dir, env.path("MAPS/A.MAP")) == path) == fileSystemIgnoresCase);
+  }
+
+  SECTION("prepareRendezvousDir")
+  {
+    const auto dir = env.path("app-data/live");
+    CHECK(prepareRendezvousDir(dir) == std::nullopt);
+    CHECK(std::filesystem::is_directory(dir));
+
+    // an existing directory is fine
+    CHECK(prepareRendezvousDir(dir) == std::nullopt);
+
+    CHECK(prepareRendezvousDir(env.writeFile("file", "")) != std::nullopt);
+
+#ifndef _WIN32
+    // the rendezvous files hold session tokens, so only the user may look inside
+    using std::filesystem::perms;
+    std::filesystem::permissions(dir, perms::all);
+    CHECK(prepareRendezvousDir(dir) == std::nullopt);
+    CHECK((std::filesystem::status(dir).permissions() & perms::all) == perms::owner_all);
 #endif
   }
 
@@ -124,6 +151,8 @@ TEST_CASE("LiveLink")
     const auto dir = env.path("live");
     const auto map = env.copyFixture("maps/simple.map", "simple.map");
     const auto args = std::vector<std::string>{"describe", arg(map)};
+    // as the editor would
+    REQUIRE(prepareRendezvousDir(dir) == std::nullopt);
 
     SECTION("without an editor, Auto falls back to file mode and Live fails")
     {
@@ -154,6 +183,17 @@ TEST_CASE("LiveLink")
         encodeRendezvous({"tbcli.link/0", arg(map), R"(\\.\pipe\tb-x)", "t", 1}));
       checkError(*runLive(args, {}, LinkMode::Auto, dir), "proto_mismatch", 1);
     }
+
+#ifndef _WIN32
+    SECTION("a rendezvous dir that other users can write to holds no sessions")
+    {
+      env.writeFile(
+        rendezvousPath(dir, map),
+        encodeRendezvous({"tbcli.link/0", arg(map), "/tmp/tb-x", "t", 1}));
+      std::filesystem::permissions(dir, std::filesystem::perms::all);
+      checkError(*runLive(args, {}, LinkMode::Live, dir), "no_session", 1);
+    }
+#endif
   }
 }
 

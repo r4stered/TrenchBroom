@@ -36,6 +36,15 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#else
+#include <pwd.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <cstring>
 #endif
 
 namespace tb::cli
@@ -66,18 +75,69 @@ uint32_t readU32(const std::string_view in, const size_t offset)
   return value;
 }
 
-/** The path that names a map's session: absolute, and lower-cased on Windows. */
+#ifndef _WIN32
+
+/**
+ * The string with the case of its ASCII letters swapped, or only lowered. Other
+ * letters keep their case, so paths that differ in the case of them name different
+ * sessions.
+ */
+std::string changeAsciiCase(std::string str, const bool swap)
+{
+  for (auto& c : str)
+  {
+    if (c >= 'A' && c <= 'Z')
+    {
+      c = char(c - 'A' + 'a');
+    }
+    else if (swap && c >= 'a' && c <= 'z')
+    {
+      c = char(c - 'a' + 'A');
+    }
+  }
+  return str;
+}
+
+/**
+ * Whether the file system that holds the given file ignores case, as macOS file
+ * systems do by default: whether the file's directory finds it under its name with the
+ * case of its letters swapped. A file that doesn't exist names no session, so this
+ * may be false for it.
+ *
+ * Only the file's own directory is probed, so a case-sensitive volume mounted below a
+ * case-insensitive one is keyed by the case of the path as given.
+ */
+bool fileSystemIgnoresCase(const std::filesystem::path& path)
+{
+  const auto name = path.filename().string();
+  const auto swapped = changeAsciiCase(name, true);
+  if (swapped == name)
+  {
+    return false;
+  }
+  auto error = std::error_code{};
+  return std::filesystem::equivalent(path, path.parent_path() / swapped, error);
+}
+
+#endif
+
+/**
+ * The path that names a map's session: absolute, and lower-cased if the file system
+ * ignores case.
+ */
 std::string sessionKey(const std::filesystem::path& mapPath)
 {
   const auto path = std::filesystem::absolute(mapPath).lexically_normal();
 #ifdef _WIN32
   auto wide = path.wstring();
   CharLowerBuffW(wide.data(), DWORD(wide.size()));
-  const auto key = std::filesystem::path{wide}.generic_u8string();
+  const auto u8Key = std::filesystem::path{wide}.generic_u8string();
+  return std::string{u8Key.begin(), u8Key.end()};
 #else
-  const auto key = path.generic_u8string();
+  const auto u8Key = path.generic_u8string();
+  auto key = std::string{u8Key.begin(), u8Key.end()};
+  return fileSystemIgnoresCase(path) ? changeAsciiCase(std::move(key), false) : key;
 #endif
-  return std::string{key.begin(), key.end()};
 }
 
 #ifdef _WIN32
@@ -123,6 +183,85 @@ HANDLE connectPipe(const std::wstring& name)
   return INVALID_HANDLE_VALUE;
 }
 
+#else
+
+/** Closes a file descriptor when it goes out of scope. */
+class FdCloser
+{
+private:
+  int m_fd;
+
+public:
+  explicit FdCloser(const int fd)
+    : m_fd{fd}
+  {
+  }
+
+  ~FdCloser() { ::close(m_fd); }
+
+  FdCloser(const FdCloser&) = delete;
+  FdCloser& operator=(const FdCloser&) = delete;
+};
+
+/** Connects to the Unix domain socket at the given path, or returns -1. */
+int connectSocket(const std::string& path)
+{
+  auto address = sockaddr_un{};
+  address.sun_family = AF_UNIX;
+  if (path.empty() || path.size() >= sizeof(address.sun_path))
+  {
+    return -1;
+  }
+  std::memcpy(address.sun_path, path.data(), path.size());
+
+  const auto fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0)
+  {
+    return -1;
+  }
+#ifdef SO_NOSIGPIPE
+  // macOS: writing to a closed connection must fail, not kill tbcli with SIGPIPE
+  const auto on = int{1};
+  ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on));
+#endif
+  if (::connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) != 0)
+  {
+    ::close(fd);
+    return -1;
+  }
+  return fd;
+}
+
+/**
+ * The mode of the given directory if it belongs to the current user. A symbolic link
+ * doesn't count, since someone else may have planted it.
+ */
+std::optional<mode_t> modeOfOwnDirectory(const std::filesystem::path& dir)
+{
+  struct stat info = {};
+  if (
+    ::lstat(dir.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)
+    || info.st_uid != ::geteuid())
+  {
+    return std::nullopt;
+  }
+  return info.st_mode & 0777;
+}
+
+/** The current user's home directory, if it is known. */
+std::optional<std::filesystem::path> homeDir()
+{
+  if (const auto* home = std::getenv("HOME"); home && *home)
+  {
+    return std::filesystem::path{home};
+  }
+  if (const auto* user = ::getpwuid(::geteuid()); user && user->pw_dir)
+  {
+    return std::filesystem::path{user->pw_dir};
+  }
+  return std::nullopt;
+}
+
 #endif
 
 } // namespace
@@ -134,17 +273,57 @@ std::filesystem::path defaultRendezvousDir()
   {
     return std::filesystem::path{localAppData} / "TrenchBroom" / "live";
   }
-#else
-  if (const auto* runtimeDir = std::getenv("XDG_RUNTIME_DIR"))
+#elif defined(__APPLE__)
+  if (const auto home = homeDir())
   {
-    return std::filesystem::path{runtimeDir} / "trenchbroom-live";
+    return *home / "Library" / "Application Support" / "TrenchBroom" / "live";
   }
-  if (const auto* home = std::getenv("HOME"))
+#else
+  if (
+    const auto* dataHome = std::getenv("XDG_DATA_HOME");
+    dataHome && std::filesystem::path{dataHome}.is_absolute())
   {
-    return std::filesystem::path{home} / ".cache" / "trenchbroom" / "live";
+    return std::filesystem::path{dataHome} / "TrenchBroom" / "live";
+  }
+  if (const auto home = homeDir())
+  {
+    return *home / ".local" / "share" / "TrenchBroom" / "live";
   }
 #endif
+  // prepareRendezvousDir refuses this if another user created it first
   return std::filesystem::temp_directory_path() / "trenchbroom-live";
+}
+
+std::optional<std::string> prepareRendezvousDir(const std::filesystem::path& dir)
+{
+  auto error = std::error_code{};
+  std::filesystem::create_directories(dir, error);
+  if (error)
+  {
+    return fmt::format(
+      "cannot create the directory {}: {}", dir.string(), error.message());
+  }
+  if (!std::filesystem::is_directory(dir, error))
+  {
+    return fmt::format("{} is not a directory", dir.string());
+  }
+
+#ifndef _WIN32
+  const auto mode = modeOfOwnDirectory(dir);
+  if (!mode)
+  {
+    return fmt::format("{} is not a directory of the current user", dir.string());
+  }
+  if (*mode != 0700 && ::chmod(dir.c_str(), 0700) != 0)
+  {
+    const auto chmodError = errno;
+    return fmt::format(
+      "cannot make {} private to the current user: {}",
+      dir.string(),
+      std::strerror(chmodError));
+  }
+#endif
+  return std::nullopt;
 }
 
 std::filesystem::path rendezvousPath(
@@ -362,10 +541,54 @@ std::optional<Frame> exchangeFrames(
     buffer.append(chunk.data(), read);
   }
 #else
-  // the Unix domain socket client is not written yet
-  static_cast<void>(endpoint);
-  static_cast<void>(request);
-  return std::nullopt;
+  const auto fd = connectSocket(endpoint);
+  if (fd < 0)
+  {
+    return std::nullopt;
+  }
+  const auto closer = FdCloser{fd};
+
+#ifdef MSG_NOSIGNAL
+  // Linux: writing to a closed connection must fail, not kill tbcli with SIGPIPE
+  constexpr auto sendFlags = int{MSG_NOSIGNAL};
+#else
+  constexpr auto sendFlags = int{0};
+#endif
+  for (auto remaining = request; !remaining.empty();)
+  {
+    const auto sent = ::send(fd, remaining.data(), remaining.size(), sendFlags);
+    if (sent < 0)
+    {
+      if (errno == EINTR)
+      {
+        continue;
+      }
+      // the editor closed the connection before reading the request
+      return std::nullopt;
+    }
+    remaining.remove_prefix(size_t(sent));
+  }
+
+  auto buffer = std::string{};
+  auto chunk = std::string(65536, '\0');
+  while (true)
+  {
+    if (auto frame = decodeFrame(buffer))
+    {
+      return std::move(frame->first);
+    }
+    const auto received = ::recv(fd, chunk.data(), chunk.size(), 0);
+    if (received < 0 && errno == EINTR)
+    {
+      continue;
+    }
+    if (received <= 0)
+    {
+      throw CliError{
+        ErrorCode::InternalError, "the editor closed the live link mid-reply"};
+    }
+    buffer.append(chunk.data(), size_t(received));
+  }
 #endif
 }
 
@@ -402,6 +625,14 @@ std::optional<RunResult> runLive(
   {
     return noSession();
   }
+#ifndef _WIN32
+  if (
+    const auto dirMode = modeOfOwnDirectory(rendezvousDir); !dirMode || *dirMode != 0700)
+  {
+    // the editor only publishes in a private directory, so someone else wrote this
+    return noSession();
+  }
+#endif
   if (rendezvous->proto != LinkProto)
   {
     return errorResult(

@@ -46,23 +46,40 @@ namespace tb::cli
 /** The version of the live link protocol that this tbcli and editor speak. */
 inline constexpr auto LinkProto = std::string_view{"tbcli.link/1"};
 
-/** Whether tbcli can reach an editor on this platform: only on Windows so far. */
-#ifdef _WIN32
+/**
+ * Whether tbcli can reach an editor on this platform: over a named pipe on Windows and
+ * a Unix domain socket on macOS and Linux, which is what QLocalServer listens on.
+ */
+#if defined(_WIN32) || defined(__unix__) || defined(__APPLE__)
 inline constexpr auto HasLinkClient = true;
 #else
 inline constexpr auto HasLinkClient = false;
 #endif
 
 /**
- * The per-user directory that holds the rendezvous files of open editors:
- * `%LOCALAPPDATA%\TrenchBroom\live` on Windows.
+ * The per-user directory that holds the rendezvous files of open editors, in the
+ * platform's app data location: `%LOCALAPPDATA%\TrenchBroom\live` on Windows,
+ * `~/Library/Application Support/TrenchBroom/live` on macOS and
+ * `$XDG_DATA_HOME/TrenchBroom/live` (by default `~/.local/share/TrenchBroom/live`)
+ * elsewhere.
  */
 std::filesystem::path defaultRendezvousDir();
 
 /**
+ * Creates the rendezvous directory if needed and makes sure that only the current user
+ * can look inside, since the rendezvous files hold session tokens. On macOS and Linux,
+ * the directory must belong to the current user and gets mode 0700; on Windows, the
+ * per-user app data location already keeps other users out.
+ *
+ * Returns why the directory can't be used, or nothing if it can.
+ */
+std::optional<std::string> prepareRendezvousDir(const std::filesystem::path& dir);
+
+/**
  * The rendezvous file in the given directory for the given map. It is named by the
- * first 16 hex digits of the SHA-256 of the map's absolute path, lower-cased on
- * Windows, whose file systems ignore case.
+ * first 16 hex digits of the SHA-256 of the map's absolute path, lower-cased if the
+ * file system ignores case: always on Windows, and elsewhere if the map's directory
+ * finds the map under its name with the case of its letters swapped.
  */
 std::filesystem::path rendezvousPath(
   const std::filesystem::path& rendezvousDir, const std::filesystem::path& mapPath);
@@ -158,7 +175,9 @@ std::optional<Frame> exchangeFrames(
  * with LinkMode::Auto when no editor has the map open.
  *
  * Fails with `no_session` if no editor has the map open and mode is LinkMode::Live,
- * and with `proto_mismatch` if the editor speaks another protocol version.
+ * and with `proto_mismatch` if the editor speaks another protocol version. On macOS
+ * and Linux, a rendezvous directory that isn't private to the current user (see
+ * prepareRendezvousDir) holds no sessions.
  */
 std::optional<RunResult> runLive(
   const std::vector<std::string>& args,

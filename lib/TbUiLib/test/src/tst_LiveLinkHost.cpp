@@ -36,7 +36,9 @@
 #include "ui/MapDocumentFixture.h"
 
 #include <chrono>
+#include <filesystem>
 #include <future>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -194,6 +196,12 @@ TEST_CASE("LiveLinkHost")
     CHECK(rendezvous->pid == QCoreApplication::applicationPid());
     CHECK(rendezvous->token.size() >= 32);
     CHECK_THAT(rendezvous->endpoint, ContainsSubstring("TrenchBroom-live-"));
+#ifndef _WIN32
+    // the token is a secret, so other users can't look inside the rendezvous dir
+    CHECK(
+      (std::filesystem::status(rendezvousDir).permissions() & std::filesystem::perms::all)
+      == std::filesystem::perms::owner_all);
+#endif
 
     const auto file = *host->rendezvousFile();
     host.reset();
@@ -269,8 +277,8 @@ TEST_CASE("LiveLinkHost")
   {
     auto rendezvous = *cli::readRendezvous(*host->rendezvousFile());
     rendezvous.token = "stale";
-    env.createDirectory("stale");
     const auto otherDir = env.dir() / "stale";
+    REQUIRE(cli::prepareRendezvousDir(otherDir) == std::nullopt);
     env.createFile(
       cli::rendezvousPath(otherDir, mapPath).lexically_relative(env.dir()),
       cli::encodeRendezvous(rendezvous));
