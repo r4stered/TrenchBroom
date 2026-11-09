@@ -120,6 +120,10 @@ enum class ErrorCode
   ProtoMismatch,
   /** the mapper stayed busy (in a dialog, a drag or a transaction) for too long */
   Busy,
+  /** the editor that had the map open closed it, or saved it under another path */
+  SessionEnded,
+  /** the editor has the map open, but its "Accept AI connections" preference is off */
+  LinkDisabled,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

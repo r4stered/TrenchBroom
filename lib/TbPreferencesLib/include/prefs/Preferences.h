@@ -206,6 +206,8 @@ inline auto AlignmentLock = Preference<bool>{"Editor/Texture lock", true};
 inline auto UvLock = Preference<bool>{"Editor/UV lock", false};
 inline auto GroupBrushesCreatedByShapeTool =
   Preference<bool>{"Editor/Group brushes created by shape tool", true};
+/** Whether maps opened from now on let AI agents edit them through tbcli. */
+inline auto AcceptAiConnections = Preference<bool>{"Editor/Accept AI connections", true};
 
 inline auto RendererFontPath = Preference<std::filesystem::path>{
   "render/Font name", "fonts/SourceSansPro-Regular.otf"};

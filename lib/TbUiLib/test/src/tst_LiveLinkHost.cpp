@@ -20,6 +20,7 @@
 #include <QCoreApplication>
 
 #include "base/Logger.h"
+#include "base/PreferenceManager.h"
 #include "cli/Json.h"
 #include "cli/LiveLink.h"
 #include "fs/TestEnvironment.h"
@@ -31,6 +32,7 @@
 #include "mdl/Map_Selection.h"
 #include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
+#include "prefs/Preferences.h"
 #include "ui/LiveLinkHost.h"
 #include "ui/MapDocument.h"
 #include "ui/MapDocumentFixture.h"
@@ -180,6 +182,14 @@ TEST_CASE("LiveLinkHost")
     const auto result = await(future);
     REQUIRE(result.has_value());
     return *result;
+  };
+
+  // tbcli as an agent calls it, so it may run in file mode
+  const auto runAuto = [&](std::vector<std::string> args, std::string in = {}) {
+    auto future = std::async(std::launch::async, [=]() {
+      return cli::runLive(args, in, cli::LinkMode::Auto, rendezvousDir);
+    });
+    return await(future);
   };
 
   const auto mapArg = mapPath.string();
@@ -349,6 +359,138 @@ TEST_CASE("LiveLinkHost")
     }
     CHECK(revs[0] < revs[1]);
     CHECK(revs[1] < revs[2]);
+  }
+
+  SECTION("after Save As, the session is under the new path and not the old one")
+  {
+    run({"describe", mapArg});
+
+    const auto newPath = env.dir() / "renamed.map";
+    REQUIRE(map.saveAs(newPath).is_success());
+
+    const auto described = parse(run({"describe", newPath.string()}));
+    CHECK(described["session"]["map"] == cli::Json{newPath.string()});
+    CHECK(!std::filesystem::exists(cli::rendezvousPath(rendezvousDir, mapPath)));
+
+    // the agent learns where the map went instead of editing the old file
+    const auto onOldPath = runAuto({"describe", mapArg});
+    REQUIRE(onOldPath.has_value());
+    checkError(*onOldPath, "session_ended");
+    CHECK_THAT(
+      parse(*onOldPath)["error"]["message"].asString(), ContainsSubstring("renamed.map"));
+    CHECK(runAuto({"describe", mapArg}) == std::nullopt);
+  }
+
+  SECTION("saving under the same path keeps the session")
+  {
+    const auto rendezvous = cli::readRendezvous(*host->rendezvousFile());
+    const auto described = parse(run({"describe", mapArg}));
+
+    REQUIRE(map.save().is_success());
+
+    CHECK(cli::readRendezvous(*host->rendezvousFile()) == rendezvous);
+    CHECK(
+      parse(run({"describe", mapArg}))["session"]["epoch"]
+      == described["session"]["epoch"]);
+  }
+
+  SECTION("an untitled map has no session until it is saved")
+  {
+    auto untitledFixture = MapDocumentFixture{};
+    auto& untitled = untitledFixture.create(mdl::QuakeFixtureConfig);
+    auto untitledHost = LiveLinkHost{untitled, rendezvousDir};
+    CHECK(!untitledHost.rendezvousFile().has_value());
+
+    const auto untitledPath = env.dir() / "untitled.map";
+    REQUIRE(untitled.map().saveAs(untitledPath).is_success());
+
+    REQUIRE(untitledHost.rendezvousFile().has_value());
+    CHECK(
+      parse(run({"describe", untitledPath.string()}))["session"]["map"]
+      == cli::Json{untitledPath.string()});
+  }
+
+  SECTION("a command after the editor closed the map gives session_ended once")
+  {
+    run({"describe", mapArg});
+    host.reset();
+
+    const auto ended = runAuto({"apply", mapArg, "-"}, createBox);
+    REQUIRE(ended.has_value());
+    checkError(*ended, "session_ended");
+    CHECK(env.loadFile("live.map") == MapText);
+
+    CHECK(runAuto({"describe", mapArg}) == std::nullopt);
+  }
+
+  SECTION("a request still waiting when the editor closes the map gives session_ended")
+  {
+    map.startTransaction("mapper drag", mdl::TransactionScope::LongRunning);
+    auto future = tbcli({"apply", mapArg, "-"}, createBox);
+    processEventsUntil([&]() { return host->queuedRequests() == 1; });
+    host.reset();
+    map.cancelTransaction();
+
+    const auto result = await(future);
+    REQUIRE(result.has_value());
+    checkError(*result, "session_ended");
+    CHECK(env.loadFile("live.map") == MapText);
+  }
+
+  SECTION("closing a map that no agent used leaves no trace")
+  {
+    host.reset();
+    CHECK(runAuto({"describe", mapArg}) == std::nullopt);
+  }
+
+  SECTION("a rendezvous file whose editor is dead counts as no session")
+  {
+    auto rendezvous = *cli::readRendezvous(*host->rendezvousFile());
+    // above Linux's pid_max, and Windows pids are smaller
+    rendezvous.pid = 0x7ffffffc;
+    env.createFile(
+      host->rendezvousFile()->lexically_relative(env.dir()),
+      cli::encodeRendezvous(rendezvous));
+
+    CHECK(runAuto({"describe", mapArg}) == std::nullopt);
+    checkError(run({"describe", mapArg}), "no_session");
+  }
+
+  SECTION("with Accept AI connections off, commands give link_disabled")
+  {
+    host.reset();
+    setPref(Preferences::AcceptAiConnections, false);
+    host = std::make_unique<LiveLinkHost>(document, rendezvousDir);
+    // the preference is read when the map opens
+    PreferenceManager::instance().resetToDefault(Preferences::AcceptAiConnections);
+
+    REQUIRE(host->rendezvousFile().has_value());
+    CHECK(!cli::readRendezvous(*host->rendezvousFile())->enabled);
+
+    // file mode would fail to parse this, and must not overwrite it
+    env.createFile("live.map", "garbage");
+    for (const auto& args : std::vector<std::vector<std::string>>{
+           {"describe", mapArg}, {"apply", mapArg, "-"}})
+    {
+      const auto result = runAuto(args, createBox);
+      REQUIRE(result.has_value());
+      checkError(*result, "link_disabled");
+      CHECK_THAT(
+        parse(*result)["error"]["message"].asString(),
+        ContainsSubstring("Accept AI connections"));
+    }
+    CHECK(env.loadFile("live.map") == "garbage");
+    CHECK(map.worldNode().defaultLayer()->childCount() == 1);
+  }
+
+  SECTION("turning Accept AI connections off does not end an open session")
+  {
+    setPref(Preferences::AcceptAiConnections, false);
+    const auto result = runAuto({"describe", mapArg});
+    PreferenceManager::instance().resetToDefault(Preferences::AcceptAiConnections);
+
+    REQUIRE(result.has_value());
+    CHECK(result->exitCode == 0);
   }
 
   document.setTargetLogger(nullptr);

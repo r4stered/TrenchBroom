@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <limits>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -38,6 +39,7 @@
 #include <windows.h>
 #else
 #include <pwd.h>
+#include <signal.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -138,6 +140,12 @@ std::string sessionKey(const std::filesystem::path& mapPath)
   auto key = std::string{u8Key.begin(), u8Key.end()};
   return fileSystemIgnoresCase(path) ? changeAsciiCase(std::move(key), false) : key;
 #endif
+}
+
+/** The name of a map's session files: a hash of its session key. */
+std::string sessionId(const std::filesystem::path& mapPath)
+{
+  return sha256Hex(sessionKey(mapPath)).substr(0, 16);
 }
 
 #ifdef _WIN32
@@ -329,7 +337,7 @@ std::optional<std::string> prepareRendezvousDir(const std::filesystem::path& dir
 std::filesystem::path rendezvousPath(
   const std::filesystem::path& rendezvousDir, const std::filesystem::path& mapPath)
 {
-  return rendezvousDir / (sha256Hex(sessionKey(mapPath)).substr(0, 16) + ".json");
+  return rendezvousDir / (sessionId(mapPath) + ".json");
 }
 
 std::string encodeRendezvous(const Rendezvous& rendezvous)
@@ -340,6 +348,7 @@ std::string encodeRendezvous(const Rendezvous& rendezvous)
   json.set("endpoint", rendezvous.endpoint);
   json.set("token", rendezvous.token);
   json.set("pid", rendezvous.pid);
+  json.set("enabled", rendezvous.enabled);
   return json.dump() + "\n";
 }
 
@@ -366,11 +375,105 @@ std::optional<Rendezvous> readRendezvous(const std::filesystem::path& path)
   const auto endpoint = string("endpoint");
   const auto token = string("token");
   const auto* pid = json.find("pid");
-  if (!proto || !map || !endpoint || !token || !pid || !pid->isNumber())
+  const auto* enabled = json.find("enabled");
+  // editors that predate the preference always accept connections
+  if (
+    !proto || !map || !endpoint || !token || !pid || !pid->isNumber()
+    || (enabled && !enabled->isBool()))
   {
     return std::nullopt;
   }
-  return Rendezvous{*proto, *map, *endpoint, *token, int64_t(pid->asNumber())};
+  return Rendezvous{
+    *proto,
+    *map,
+    *endpoint,
+    *token,
+    int64_t(pid->asNumber()),
+    !enabled || enabled->asBool()};
+}
+
+bool processIsAlive(const int64_t pid)
+{
+#ifdef _WIN32
+  if (pid <= 0 || pid > int64_t{std::numeric_limits<DWORD>::max()})
+  {
+    return false;
+  }
+  const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+  if (!process)
+  {
+    // a process that we may not look at is still running
+    return GetLastError() == ERROR_ACCESS_DENIED;
+  }
+  const auto closer = HandleCloser{process};
+  auto exitCode = DWORD{0};
+  return GetExitCodeProcess(process, &exitCode) && exitCode == STILL_ACTIVE;
+#else
+  if (pid <= 0 || pid > int64_t{std::numeric_limits<pid_t>::max()})
+  {
+    // kill() would signal a process group instead
+    return false;
+  }
+  // signal 0 only checks whether the process exists
+  return ::kill(pid_t(pid), 0) == 0 || errno == EPERM;
+#endif
+}
+
+std::filesystem::path endedSessionPath(
+  const std::filesystem::path& rendezvousDir, const std::filesystem::path& mapPath)
+{
+  return rendezvousDir / (sessionId(mapPath) + ".ended.json");
+}
+
+std::string encodeEndedSession(const EndedSession& endedSession)
+{
+  auto json = Json::object();
+  json.set("map", endedSession.map);
+  if (endedSession.movedTo)
+  {
+    json.set("movedTo", *endedSession.movedTo);
+  }
+  return json.dump() + "\n";
+}
+
+std::optional<EndedSession> readEndedSession(const std::filesystem::path& path)
+{
+  const auto text = readFile(path);
+  if (!text)
+  {
+    return std::nullopt;
+  }
+  auto parsed = parseJson(*text);
+  if (!parsed || !parsed.value().isObject())
+  {
+    return std::nullopt;
+  }
+
+  const auto& json = parsed.value();
+  const auto* map = json.find("map");
+  const auto* movedTo = json.find("movedTo");
+  if (!map || !map->isString() || (movedTo && !movedTo->isString()))
+  {
+    return std::nullopt;
+  }
+  return EndedSession{
+    map->asString(), movedTo ? std::optional{movedTo->asString()} : std::nullopt};
+}
+
+CliError sessionEndedError(const EndedSession& endedSession)
+{
+  return CliError{
+    ErrorCode::SessionEnded,
+    endedSession.movedTo
+      ? fmt::format(
+          "the editor saved {} as {}, so this command did not run; run it on {}",
+          endedSession.map,
+          *endedSession.movedTo,
+          *endedSession.movedTo)
+      : fmt::format(
+          "the editor closed {}, so this command did not run; it is no longer open in "
+          "the editor",
+          endedSession.map)};
 }
 
 std::string encodeFrame(const Json& header, const std::string_view payload)
@@ -620,11 +723,21 @@ std::optional<RunResult> runLive(
     return std::nullopt;
   };
 
-  const auto rendezvous = readRendezvous(rendezvousPath(rendezvousDir, *mapPath));
-  if (!rendezvous)
-  {
-    return noSession();
-  }
+  // never falls back to file mode silently while the agent thinks the map is open
+  const auto sessionEndedOrNoSession = [&]() -> std::optional<RunResult> {
+    const auto endedFile = endedSessionPath(rendezvousDir, *mapPath);
+    const auto endedSession = readEndedSession(endedFile);
+    if (!endedSession)
+    {
+      return noSession();
+    }
+
+    // reported once, so the agent's next command runs in file mode
+    auto error = std::error_code{};
+    std::filesystem::remove(endedFile, error);
+    return errorResult(sessionEndedError(*endedSession));
+  };
+
 #ifndef _WIN32
   if (
     const auto dirMode = modeOfOwnDirectory(rendezvousDir); !dirMode || *dirMode != 0700)
@@ -633,6 +746,13 @@ std::optional<RunResult> runLive(
     return noSession();
   }
 #endif
+
+  const auto rendezvous = readRendezvous(rendezvousPath(rendezvousDir, *mapPath));
+  if (!rendezvous || !processIsAlive(rendezvous->pid))
+  {
+    // a dead editor's rendezvous file is left behind by a crash
+    return sessionEndedOrNoSession();
+  }
   if (rendezvous->proto != LinkProto)
   {
     return errorResult(
@@ -644,6 +764,17 @@ std::optional<RunResult> runLive(
           rendezvous->proto,
           LinkProto)});
   }
+  if (!rendezvous->enabled)
+  {
+    return errorResult(
+      CliError{
+        ErrorCode::LinkDisabled,
+        fmt::format(
+          "TrenchBroom has {} open, but its \"Accept AI connections\" preference "
+          "(Preferences > View) was off when the map was opened; ask the mapper to turn "
+          "it on and reopen the map",
+          rendezvous->map)});
+  }
 
   try
   {
@@ -653,7 +784,7 @@ std::optional<RunResult> runLive(
     if (!reply)
     {
       // the editor that wrote the rendezvous file is gone
-      return noSession();
+      return sessionEndedOrNoSession();
     }
     return decodeReply(*reply);
   }

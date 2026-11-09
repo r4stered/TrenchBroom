@@ -26,6 +26,7 @@
 #include <QTimer>
 
 #include "base/Logger.h"
+#include "base/PreferenceManager.h"
 #include "cli/CliError.h"
 #include "cli/FileUtils.h"
 #include "cli/Json.h"
@@ -33,6 +34,7 @@
 #include "cli/Run.h"
 #include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
+#include "prefs/Preferences.h"
 #include "ui/MapDocument.h"
 
 #include "kd/overload.h"
@@ -96,13 +98,16 @@ LiveLinkHost::LiveLinkHost(
 
   m_notifierConnection +=
     m_document.documentWasLoadedNotifier.connect(this, &LiveLinkHost::documentWasLoaded);
+  m_notifierConnection +=
+    m_document.documentWasSavedNotifier.connect(this, &LiveLinkHost::documentWasSaved);
 
+  m_acceptConnections = pref(Preferences::AcceptAiConnections);
   start();
 }
 
 LiveLinkHost::~LiveLinkHost()
 {
-  stop();
+  endSession();
 }
 
 void LiveLinkHost::setBusyTimeout(const std::chrono::milliseconds busyTimeout)
@@ -138,8 +143,34 @@ std::string LiveLinkHost::rev() const
 void LiveLinkHost::documentWasLoaded()
 {
   // a loaded or reloaded map is a new map, so its revs start a new epoch
-  stop();
+  m_acceptConnections = pref(Preferences::AcceptAiConnections);
+  if (hasSessionAt(m_document.map().path()))
+  {
+    // the map is still open under the same path, so the agent can carry on
+    stop();
+  }
+  else
+  {
+    endSession();
+  }
   start();
+}
+
+void LiveLinkHost::documentWasSaved()
+{
+  // the first save of an untitled map, or a save under another path
+  if (const auto& path = m_document.map().path(); !hasSessionAt(path))
+  {
+    endSession(path);
+    start();
+  }
+}
+
+bool LiveLinkHost::hasSessionAt(const std::filesystem::path& path) const
+{
+  // compared by session key, so that another spelling of the same path is the same map
+  return m_rendezvousFile
+         && cli::rendezvousPath(m_rendezvousDir, path) == *m_rendezvousFile;
 }
 
 void LiveLinkHost::start()
@@ -159,36 +190,40 @@ void LiveLinkHost::start()
     return;
   }
 
-  m_rev = std::make_unique<cli::LiveRev>(m_document.map());
-  m_token = randomHex(4);
-
-  m_server = new QLocalServer{this};
-  // restricts the pipe (Windows) or the socket file (macOS, Linux) to the current user
-  m_server->setSocketOptions(QLocalServer::UserAccessOption);
-  const auto name = QString::fromStdString("TrenchBroom-live-" + randomHex(4));
-  if (!m_server->listen(name))
-  {
-    m_document.logger().warn() << "Live link: cannot listen on a local socket: "
-                               << m_server->errorString().toStdString();
-    stop();
-    return;
-  }
-  connect(m_server, &QLocalServer::newConnection, this, &LiveLinkHost::newConnection);
-
   if (const auto dirError = cli::prepareRendezvousDir(m_rendezvousDir))
   {
     m_document.logger().warn() << "Live link: " << *dirError;
-    stop();
     return;
   }
 
-  const auto rendezvousFile = cli::rendezvousPath(m_rendezvousDir, path);
-  const auto rendezvous = cli::Rendezvous{
+  m_rev = std::make_unique<cli::LiveRev>(m_document.map());
+
+  auto rendezvous = cli::Rendezvous{
     .map = path.string(),
-    .endpoint = m_server->fullServerName().toStdString(),
-    .token = m_token,
     .pid = int64_t(QCoreApplication::applicationPid()),
+    .enabled = m_acceptConnections,
   };
+  if (m_acceptConnections)
+  {
+    m_token = randomHex(4);
+    m_server = new QLocalServer{this};
+    // restricts the pipe (Windows) or the socket file (macOS, Linux) to the current user
+    m_server->setSocketOptions(QLocalServer::UserAccessOption);
+    const auto name = QString::fromStdString("TrenchBroom-live-" + randomHex(4));
+    if (!m_server->listen(name))
+    {
+      m_document.logger().warn() << "Live link: cannot listen on a local socket: "
+                                 << m_server->errorString().toStdString();
+      stop();
+      return;
+    }
+    connect(m_server, &QLocalServer::newConnection, this, &LiveLinkHost::newConnection);
+
+    rendezvous.endpoint = m_server->fullServerName().toStdString();
+    rendezvous.token = m_token;
+  }
+
+  const auto rendezvousFile = cli::rendezvousPath(m_rendezvousDir, path);
   if (
     const auto writeError =
       cli::writeFileAtomically(rendezvousFile, cli::encodeRendezvous(rendezvous)))
@@ -199,10 +234,49 @@ void LiveLinkHost::start()
     return;
   }
   m_rendezvousFile = rendezvousFile;
+  m_sessionMap = path;
+
+  // this session replaces the one that ended
+  auto error = std::error_code{};
+  std::filesystem::remove(cli::endedSessionPath(m_rendezvousDir, path), error);
+}
+
+void LiveLinkHost::endSession(std::optional<std::filesystem::path> movedTo)
+{
+  if (m_sessionMap && m_attached)
+  {
+    // written before the session goes away, so that tbcli always finds one of them
+    const auto endedSession = cli::EndedSession{
+      m_sessionMap->string(), movedTo ? std::optional{movedTo->string()} : std::nullopt};
+    const auto endedFile = cli::endedSessionPath(m_rendezvousDir, *m_sessionMap);
+    if (
+      const auto writeError =
+        cli::writeFileAtomically(endedFile, cli::encodeEndedSession(endedSession)))
+    {
+      m_document.logger().warn()
+        << "Live link: cannot write " << endedFile.string() << ": " << *writeError;
+    }
+
+    // the requests that were still waiting will not run
+    const auto refusal = cli::errorResult(cli::sessionEndedError(endedSession));
+    for (const auto& request : m_queue)
+    {
+      if (request->socket)
+      {
+        reply(request->socket, refusal);
+        // the event loop may not run again before the socket is gone
+        request->socket->waitForDisconnected(1000);
+      }
+    }
+  }
+  stop();
 }
 
 void LiveLinkHost::stop()
 {
+  m_sessionMap.reset();
+  m_attached = false;
+
   m_retryTimer->stop();
   m_queue.clear();
   if (m_server)
@@ -253,6 +327,8 @@ void LiveLinkHost::readRequest(QLocalSocket* socket, std::string& buffer)
     std::visit(
       kdl::overload(
         [&](cli::Invocation invocation) {
+          // the session has an agent now, which must learn when it ends
+          m_attached = true;
           m_queue.push_back(
             std::make_unique<Request>(
               socket, std::move(invocation), Clock::now() + m_busyTimeout));

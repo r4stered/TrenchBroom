@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "cli/CliError.h"
 #include "cli/Json.h"
 #include "cli/Run.h"
 
@@ -97,6 +98,12 @@ struct Rendezvous
   std::string token;
   /** The editor's process id. */
   int64_t pid = 0;
+  /**
+   * Whether the editor accepts requests for the map. If the mapper turned off the
+   * "Accept AI connections" preference, the editor still publishes the rendezvous file
+   * so that tbcli refuses to edit the file under it, but doesn't listen.
+   */
+  bool enabled = true;
 
   friend bool operator==(const Rendezvous&, const Rendezvous&) = default;
 };
@@ -105,6 +112,41 @@ std::string encodeRendezvous(const Rendezvous& rendezvous);
 
 /** Reads a rendezvous file, or nothing if it is missing or malformed. */
 std::optional<Rendezvous> readRendezvous(const std::filesystem::path& path);
+
+/**
+ * Whether a process with the given id is running. tbcli treats a rendezvous file whose
+ * editor isn't as left behind by a crash.
+ */
+bool processIsAlive(int64_t pid);
+
+/**
+ * The file in the given directory that tells tbcli that an agent's session on the given
+ * map has ended: the editor writes it when it closes the map, or saves it under another
+ * path, after an agent sent it a request, and tbcli removes it when it reports
+ * `session_ended`. Without it, tbcli could not tell a closed editor from no editor, and
+ * would silently edit the file that the agent thinks is still open.
+ */
+std::filesystem::path endedSessionPath(
+  const std::filesystem::path& rendezvousDir, const std::filesystem::path& mapPath);
+
+/** What the editor leaves behind when it ends a session that an agent used. */
+struct EndedSession
+{
+  /** The map that the session had open. */
+  std::string map;
+  /** The path that the map was saved under, if it was saved under another one. */
+  std::optional<std::string> movedTo;
+
+  friend bool operator==(const EndedSession&, const EndedSession&) = default;
+};
+
+std::string encodeEndedSession(const EndedSession& endedSession);
+
+/** Reads an ended session file, or nothing if it is missing or malformed. */
+std::optional<EndedSession> readEndedSession(const std::filesystem::path& path);
+
+/** The `session_ended` error for a command that the given session did not run. */
+CliError sessionEndedError(const EndedSession& endedSession);
 
 /**
  * One message on the live link: a JSON header and a binary payload.
@@ -175,9 +217,12 @@ std::optional<Frame> exchangeFrames(
  * with LinkMode::Auto when no editor has the map open.
  *
  * Fails with `no_session` if no editor has the map open and mode is LinkMode::Live,
- * and with `proto_mismatch` if the editor speaks another protocol version. On macOS
- * and Linux, a rendezvous directory that isn't private to the current user (see
- * prepareRendezvousDir) holds no sessions.
+ * with `proto_mismatch` if the editor speaks another protocol version, with
+ * `link_disabled` if the editor doesn't accept connections for the map, and, once,
+ * with `session_ended` if an editor ended a session on the map that an agent used (see
+ * endedSessionPath). A rendezvous file whose editor process is dead counts as no
+ * session. On macOS and Linux, a rendezvous directory that isn't private to the current
+ * user (see prepareRendezvousDir) holds no sessions.
  */
 std::optional<RunResult> runLive(
   const std::vector<std::string>& args,

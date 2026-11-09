@@ -21,16 +21,41 @@
 #include "cli/CliError.h"
 #include "cli/LiveLink.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <variant>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 namespace tb::cli
 {
+namespace
+{
+
+/** The pid of this process, which is alive. */
+int64_t livePid()
+{
+#ifdef _WIN32
+  return int64_t(_getpid());
+#else
+  return int64_t(::getpid());
+#endif
+}
+
+/** A pid that no process has: above Linux's pid_max, and Windows pids are smaller. */
+constexpr auto DeadPid = int64_t{0x7ffffffc};
+
+} // namespace
 
 TEST_CASE("LiveLink")
 {
@@ -83,12 +108,50 @@ TEST_CASE("LiveLink")
       std::string{LinkProto}, "C:/maps/a.map", R"(\\.\pipe\tb-1234)", "secret", 4711};
     const auto path = env.writeFile("a.json", encodeRendezvous(rendezvous));
     CHECK(readRendezvous(path) == rendezvous);
+    CHECK(rendezvous.enabled);
+
+    auto disabled = rendezvous;
+    disabled.enabled = false;
+    CHECK(
+      readRendezvous(env.writeFile("disabled.json", encodeRendezvous(disabled)))
+      == disabled);
+
+    // from an editor that predates the preference
+    CHECK(readRendezvous(
+            env.writeFile(
+              "old.json",
+              R"({"proto": "tbcli.link/1", "map": "C:/maps/a.map", "endpoint": "e", )"
+              R"("token": "t", "pid": 1})"))
+            ->enabled);
 
     CHECK(readRendezvous(env.path("missing.json")) == std::nullopt);
     CHECK(readRendezvous(env.writeFile("bad.json", "{")) == std::nullopt);
     CHECK(
       readRendezvous(env.writeFile("partial.json", R"({"proto": "tbcli.link/1"})"))
       == std::nullopt);
+  }
+
+  SECTION("encodeEndedSession and readEndedSession")
+  {
+    const auto closed = EndedSession{"C:/maps/a.map", std::nullopt};
+    CHECK(
+      readEndedSession(env.writeFile("closed.json", encodeEndedSession(closed)))
+      == closed);
+
+    const auto moved = EndedSession{"C:/maps/a.map", "C:/maps/b.map"};
+    CHECK(
+      readEndedSession(env.writeFile("moved.json", encodeEndedSession(moved))) == moved);
+
+    CHECK(readEndedSession(env.path("missing.json")) == std::nullopt);
+    CHECK(readEndedSession(env.writeFile("bad.json", "[]")) == std::nullopt);
+  }
+
+  SECTION("processIsAlive")
+  {
+    CHECK(processIsAlive(livePid()));
+    CHECK(!processIsAlive(DeadPid));
+    CHECK(!processIsAlive(0));
+    CHECK(!processIsAlive(-1));
   }
 
   SECTION("encodeFrame and decodeFrame")
@@ -171,7 +234,11 @@ TEST_CASE("LiveLink")
       env.writeFile(
         rendezvousPath(dir, map),
         encodeRendezvous(
-          {std::string{LinkProto}, arg(map), R"(\\.\pipe\tb-no-such-pipe)", "t", 1}));
+          {std::string{LinkProto},
+           arg(map),
+           R"(\\.\pipe\tb-no-such-pipe)",
+           "t",
+           livePid()}));
       CHECK(runLive(args, {}, LinkMode::Auto, dir) == std::nullopt);
       checkError(*runLive(args, {}, LinkMode::Live, dir), "no_session", 1);
     }
@@ -180,8 +247,66 @@ TEST_CASE("LiveLink")
     {
       env.writeFile(
         rendezvousPath(dir, map),
-        encodeRendezvous({"tbcli.link/0", arg(map), R"(\\.\pipe\tb-x)", "t", 1}));
+        encodeRendezvous({"tbcli.link/0", arg(map), R"(\\.\pipe\tb-x)", "t", livePid()}));
       checkError(*runLive(args, {}, LinkMode::Auto, dir), "proto_mismatch", 1);
+    }
+
+    SECTION("a rendezvous file whose editor is dead counts as no session")
+    {
+      // left behind by a crashed editor, of another protocol version even
+      env.writeFile(
+        rendezvousPath(dir, map),
+        encodeRendezvous({"tbcli.link/0", arg(map), R"(\\.\pipe\tb-x)", "t", DeadPid}));
+      CHECK(runLive(args, {}, LinkMode::Auto, dir) == std::nullopt);
+      checkError(*runLive(args, {}, LinkMode::Live, dir), "no_session", 1);
+    }
+
+    SECTION("a session that ended gives session_ended once, then file mode")
+    {
+      env.writeFile(
+        endedSessionPath(dir, map), encodeEndedSession({arg(map), std::nullopt}));
+      const auto original = env.readFile("simple.map");
+      const auto apply = std::vector<std::string>{"apply", arg(map), "-"};
+
+      const auto ended = runLive(apply, "[]", LinkMode::Auto, dir);
+      REQUIRE(ended.has_value());
+      checkError(*ended, "session_ended", 1);
+      CHECK(env.readFile("simple.map") == original);
+
+      CHECK(runLive(apply, "[]", LinkMode::Auto, dir) == std::nullopt);
+    }
+
+    SECTION("a session that moved to another path names it")
+    {
+      env.writeFile(
+        endedSessionPath(dir, map),
+        encodeEndedSession({arg(map), arg(env.path("moved.map"))}));
+
+      const auto ended = runLive(args, {}, LinkMode::Live, dir);
+      REQUIRE(ended.has_value());
+      checkError(*ended, "session_ended", 1);
+      CHECK_THAT(
+        parseOutput(*ended)["error"]["message"].asString(),
+        Catch::Matchers::ContainsSubstring("moved.map"));
+    }
+
+    SECTION("an editor that does not accept connections gives link_disabled")
+    {
+      auto rendezvous =
+        Rendezvous{std::string{LinkProto}, arg(map), R"(\\.\pipe\tb-x)", "t", livePid()};
+      rendezvous.enabled = false;
+      env.writeFile(rendezvousPath(dir, map), encodeRendezvous(rendezvous));
+      // file mode would fail to parse this
+      env.writeFile("simple.map", "garbage");
+      const auto apply = std::vector<std::string>{"apply", arg(map), "-"};
+
+      const auto disabled = runLive(apply, "[]", LinkMode::Auto, dir);
+      REQUIRE(disabled.has_value());
+      checkError(*disabled, "link_disabled", 1);
+      CHECK_THAT(
+        parseOutput(*disabled)["error"]["message"].asString(),
+        Catch::Matchers::ContainsSubstring("Accept AI connections"));
+      CHECK(env.readFile("simple.map") == "garbage");
     }
 
 #ifndef _WIN32

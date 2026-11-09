@@ -53,10 +53,19 @@ class MapDocument;
  * While the document has a saved map open, the host listens on a local socket that only
  * the current user can reach, under a random name, and publishes a rendezvous file
  * with that name, a random token and the editor's pid in the rendezvous dir, named
- * after the map's path. Each connection carries one request. Requests are served one at
- * a time in the order they arrive, on the main thread. A request waits while a modal
- * dialog is open, a mouse button is held or a transaction is open, and fails with
- * `busy` if that lasts longer than the busy timeout.
+ * after the map's path. A map that was never saved has no session; saving it, or saving
+ * it under another path, starts one under its new path. If the "Accept AI connections"
+ * preference is off when the map opens, the host publishes a rendezvous file that says
+ * so instead of listening.
+ *
+ * When the host ends a session that an agent sent a request to, because the map was
+ * closed or saved under another path, it leaves an ended session file behind so that
+ * the agent's next command fails with `session_ended` instead of editing the file.
+ *
+ * Each connection carries one request. Requests are served one at a time in the order
+ * they arrive, on the main thread. A request waits while a modal dialog is open, a mouse
+ * button is held or a transaction is open, and fails with `busy` if that lasts longer
+ * than the busy timeout.
  */
 class LiveLinkHost : public QObject, public cli::LiveSession
 {
@@ -71,12 +80,15 @@ private:
   MapDocument& m_document;
   std::filesystem::path m_rendezvousDir;
   std::chrono::milliseconds m_busyTimeout = DefaultBusyTimeout;
+  bool m_acceptConnections = true;
 
   QLocalServer* m_server = nullptr;
   QTimer* m_retryTimer = nullptr;
   std::string m_token;
   std::unique_ptr<cli::LiveRev> m_rev;
+  std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
+  bool m_attached = false;
   std::deque<std::unique_ptr<Request>> m_queue;
 
   NotifierConnection m_notifierConnection;
@@ -103,8 +115,15 @@ public:
 
 private:
   void documentWasLoaded();
+  void documentWasSaved();
+  bool hasSessionAt(const std::filesystem::path& path) const;
 
   void start();
+  /**
+   * Ends the session and tells an agent that used it, both with requests that were
+   * still waiting and with commands to come, that the map was closed or moved.
+   */
+  void endSession(std::optional<std::filesystem::path> movedTo = std::nullopt);
   void stop();
 
   void newConnection();

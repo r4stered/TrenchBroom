@@ -187,6 +187,21 @@ QWidget* ViewPreferencePane::createViewPreferences()
                                      "28", "32", "36", "40", "48", "56", "64", "72"});
   m_rendererFontSizeCombo->setValidator(new QIntValidator{1, 96});
 
+  m_acceptAiConnections = new QCheckBox{};
+  m_acceptAiConnections->setToolTip(
+    "Lets AI agents edit the open map through tbcli. With this off, tbcli refuses to "
+    "edit a map that is open in TrenchBroom.");
+
+  auto* acceptAiConnectionsInfo = new QLabel{};
+  acceptAiConnectionsInfo->setText(tr("Applies to maps opened after changing"));
+  setInfoStyle(acceptAiConnectionsInfo);
+  auto* acceptAiConnectionsLayout = new QHBoxLayout{};
+  acceptAiConnectionsLayout->addWidget(m_acceptAiConnections);
+  acceptAiConnectionsLayout->addSpacing(LayoutConstants::NarrowHMargin);
+  acceptAiConnectionsLayout->addWidget(acceptAiConnectionsInfo);
+  acceptAiConnectionsLayout->addStretch();
+  acceptAiConnectionsLayout->setContentsMargins(0, 0, 0, 0);
+
   auto* layout = new FormWithSectionsLayout{};
   layout->setContentsMargins(
     LayoutConstants::DialogOuterMargin,
@@ -214,6 +229,9 @@ QWidget* ViewPreferencePane::createViewPreferences()
 
   layout->addSection("Fonts");
   layout->addRow("Renderer Font Size", m_rendererFontSizeCombo);
+
+  layout->addSection("AI Agents");
+  layout->addRow("Accept AI connections", acceptAiConnectionsLayout);
 
   viewBox->setLayout(layout);
 
@@ -274,6 +292,11 @@ void ViewPreferencePane::bindEvents()
     &QComboBox::currentTextChanged,
     this,
     &ViewPreferencePane::rendererFontSizeChanged);
+  connect(
+    m_acceptAiConnections,
+    &QCheckBox::checkStateChanged,
+    this,
+    &ViewPreferencePane::acceptAiConnectionsChanged);
 }
 
 bool ViewPreferencePane::canResetToDefaults()
@@ -296,6 +319,7 @@ void ViewPreferencePane::doResetToDefaults()
   prefs.resetToDefault(Preferences::Theme);
   prefs.resetToDefault(Preferences::MaterialBrowserIconSize);
   prefs.resetToDefault(Preferences::RendererFontSize);
+  prefs.resetToDefault(Preferences::AcceptAiConnections);
 }
 
 void ViewPreferencePane::updateControls()
@@ -316,6 +340,7 @@ void ViewPreferencePane::updateControls()
     QSignalBlocker{m_materialBrowserIconSizeCombo};
 
   const auto rendererFontSizeBlocker = QSignalBlocker{m_rendererFontSizeCombo};
+  const auto acceptAiConnectionsBlocker = QSignalBlocker{m_acceptAiConnections};
 
   auto& prefs = PreferenceManager::instance();
 
@@ -336,6 +361,8 @@ void ViewPreferencePane::updateControls()
 
   m_showAxes->setChecked(prefs.getPendingValue(Preferences::ShowAxes));
   m_enableMsaa->setChecked(prefs.getPendingValue(Preferences::EnableMSAA));
+  m_acceptAiConnections->setChecked(
+    prefs.getPendingValue(Preferences::AcceptAiConnections));
   m_themeCombo->setCurrentIndex(
     findThemeIndex(QString::fromStdString(prefs.getPendingValue(Preferences::Theme))));
 
@@ -491,6 +518,13 @@ void ViewPreferencePane::rendererFontSizeChanged(const QString& str)
     auto& prefs = PreferenceManager::instance();
     prefs.set(Preferences::RendererFontSize, value);
   }
+}
+
+void ViewPreferencePane::acceptAiConnectionsChanged(const int state)
+{
+  const auto value = state == Qt::Checked;
+  auto& prefs = PreferenceManager::instance();
+  prefs.set(Preferences::AcceptAiConnections, value);
 }
 
 } // namespace tb::ui

@@ -98,6 +98,10 @@ std::string_view toString(const ErrorCode code)
     return "proto_mismatch";
   case ErrorCode::Busy:
     return "busy";
+  case ErrorCode::SessionEnded:
+    return "session_ended";
+  case ErrorCode::LinkDisabled:
+    return "link_disabled";
   case ErrorCode::InternalError:
     return "internal_error";
   }
