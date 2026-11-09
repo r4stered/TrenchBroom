@@ -24,6 +24,7 @@
 #include "cli/Json.h"
 #include "cli/LiveLink.h"
 #include "fs/TestEnvironment.h"
+#include "fs/TestUtils.h"
 #include "mdl/EntityNode.h"
 #include "mdl/LayerNode.h"
 #include "mdl/Map.h"
@@ -296,6 +297,33 @@ TEST_CASE("LiveLinkHost")
     CHECK(map.worldNode().defaultLayer()->childCount() == 2);
     CHECK(logger.messages.size() == 2);
     CHECK_THAT(logger.messages.back(), StartsWith("AI: undo failed: undo_refused"));
+  }
+
+  SECTION("save saves the open map, and reports a failed write without a dialog")
+  {
+    run({"apply", mapArg, "-"}, createBox);
+    REQUIRE(map.modified());
+    logger.messages.clear();
+
+    {
+      const auto readOnly =
+        fs::SetPermissions{mapPath, std::filesystem::perms::owner_read};
+      // a message box, as Ctrl+S opens, would block the request until it is closed
+      checkError(run({"save", mapArg}), "write_failed");
+    }
+    CHECK(map.modified());
+    CHECK(env.loadFile("live.map") == MapText);
+    CHECK_THAT(logger.messages.back(), StartsWith("AI: save failed: write_failed"));
+
+    const auto epoch = host->epoch();
+    const auto saved = parse(run({"save", mapArg}));
+    CHECK(saved["modified"] == cli::Json{false});
+    // saving under the same path keeps the session
+    CHECK(host->epoch() == epoch);
+    CHECK(parse(run({"describe", mapArg}))["session"]["epoch"] == cli::Json{epoch});
+    CHECK(!map.modified());
+    CHECK(env.loadFile("live.map") != MapText);
+    CHECK_THAT(logger.messages.back(), StartsWith("AI: save done (live-"));
   }
 
   SECTION("request and reply payloads are binary-safe")

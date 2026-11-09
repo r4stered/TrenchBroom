@@ -27,6 +27,7 @@
 #include <fstream>
 #include <iterator>
 #include <random>
+#include <system_error>
 
 namespace tb::cli
 {
@@ -46,6 +47,14 @@ std::optional<std::string> readFile(const std::filesystem::path& path)
     return std::nullopt;
   }
   return result;
+}
+
+bool isSameFile(const std::filesystem::path& lhs, const std::filesystem::path& rhs)
+{
+  auto error = std::error_code{};
+  return std::filesystem::equivalent(lhs, rhs, error)
+         || std::filesystem::absolute(lhs).lexically_normal()
+              == std::filesystem::absolute(rhs).lexically_normal();
 }
 
 std::optional<std::string> writeFile(

@@ -166,4 +166,19 @@ Json applyLive(
  */
 Json undoLive(LiveSession& session);
 
+/**
+ * Saves the open map of a live session as the editor's Save does: writes it to the
+ * map's file atomically, after which the map has no unsaved changes. Given an output
+ * path other than the map's file, writes a copy there instead and leaves the map's file
+ * and its unsaved changes alone. A save does not change the map, so the live rev stays
+ * as it was. Returns `{"schema": "tbcli.save/1", "session": "live", "rev", "path",
+ * "modified"}`, with the absolute path written and whether the open map still has
+ * unsaved changes.
+ *
+ * @throw CliError `write_failed` if the file cannot be written, which leaves it as it
+ * was and the map's unsaved changes as they were; `invalid_argument` if the output path
+ * names the map's own file; `busy` if a transaction is open.
+ */
+Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& output);
+
 } // namespace tb::cli

@@ -21,6 +21,7 @@
 #include "FakeEditorHost.h"
 #include "cli/CliError.h"
 #include "cli/Guide.h"
+#include "fs/TestUtils.h"
 #include "mdl/BrushFaceHandle.h"
 #include "mdl/BrushNode.h"
 #include "mdl/Entity.h"
@@ -30,6 +31,7 @@
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/Selection.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 
 #include <memory>
@@ -946,9 +948,13 @@ TEST_CASE("run with a live session")
 
     SECTION("verify takes a handle as its target")
     {
-      const auto byHandle = liveJson({"verify", fixture.map, "--target", light});
+      // the stages hold timings, which differ from run to run
+      const auto byHandle =
+        withoutKeys(liveJson({"verify", fixture.map, "--target", light}), {"stages"});
       CHECK(
-        byHandle == liveJson({"verify", fixture.map, "--target", "layer:0/entity:2"}));
+        byHandle
+        == withoutKeys(
+          liveJson({"verify", fixture.map, "--target", "layer:0/entity:2"}), {"stages"}));
     }
 
     SECTION("a deleted node's handle gives gone, and names the node again after undo")
@@ -1118,9 +1124,107 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("save")
+  {
+    auto& map = editor.map();
+    const auto mapPath = fixture.env.path(fixture.fileName);
+    const auto brushesBefore = liveBrushCount();
+    liveJson({"apply", fixture.map, "-"}, "[" + std::string{CreateBoxOp} + "]");
+    REQUIRE(map.modified());
+    const auto revBefore = editor.rev();
+    // the brushes in a map file, as tbcli reads it
+    const auto fileBrushCount = [&](const std::filesystem::path& path) {
+      return runJson({"describe", arg(path)})["counts"]["brushes"].asNumber();
+    };
+
+    SECTION("writes the open map to its file")
+    {
+      const auto json = liveJson({"save", fixture.map});
+      CHECK(json["schema"] == Json{"tbcli.save/1"});
+      CHECK(json["session"] == Json{"live"});
+      CHECK(json["rev"] == Json{revBefore});
+      CHECK(json["path"] == Json{fixture.map});
+      CHECK(json["modified"] == Json{false});
+
+      CHECK(!map.modified());
+      CHECK(fileBrushCount(mapPath) == brushesBefore + 1);
+      // a save is not a change to the map, so the agent can still undo its batch
+      CHECK(editor.rev() == revBefore);
+      liveJson({"undo", fixture.map});
+      CHECK(liveBrushCount() == brushesBefore);
+    }
+
+    SECTION("--output writes a copy and leaves the map's file and state alone")
+    {
+      const auto copy = fixture.env.path("copy.map");
+      const auto json = liveJson({"save", fixture.map, "--output", arg(copy)});
+      CHECK(json["path"] == Json{arg(copy)});
+      CHECK(json["modified"] == Json{true});
+      CHECK(json["rev"] == Json{revBefore});
+
+      CHECK(fileBrushCount(copy) == brushesBefore + 1);
+      CHECK(fixture.unchanged());
+      CHECK(map.modified());
+      CHECK(map.path() == mapPath);
+
+      const auto other = fixture.env.path("other.map");
+      liveJson({"save", fixture.map, "-o", arg(other)});
+      CHECK(fileBrushCount(other) == brushesBefore + 1);
+      CHECK(fixture.unchanged());
+    }
+
+    SECTION("a failed write gives write_failed and leaves the map modified")
+    {
+      {
+        const auto readOnly =
+          fs::SetPermissions{mapPath, std::filesystem::perms::owner_read};
+        checkError(editor.run({"save", fixture.map}), "write_failed", 1);
+      }
+      CHECK(map.modified());
+      CHECK(fixture.unchanged());
+
+      checkError(
+        editor.run(
+          {"save", fixture.map, "--output", arg(fixture.env.path("missing/copy.map"))}),
+        "write_failed",
+        1);
+      CHECK(map.modified());
+    }
+
+    SECTION("--output cannot name the map's own file")
+    {
+      checkError(
+        editor.run({"save", fixture.map, "--output", fixture.map}),
+        "invalid_argument",
+        2);
+      CHECK(fixture.unchanged());
+      CHECK(map.modified());
+    }
+
+    SECTION("gives busy while a transaction is open")
+    {
+      map.startTransaction("mapper drag", mdl::TransactionScope::LongRunning);
+      checkError(editor.run({"save", fixture.map}), "busy", 1);
+      map.cancelTransaction();
+      CHECK(fixture.unchanged());
+      CHECK(map.modified());
+    }
+
+    SECTION("takes no other options")
+    {
+      checkError(editor.run({"save", fixture.map, "--dry-run"}), "usage", 2);
+      // --output is save's own long form of -o
+      checkError(
+        editor.run({"apply", fixture.map, "-", "--output", "x.map"}, "[]"), "usage", 2);
+      checkError(editor.run({"save", fixture.map, "extra"}), "usage", 2);
+      CHECK(map.modified());
+    }
+  }
+
   SECTION("live-only commands give no_session in file mode")
   {
     checkError(runCli({"undo", fixture.map}), "no_session", 1);
+    checkError(runCli({"save", fixture.map}), "no_session", 1);
     CHECK(fixture.unchanged());
   }
 
@@ -1154,6 +1258,7 @@ TEST_CASE("mutatingCommand")
   CHECK(mutatingCommand({"apply", "x.map", "-"}) == "apply");
   CHECK(mutatingCommand({"--format", "text", "translate", "x.map"}) == "translate");
   CHECK(mutatingCommand({"undo", "x.map"}) == "undo");
+  CHECK(mutatingCommand({"save", "x.map"}) == "save");
   CHECK(mutatingCommand({"describe", "x.map"}) == std::nullopt);
   CHECK(mutatingCommand({"apply", "x.map", "-", "--help"}) == std::nullopt);
   CHECK(mutatingCommand({"apply", "x.map", "--frobnicate"}) == std::nullopt);
@@ -1168,6 +1273,7 @@ TEST_CASE("liveMapArgument")
   CHECK(liveMapArgument({"set_property", "x.map", "--target", "world"}) == cwd / "x.map");
   CHECK(liveMapArgument({"verify", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"undo", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"save", "x.map"}) == cwd / "x.map");
   CHECK(liveMapArgument({"ops"}) == std::nullopt);
   // compiles run in file mode until the editor can send the map's bytes
   CHECK(liveMapArgument({"rooms", "x.map"}) == std::nullopt);
@@ -1249,6 +1355,15 @@ TEST_CASE("forwardableInvocation")
         absolute("Quake.cfg"),
         "--quake-dir",
         absolute("quake")});
+
+    CHECK(
+      forwardableInvocation({"save", "x.map", "--output", "out.map"}, "").args
+      == std::vector<std::string>{
+        "save", absolute("x.map"), "--output", absolute("out.map")});
+    CHECK(
+      forwardableInvocation({"save", "x.map", "--output=out.map"}, "").args
+      == std::vector<std::string>{
+        "save", absolute("x.map"), "--output=" + absolute("out.map")});
   }
 
   SECTION("compilers are made absolute unless they are looked up in PATH")

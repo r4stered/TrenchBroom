@@ -59,8 +59,9 @@ RunResult run(const std::vector<std::string>& args, std::string_view in = {});
  * Like run, but a command that names the session's map runs against the open map
  * instead of loading the file: reads report the live rev, `describe` adds a `session`
  * block `{live, epoch, map}`, and `apply` and the ops edit the open map as one undo
- * step and write nothing (see applyLive), and `undo` undoes the agent's own most recent
- * batch (see undoLive), which fails with `no_session` in run. A command that names
+ * step and write nothing (see applyLive), `undo` undoes the agent's own most recent
+ * batch (see undoLive), and `save` saves the open map or a copy of it (see saveLive);
+ * undo and save fail with `no_session` in run. A command that names
  * another map fails with `no_session`. The editor's configuration is authoritative, so
  * `--game-config` and `--fgd` fail with `invalid_argument`. Relative paths are resolved
  * against the working directory of the caller, so arguments should come from
@@ -72,8 +73,8 @@ RunResult run(
   const std::vector<std::string>& args, std::string_view in, LiveSession& session);
 
 /**
- * The command of the given command line if it edits the map (apply, every op and undo),
- * or nothing if it doesn't or the command line is malformed.
+ * The command of the given command line if it changes the map or its file (apply,
+ * every op, undo and save), or nothing if it doesn't or the command line is malformed.
  */
 std::optional<std::string> mutatingCommand(const std::vector<std::string>& args);
 

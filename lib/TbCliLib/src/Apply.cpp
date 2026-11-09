@@ -557,4 +557,38 @@ Json undoLive(LiveSession& session)
   return result;
 }
 
+Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& output)
+{
+  auto& map = session.map();
+  throwIfBusy(map);
+
+  if (output && isSameFile(*output, map.path()))
+  {
+    throw invalidArgument(
+      "the output file is the map's own file; run tbcli save without -o to save the "
+      "map");
+  }
+
+  // not the editor's own Save, which opens Save As or a message box on failure
+  const auto path = output ? std::filesystem::absolute(*output) : map.path();
+  const auto saved = output ? map.saveTo(path) : map.save();
+  if (saved.is_error())
+  {
+    throw CliError{
+      ErrorCode::WriteFailed,
+      fmt::format(
+        "{} was not saved, and the file is as it was: {}",
+        output ? "the copy" : "the map",
+        std::get<Error>(saved.error()).msg)};
+  }
+
+  auto result = Json::object();
+  result.set("schema", "tbcli.save/1");
+  result.set("session", "live");
+  result.set("rev", session.rev());
+  result.set("path", path.string());
+  result.set("modified", map.modified());
+  return result;
+}
+
 } // namespace tb::cli

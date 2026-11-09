@@ -31,6 +31,12 @@ namespace tb::cli
 std::optional<std::string> readFile(const std::filesystem::path& path);
 
 /**
+ * Whether the two paths name the same file: the same existing file, or the same path
+ * once made absolute and normalized.
+ */
+bool isSameFile(const std::filesystem::path& lhs, const std::filesystem::path& rhs);
+
+/**
  * Writes the given bytes to the given file, replacing it.
  *
  * @return a description of the failure, or nullopt if the file was written

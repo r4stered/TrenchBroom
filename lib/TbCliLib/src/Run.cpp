@@ -80,6 +80,11 @@ commands:
                         must be the most recent change to the map; refused with
                         undo_refused if the mapper changed the map or the
                         selection since your last request
+  save <map> [-o, --output <out.map>]
+                        live sessions only: save the open map to its file, as
+                        the mapper's Save does; with -o, write a copy to
+                        out.map and leave the map's file and its unsaved
+                        changes alone. Only ever save when the mapper asks
   <op> <map> --<arg> <value>...
                         run one op; tbcli <op> --help lists its arguments.
                         An op's target is --target <path>, or
@@ -245,15 +250,15 @@ bool isMutatingCommand(const std::string_view command)
 }
 
 /**
- * Whether the command changes the map: the mutating commands, which take the mutating
- * options, and undo, which takes none.
+ * Whether the command changes the map or its file: the mutating commands, which take
+ * the mutating options, undo, which takes none, and save.
  */
 bool changesMap(const std::string_view command)
 {
-  return isMutatingCommand(command) || command == "undo";
+  return isMutatingCommand(command) || command == "undo" || command == "save";
 }
 
-constexpr auto CommandOptions = std::array<CommandOption, 33>{{
+constexpr auto CommandOptions = std::array<CommandOption, 35>{{
   {"--key-entities", "describe"},
   {"--limit", "query"},
   {"--limit", "verify"},
@@ -285,6 +290,8 @@ constexpr auto CommandOptions = std::array<CommandOption, 33>{{
   {"--expect-rev", {}, AcceptedBy::MutatingCommands},
   {"--dry-run", {}, AcceptedBy::MutatingCommands},
   {"-o", {}, AcceptedBy::MutatingCommands},
+  {"-o", "save"},
+  {"--output", "save"},
   {"--allow-locked", {}, AcceptedBy::MutatingCommands},
   {"--allow-lossy", {}, AcceptedBy::MutatingCommands},
 }};
@@ -656,6 +663,11 @@ Arguments parseArguments(const std::vector<std::string>& args)
       noValue();
       result.applyOptions.dryRun = true;
     }
+    else if (name == "--output")
+    {
+      // save's long form of -o
+      result.applyOptions.output = std::filesystem::path{pathValue()};
+    }
     else if (name == "--allow-locked")
     {
       noValue();
@@ -799,15 +811,6 @@ void checkArguments(
       throw usageError(fmt::format("{} does not accept {}", command, option));
     }
   }
-}
-
-/** Whether the two paths name the same file. */
-bool isSameFile(const std::filesystem::path& lhs, const std::filesystem::path& rhs)
-{
-  auto error = std::error_code{};
-  return std::filesystem::equivalent(lhs, rhs, error)
-         || std::filesystem::absolute(lhs).lexically_normal()
-              == std::filesystem::absolute(rhs).lexically_normal();
 }
 
 /**
@@ -1106,6 +1109,12 @@ CommandResult runCommand(
     checkArguments(arguments, command, {"a map file"});
     auto map = openLiveMapArgument(arguments, logger, session, command);
     return undoLive(*map.session());
+  }
+  if (command == "save")
+  {
+    checkArguments(arguments, command, {"a map file"});
+    auto map = openLiveMapArgument(arguments, logger, session, command);
+    return saveLive(*map.session(), arguments.applyOptions.output);
   }
   if (command == "verify")
   {
