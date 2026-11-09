@@ -78,6 +78,9 @@ constexpr auto MapText = R"(// Game: Quake
 }
 )";
 
+// an em dash in UTF-8, since MSVC reads the source in the system code page
+const auto Dash = std::string{"\xE2\x80\x94"};
+
 /** Collects what the Console would show, without debug messages. */
 class ConsoleLogger : public Logger
 {
@@ -241,8 +244,10 @@ TEST_CASE("LiveLinkHost")
     REQUIRE(map.undoCommandName() != nullptr);
     CHECK(*map.undoCommandName() == "AI: create_box");
 
-    CHECK(logger.messages.size() == 1);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: apply done (live-"));
+    CHECK(
+      logger.messages
+      == std::vector<std::string>{
+        "AI: create_box " + Dash + " 1 created (" + host->rev() + ")"});
 
     // the new brush's handle names it
     const auto& created = applied["ops"][0];
@@ -274,7 +279,198 @@ TEST_CASE("LiveLinkHost")
 
     run({"apply", mapArg, "-"}, R"([{"op": "frobnicate"}])");
     CHECK(logger.messages.size() == 1);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: apply failed: invalid_argument"));
+    CHECK_THAT(
+      logger.messages.back(),
+      StartsWith("AI: apply " + Dash + " failed: invalid_argument: ")
+        && EndsWith("(" + host->rev() + ")"));
+  }
+
+  SECTION("a batch's Console line counts what it created, modified and removed")
+  {
+    const auto created = parse(run({"apply", mapArg, "-"}, R"([
+      {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "x"},
+      {"op": "create_box", "min": [0, 64, 0], "max": [64, 96, 16], "material": "x"}
+    ])"));
+    CHECK(
+      logger.messages.back()
+      == "AI: create_box, create_box " + Dash + " 2 created (" + host->rev() + ")");
+
+    const auto& handles = created["ops"];
+    const auto first = handles[0]["created_handles"][0].asString();
+    const auto second = handles[1]["created_handles"][0].asString();
+    run(
+      {"apply", mapArg, "-"},
+      R"([
+        {"op": "translate", "target": ")"
+        + first + R"(", "delta": [0, 0, 8]},
+        {"op": "set_property", "target": "layer:0/entity:0", "key": "k", "value": "v"},
+        {"op": "delete", "target": ")"
+        + second + R"("}
+      ])");
+    CHECK(
+      logger.messages.back()
+      == "AI: translate, set_property +1 more " + Dash + " 2 modified, 1 removed ("
+           + host->rev() + ")");
+
+    run({"apply", mapArg, "--dry-run", "-"}, createBox);
+    CHECK(
+      logger.messages.back()
+      == "AI: create_box " + Dash + " no changes (" + host->rev() + ")");
+    CHECK(logger.messages.size() == 3);
+  }
+
+  SECTION("a batch refused at a stale rev gets a Console line")
+  {
+    const auto rev0 = host->rev();
+    run({"apply", mapArg, "-"}, createBox);
+    logger.messages.clear();
+
+    checkError(
+      run(
+        {"translate",
+         mapArg,
+         "--target",
+         "layer:0/entity:0",
+         "--delta",
+         "0 0 8",
+         "--expect-rev",
+         rev0}),
+      "stale_rev");
+    CHECK(logger.messages.size() == 1);
+    CHECK_THAT(
+      logger.messages.back(),
+      StartsWith("AI: translate " + Dash + " failed: stale_rev: "));
+  }
+
+  SECTION("the agent's changed nodes flash, its removed nodes don't")
+  {
+    auto flashed = std::vector<std::vector<mdl::Node*>>{};
+    QObject::connect(
+      host.get(), &LiveLinkHost::agentChangedNodes, [&](const auto& nodes) {
+        flashed.push_back(nodes);
+      });
+
+    const auto created = parse(run({"apply", mapArg, "-"}, R"([
+      {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "x"},
+      {"op": "create_box", "min": [0, 64, 0], "max": [64, 96, 16], "material": "x"}
+    ])"));
+    const auto& layer = map.worldNode().defaultLayer()->children();
+    REQUIRE(layer.size() == 3);
+    REQUIRE(flashed.size() == 1);
+    CHECK(flashed[0] == std::vector<mdl::Node*>{layer[1], layer[2]});
+
+    auto* light = layer[0];
+    const auto removed = created["ops"][1]["created_handles"][0].asString();
+    run(
+      {"apply", mapArg, "-"},
+      R"([
+        {"op": "set_property", "target": "layer:0/entity:0", "key": "k", "value": "v"},
+        {"op": "delete", "target": ")"
+        + removed + R"("}
+      ])");
+    REQUIRE(flashed.size() == 2);
+    CHECK(flashed[1] == std::vector<mdl::Node*>{light});
+
+    // reads, failures and saves change nothing to flash
+    run({"describe", mapArg});
+    run({"apply", mapArg, "-"}, R"([{"op": "frobnicate"}])");
+    run({"save", mapArg});
+    CHECK(flashed.size() == 2);
+  }
+
+  SECTION("the indicator shows whether and what the agent is doing")
+  {
+    const auto describe = [](const LiveLinkStatus& status) {
+      switch (status.state)
+      {
+      case LiveLinkStatus::State::Off:
+        return std::string{"off"};
+      case LiveLinkStatus::State::Disabled:
+        return std::string{"disabled"};
+      case LiveLinkStatus::State::Ready:
+        return std::string{"ready"};
+      case LiveLinkStatus::State::Active:
+        return std::string{"active"};
+      case LiveLinkStatus::State::Working:
+        return "working: " + status.workingOn;
+      case LiveLinkStatus::State::Looked:
+        return std::string{"looked"};
+      }
+      return std::string{};
+    };
+    auto states = std::vector<std::string>{};
+    QObject::connect(host.get(), &LiveLinkHost::statusChanged, [&]() {
+      if (
+        const auto state = describe(host->status());
+        states.empty() || states.back() != state)
+      {
+        states.push_back(state);
+      }
+    });
+    const auto stateIs = [&](const std::string& state) {
+      return describe(host->status()) == state;
+    };
+
+    host->setIdleTimeout(1s);
+    host->setLookedDuration(20ms);
+    // every batch counts as a long one
+    host->setWorkingDelay(0ms);
+
+    CHECK(stateIs("ready"));
+    CHECK(host->status().lastRequest == std::nullopt);
+
+    const auto before = std::chrono::system_clock::now();
+    run({"apply", mapArg, "-"}, createBox);
+    CHECK(states == std::vector<std::string>{"active", "working: create_box", "active"});
+    REQUIRE(host->status().lastRequest.has_value());
+    CHECK(host->status().lastRequest->label == "create_box");
+    CHECK(host->status().lastRequest->arrivedAt >= before);
+
+    // back to ready once the agent has been quiet for a while
+    processEventsUntil([&]() { return stateIs("ready"); });
+    CHECK(states.back() == "ready");
+
+    // a read is no work
+    states.clear();
+    host->setWorkingDelay(LiveLinkHost::DefaultWorkingDelay);
+    run({"describe", mapArg});
+    CHECK(states == std::vector<std::string>{"active"});
+    CHECK(host->status().lastRequest->label == "describe");
+
+    // a short batch is no work worth showing either
+    run({"apply", mapArg, "-"}, createBox);
+    CHECK(states == std::vector<std::string>{"active"});
+
+    // looking at the mapper's view shows briefly
+    host->setViewCapturer([&]() {
+      auto framebuffer = QImage{8, 6, QImage::Format_RGB32};
+      framebuffer.fill(Qt::black);
+      return makeViewCapture(
+        framebuffer, gl::PerspectiveCamera{}, 1.0f, mdl::PickResult{});
+    });
+    run({"view", mapArg});
+    processEventsUntil([&]() { return stateIs("ready"); });
+    CHECK(states == std::vector<std::string>{"active", "looked", "active", "ready"});
+
+    // a new session has no agent yet
+    run({"describe", mapArg});
+    REQUIRE(document.reload().is_success());
+    CHECK(stateIs("ready"));
+    CHECK(host->status().lastRequest == std::nullopt);
+  }
+
+  SECTION("the indicator shows when there is no link")
+  {
+    auto untitledFixture = MapDocumentFixture{};
+    auto& untitled = untitledFixture.create(mdl::QuakeFixtureConfig);
+    CHECK(
+      LiveLinkHost{untitled, rendezvousDir}.status().state == LiveLinkStatus::State::Off);
+
+    host.reset();
+    setPref(Preferences::AcceptAiConnections, false);
+    host = std::make_unique<LiveLinkHost>(document, rendezvousDir);
+    PreferenceManager::instance().resetToDefault(Preferences::AcceptAiConnections);
+    CHECK(host->status().state == LiveLinkStatus::State::Disabled);
   }
 
   SECTION("a mapper command right after a batch does not merge into it")
@@ -307,8 +503,10 @@ TEST_CASE("LiveLinkHost")
     CHECK(map.worldNode().defaultLayer()->childCount() == 1);
     REQUIRE(map.redoCommandName() != nullptr);
     CHECK(*map.redoCommandName() == "AI: create_box");
-    CHECK(logger.messages.size() == 1);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: undo done (live-"));
+    CHECK(
+      logger.messages
+      == std::vector<std::string>{
+        "AI: undo create_box " + Dash + " 1 removed (" + host->rev() + ")"});
 
     // the mapper's redo is on top now
     map.redoCommand();
@@ -317,7 +515,8 @@ TEST_CASE("LiveLinkHost")
     CHECK(parse(refused)["error"]["code"] == cli::Json{"undo_refused"});
     CHECK(map.worldNode().defaultLayer()->childCount() == 2);
     CHECK(logger.messages.size() == 2);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: undo failed: undo_refused"));
+    CHECK_THAT(
+      logger.messages.back(), StartsWith("AI: undo " + Dash + " failed: undo_refused: "));
   }
 
   SECTION("changes lists the mapper's edits, undo and redo, and the agent's batches")
@@ -372,7 +571,10 @@ TEST_CASE("LiveLinkHost")
     }
     CHECK(map.modified());
     CHECK(env.loadFile("live.map") == MapText);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: save failed: write_failed"));
+    CHECK_THAT(
+      logger.messages.back(),
+      StartsWith("AI: save " + Dash + " failed: write_failed: ")
+        && EndsWith("(" + host->rev() + ")"));
 
     const auto epoch = host->epoch();
     const auto saved = parse(run({"save", mapArg}));
@@ -382,7 +584,10 @@ TEST_CASE("LiveLinkHost")
     CHECK(parse(run({"describe", mapArg}))["session"]["epoch"] == cli::Json{epoch});
     CHECK(!map.modified());
     CHECK(env.loadFile("live.map") != MapText);
-    CHECK_THAT(logger.messages.back(), StartsWith("AI: save done (live-"));
+    CHECK(
+      logger.messages.back()
+      == "AI: save " + Dash + " saved " + saved["path"].asString() + " (" + host->rev()
+           + ")");
   }
 
   SECTION("view captures the mapper's view with the document's selection")
@@ -660,6 +865,15 @@ TEST_CASE("LiveLinkHost")
 
     checkError(result, "busy");
     CHECK(map.worldNode().defaultLayer()->childCount() == 1);
+    CHECK(logger.messages.size() == 1);
+    CHECK_THAT(
+      logger.messages.back(), StartsWith("AI: create_box " + Dash + " failed: busy: "));
+
+    // a read that waited in vain changes nothing either
+    map.startTransaction("mapper drag", mdl::TransactionScope::LongRunning);
+    checkError(run({"describe", mapArg}), "busy");
+    map.cancelTransaction();
+    CHECK(logger.messages.size() == 1);
   }
 
   SECTION("requests are served in the order they arrive")

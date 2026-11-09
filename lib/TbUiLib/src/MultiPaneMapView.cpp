@@ -127,6 +127,14 @@ void MultiPaneMapView::flashSelection()
   }
 }
 
+void MultiPaneMapView::flashNodes(const std::vector<mdl::Node*>& nodes)
+{
+  for (auto* mapView : m_mapViews)
+  {
+    mapView->flashNodes(nodes);
+  }
+}
+
 void MultiPaneMapView::refreshViews()
 {
   for (auto* mapView : m_mapViews)

@@ -266,6 +266,11 @@ void SwitchableMapViewContainer::flashSelection()
   m_mapView->flashSelection();
 }
 
+void SwitchableMapViewContainer::flashNodes(const std::vector<mdl::Node*>& nodes)
+{
+  m_mapView->flashNodes(nodes);
+}
+
 void SwitchableMapViewContainer::refreshViews()
 {
   m_mapView->refreshViews();

@@ -2333,6 +2333,31 @@ TEST_CASE("mutatingCommand")
   CHECK(mutatingCommand({}) == std::nullopt);
 }
 
+TEST_CASE("requestLabel")
+{
+  const auto batch = std::string{R"([
+    {"op": "create_box", "min": [0, 0, 0], "max": [8, 8, 8], "material": "x"},
+    {"op": "set_property", "target": "world", "key": "k", "value": "v"},
+    {"op": "set_property", "target": "world", "key": "k", "value": "w"},
+    {"op": "delete", "target": "layer:0/brush:0"}
+  ])"};
+  CHECK(
+    requestLabel({"apply", "x.map", "-"}, batch) == "create_box, set_property +2 more");
+  CHECK(
+    requestLabel({"apply", "x.map", "-"}, R"([{"op": "delete", "target": "world"}])")
+    == "delete");
+  CHECK(requestLabel({"apply", "x.map", "-"}, "[]") == "empty batch");
+  // a batch that can't be read still names the command
+  CHECK(requestLabel({"apply", "x.map", "-"}, "{") == "apply");
+  CHECK(requestLabel({"apply", "x.map", "-"}, R"([{"op": "frobnicate"}])") == "apply");
+  CHECK(requestLabel({"translate", "x.map", "--target", "world"}, {}) == "translate");
+  CHECK(requestLabel({"--format", "text", "view", "x.map", "--top"}, {}) == "view");
+  CHECK(requestLabel({"undo", "x.map"}, {}) == "undo");
+  // a malformed command line names no command
+  CHECK(requestLabel({"describe", "x.map", "--frobnicate"}, {}) == "tbcli");
+  CHECK(requestLabel({}, {}) == "tbcli");
+}
+
 TEST_CASE("liveMapArgument")
 {
   const auto cwd = std::filesystem::current_path();

@@ -32,16 +32,32 @@ class MapRenderer;
 
 namespace ui
 {
-class FlashSelectionAnimation : public Animation
+/** What a FlashAnimation flashes. */
+enum class Flashed
+{
+  /** The selection, by whitening the selection colors. */
+  Selection,
+  /**
+   * The nodes that were given to MapRenderer::flashNodes, by tinting them with the
+   * selection colors. They are cleared when the animation ends.
+   */
+  Nodes,
+};
+
+/** Flashes the selection or the given nodes in a map view, without moving its camera. */
+class FlashAnimation : public Animation
 {
 private:
-  static const Type AnimationType;
+  static const Type SelectionAnimationType;
+  static const Type NodesAnimationType;
 
   render::MapRenderer& m_renderer;
   QWidget* m_view;
+  Flashed m_flashed;
 
 public:
-  FlashSelectionAnimation(render::MapRenderer& renderer, QWidget* view, double duration);
+  FlashAnimation(
+    render::MapRenderer& renderer, QWidget* view, double duration, Flashed flashed);
 
 private:
   void doUpdate(double progress) override;

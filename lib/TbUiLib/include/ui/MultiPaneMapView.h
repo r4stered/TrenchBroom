@@ -65,6 +65,7 @@ public: // implement MapView interface
   void moveCameraToCurrentTracePoint() override;
   bool cancelMouseDrag() override;
   void flashSelection() override;
+  void flashNodes(const std::vector<mdl::Node*>& nodes) override;
   void refreshViews() override;
 
 public: // implement MapViewContainer interface

@@ -20,6 +20,7 @@
 #pragma once
 
 #include "cli/Json.h"
+#include "cli/LiveSession.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -31,12 +32,12 @@
 namespace tb::mdl
 {
 class Map;
+class Node;
 } // namespace tb::mdl
 
 namespace tb::cli
 {
 
-class LiveSession;
 class NodeHandleTable;
 struct LoadedMap;
 struct Op;
@@ -126,8 +127,14 @@ Json apply(
   const VerifyConfig& verifyConfig);
 
 /**
+ * The names of a batch's first two ops, and how many more it has:
+ * `<op1>, <op2> +N more`, or `empty batch`.
+ */
+std::string batchLabel(const std::vector<Op>& ops);
+
+/**
  * The undo step name of a batch that an agent runs in a live session:
- * `AI: <op1>, <op2> +N more`.
+ * `AI: <op1>, <op2> +N more`, from batchLabel.
  */
 std::string liveUndoName(const std::vector<Op>& ops);
 
@@ -192,6 +199,23 @@ Json undoLive(LiveSession& session);
  * names the map's own file; `busy` if a transaction is open.
  */
 Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& output);
+
+/** How a node changed in a live session since some rev, as changeSummary lists it. */
+struct NodeChange
+{
+  /** Whether the node came, went or stayed. */
+  ChangeKind kind = ChangeKind::Modified;
+  /** The node, unless it was removed. */
+  mdl::Node* node = nullptr;
+  /** The node's latest change. */
+  Change change;
+};
+
+/**
+ * The nodes that changed in a live session after the given counter of its rev, as
+ * changeSummary lists them.
+ */
+std::vector<NodeChange> summarizeChanges(LiveSession& session, uint64_t since);
 
 /**
  * The nodes that changed in a live session after the given counter of its rev, as far

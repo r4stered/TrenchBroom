@@ -22,11 +22,18 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <vector>
+
 namespace tb
 {
 namespace gl
 {
 class Camera;
+}
+
+namespace mdl
+{
+class Node;
 }
 
 namespace ui
@@ -64,6 +71,8 @@ public:
   virtual bool cancelMouseDrag() = 0;
 
   virtual void flashSelection() = 0;
+  /** Flashes the given nodes, without moving the camera. */
+  virtual void flashNodes(const std::vector<mdl::Node*>& nodes) = 0;
 
   /**
    * If the parent of this view is a CyclingMapView, cycle to the

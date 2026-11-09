@@ -314,6 +314,7 @@ public: // implement MapView interface
   MapViewBase* firstMapViewBase() override;
   bool cancelMouseDrag() override;
   void flashSelection() override;
+  void flashNodes(const std::vector<mdl::Node*>& nodes) override;
   void refreshViews() override;
 
 protected: // RenderView overrides

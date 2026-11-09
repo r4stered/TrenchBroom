@@ -96,6 +96,7 @@
 #include "ui/Inspector.h"
 #include "ui/LaunchGameEngineDialog.h"
 #include "ui/LiveLinkHost.h"
+#include "ui/LiveLinkStatusWidget.h"
 #include "ui/MapDocument.h"
 #include "ui/MapView2D.h"
 #include "ui/MapViewBase.h"
@@ -215,6 +216,14 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   m_liveLinkHost->setAgentViewRenderer([this](const cli::CameraPose& pose) {
     return renderMapOffscreen(m_appController, *m_document, pose);
   });
+  // what the agent is doing, permanently on the right
+  statusBar()->addPermanentWidget(new LiveLinkStatusWidget{*m_liveLinkHost});
+  // what the agent changed, without moving the mapper's camera
+  connect(
+    m_liveLinkHost,
+    &LiveLinkHost::agentChangedNodes,
+    this,
+    [this](const std::vector<mdl::Node*>& nodes) { m_mapView->flashNodes(nodes); });
 
   restoreWidgetGeometry(this);
   restoreWidgetState(this);

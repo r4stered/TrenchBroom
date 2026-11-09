@@ -27,12 +27,14 @@
 #include "cli/View.h"
 
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 class QLocalServer;
 class QLocalSocket;
@@ -44,9 +46,50 @@ struct Invocation;
 struct RunResult;
 } // namespace tb::cli
 
+namespace tb::mdl
+{
+class Node;
+} // namespace tb::mdl
+
 namespace tb::ui
 {
 class MapDocument;
+
+/** What the mapper sees of a live link: whether and what an agent is doing. */
+struct LiveLinkStatus
+{
+  enum class State
+  {
+    /** The map has no session, such as when it was never saved. */
+    Off,
+    /** The "Accept AI connections" preference was off when the map was opened. */
+    Disabled,
+    /** Agents can connect, but none has sent a request lately. */
+    Ready,
+    /** An agent sent a request lately. */
+    Active,
+    /** An agent's batch is taking a while. */
+    Working,
+    /** An agent just looked at the map. */
+    Looked,
+  };
+
+  /** A request that an agent sent. */
+  struct Request
+  {
+    /** What the request does, see cli::requestLabel. */
+    std::string label;
+    std::chrono::system_clock::time_point arrivedAt;
+
+    bool operator==(const Request&) const = default;
+  };
+
+  State state = State::Off;
+  /** While working, the label of the request that the agent is working on. */
+  std::string workingOn;
+  /** The agent's last request in this session, if it sent one. */
+  std::optional<Request> lastRequest;
+};
 
 /**
  * The editor host of a live session: lets tbcli run commands against the map that a
@@ -77,6 +120,12 @@ class MapDocument;
  * The mapper can show the agent a view, which waits for the agent's next `tbcli view`,
  * even if no agent has connected yet. Only the latest one is kept, and it is dropped
  * when the session ends.
+ *
+ * The host tells the mapper what the agent does: its status says whether an agent sent
+ * a request lately, is working on a long batch or just looked at the map; every
+ * request that changes the map or its file gets a Console line; and after each one, the
+ * host names the nodes that it created or modified, so that the map views can flash
+ * them.
  */
 class LiveLinkHost : public QObject, public cli::LiveSession
 {
@@ -84,6 +133,9 @@ class LiveLinkHost : public QObject, public cli::LiveSession
 public:
   static constexpr auto DefaultBusyTimeout = std::chrono::milliseconds{60'000};
   static constexpr auto BusyRetryInterval = std::chrono::milliseconds{100};
+  static constexpr auto DefaultIdleTimeout = std::chrono::milliseconds{120'000};
+  static constexpr auto DefaultLookedDuration = std::chrono::milliseconds{2'000};
+  static constexpr auto DefaultWorkingDelay = std::chrono::milliseconds{500};
 
   /** Captures the map view that the mapper last focused. */
   using ViewCapturer = std::function<cli::ViewCapture()>;
@@ -127,6 +179,14 @@ private:
   bool m_attached = false;
   std::deque<std::unique_ptr<Request>> m_queue;
 
+  std::chrono::milliseconds m_idleTimeout = DefaultIdleTimeout;
+  std::chrono::milliseconds m_lookedDuration = DefaultLookedDuration;
+  std::chrono::milliseconds m_workingDelay = DefaultWorkingDelay;
+  QTimer* m_idleTimer = nullptr;
+  QTimer* m_lookedTimer = nullptr;
+  std::optional<std::string> m_working;
+  std::optional<LiveLinkStatus::Request> m_lastRequest;
+
   NotifierConnection m_notifierConnection;
 
 public:
@@ -138,6 +198,18 @@ public:
 
   /** How long a request may wait for the mapper before it fails with `busy`. */
   void setBusyTimeout(std::chrono::milliseconds busyTimeout);
+
+  /** How long after the agent's last request the status stops showing it as active. */
+  void setIdleTimeout(std::chrono::milliseconds idleTimeout);
+
+  /** How long the status shows that the agent looked at the map. */
+  void setLookedDuration(std::chrono::milliseconds lookedDuration);
+
+  /** How long a batch must run before the status shows the agent as working. */
+  void setWorkingDelay(std::chrono::milliseconds workingDelay);
+
+  /** What the mapper sees of the link now. */
+  LiveLinkStatus status() const;
 
   /** Sets how to capture the mapper's view; without one, `view` fails. */
   void setViewCapturer(ViewCapturer viewCapturer);
@@ -169,6 +241,16 @@ public:
   const cli::ShownView* shownView() const override;
   std::optional<cli::ShownView> takeShownView() override;
 
+signals:
+  /**
+   * The status changed. While a batch runs, this is sent from within it, so a widget
+   * that shows the status must repaint at once.
+   */
+  void statusChanged();
+
+  /** A request of the agent created or modified the given nodes, which are in the map. */
+  void agentChangedNodes(const std::vector<mdl::Node*>& nodes);
+
 private:
   void documentWasLoaded();
   void documentWasSaved();
@@ -186,7 +268,16 @@ private:
   void readRequest(QLocalSocket* socket, std::string& buffer);
   void serveQueue();
   bool isMapperBusy() const;
-  cli::RunResult serve(const cli::Invocation& invocation);
+  cli::RunResult serve(const cli::Invocation& invocation, const std::string& label);
+  /**
+   * Tells the mapper what a request did that changes the map or its file with the given
+   * command (see cli::mutatingCommand).
+   */
+  void report(
+    const std::string& command,
+    std::string label,
+    const cli::RunResult& result,
+    uint64_t since);
   void reply(QLocalSocket* socket, const cli::RunResult& result);
 };
 

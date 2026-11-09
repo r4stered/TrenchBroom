@@ -1557,6 +1557,28 @@ std::optional<std::string> mutatingCommand(const std::vector<std::string>& args)
   return changesMap(command) ? std::optional{command} : std::nullopt;
 }
 
+std::string requestLabel(const std::vector<std::string>& args, const std::string_view in)
+{
+  const auto arguments = tryParseArguments(args);
+  if (!arguments || arguments->positionals.empty())
+  {
+    return "tbcli";
+  }
+  const auto& positionals = arguments->positionals;
+  if (positionals[0] == "apply" && positionals.size() == 3 && positionals[2] == "-")
+  {
+    try
+    {
+      return batchLabel(parseBatch(readBatch("-", in)));
+    }
+    catch (const CliError&)
+    {
+      // the batch fails to run as well, and its error says why
+    }
+  }
+  return positionals[0];
+}
+
 std::optional<std::filesystem::path> liveMapArgument(const std::vector<std::string>& args)
 {
   const auto arguments = tryParseArguments(args);

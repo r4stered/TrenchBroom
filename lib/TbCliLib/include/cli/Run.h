@@ -136,6 +136,13 @@ RunResult runOnEject(
 std::optional<std::string> mutatingCommand(const std::vector<std::string>& args);
 
 /**
+ * What the editor calls a request when it tells the mapper about it: the names of the
+ * ops of an `apply` batch read from stdin, as batchLabel gives them, or else the
+ * command, or `tbcli` if the command line is malformed.
+ */
+std::string requestLabel(const std::vector<std::string>& args, std::string_view in);
+
+/**
  * The absolute path of the map that the given command line runs against, if its
  * command takes one, can run in a live session and the command line is well-formed.
  */

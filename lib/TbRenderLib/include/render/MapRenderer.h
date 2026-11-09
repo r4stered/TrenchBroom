@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tb
@@ -63,6 +64,9 @@ private:
   std::unique_ptr<ObjectRenderer> m_defaultRenderer;
   std::unique_ptr<ObjectRenderer> m_selectionRenderer;
   std::unique_ptr<ObjectRenderer> m_lockedRenderer;
+  /** Renders the flashed nodes over the others. */
+  std::unique_ptr<ObjectRenderer> m_flashRenderer;
+  std::unordered_set<mdl::Node*> m_flashedNodes;
   std::unique_ptr<EntityDecalRenderer> m_entityDecalRenderer;
   std::unique_ptr<EntityLinkRenderer> m_entityLinkRenderer;
   std::unique_ptr<GroupLinkRenderer> m_groupLinkRenderer;
@@ -89,6 +93,21 @@ public: // color config
   void overrideSelectionColors(const Color& color, float mix);
   void restoreSelectionColors();
 
+public: // flashing nodes
+  /**
+   * Renders the given nodes, and the nodes below the groups and entities among them,
+   * over the others until clearFlashedNodes, tinted towards the selection colors as
+   * setFlashIntensity says. Replaces the nodes flashed before. Worlds and layers are
+   * left out, since they would flash the whole map.
+   */
+  void flashNodes(const std::vector<mdl::Node*>& nodes);
+  /**
+   * How much the flashed nodes look selected: not at all at 0, as selected nodes do at
+   * 1.
+   */
+  void setFlashIntensity(float intensity);
+  void clearFlashedNodes();
+
 public: // rendering
   void render(RenderContext& renderContext, RenderBatch& renderBatch);
 
@@ -100,6 +119,8 @@ private:
   void renderSelectionTransparent(RenderContext& renderContext, RenderBatch& renderBatch);
   void renderLockedOpaque(RenderContext& renderContext, RenderBatch& renderBatch);
   void renderLockedTransparent(RenderContext& renderContext, RenderBatch& renderBatch);
+  void renderFlashedOpaque(RenderContext& renderContext, RenderBatch& renderBatch);
+  void renderFlashedTransparent(RenderContext& renderContext, RenderBatch& renderBatch);
   void renderEntityDecals(RenderContext& renderContext, RenderBatch& renderBatch);
   void renderEntityLinks(RenderContext& renderContext, RenderBatch& renderBatch);
   void renderGroupLinks(RenderContext& renderContext, RenderBatch& renderBatch);
@@ -108,6 +129,7 @@ private:
   void setupDefaultRenderer(ObjectRenderer& renderer);
   void setupSelectionRenderer(ObjectRenderer& renderer);
   void setupLockedRenderer(ObjectRenderer& renderer);
+  void setupFlashRenderer(ObjectRenderer& renderer);
 
   static int determineDesiredRenderers(mdl::Node& node);
   void updateAndInvalidateNode(mdl::Node& node);

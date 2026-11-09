@@ -536,13 +536,13 @@ Json apply(
   return result;
 }
 
-std::string liveUndoName(const std::vector<Op>& ops)
+std::string batchLabel(const std::vector<Op>& ops)
 {
   if (ops.empty())
   {
-    return "AI: empty batch";
+    return "empty batch";
   }
-  auto result = fmt::format("AI: {}", ops[0].def->name);
+  auto result = std::string{ops[0].def->name};
   if (ops.size() > 1)
   {
     result += fmt::format(", {}", ops[1].def->name);
@@ -552,6 +552,11 @@ std::string liveUndoName(const std::vector<Op>& ops)
     result += fmt::format(" +{} more", ops.size() - 2);
   }
   return result;
+}
+
+std::string liveUndoName(const std::vector<Op>& ops)
+{
+  return "AI: " + batchLabel(ops);
 }
 
 Json applyLive(
@@ -730,9 +735,9 @@ Json saveLive(LiveSession& session, const std::optional<std::filesystem::path>& 
   return result;
 }
 
-Json changeSummary(LiveSession& session, const uint64_t since)
+std::vector<NodeChange> summarizeChanges(LiveSession& session, const uint64_t since)
 {
-  const auto changes = session.changeLog().changesSince(since);
+  auto changes = session.changeLog().changesSince(since);
 
   // whether each node was in the map at `since`, and its latest change
   auto wasInMap = std::unordered_map<uint64_t, bool>{};
@@ -744,28 +749,37 @@ Json changeSummary(LiveSession& session, const uint64_t since)
   }
 
   auto& handles = session.handles();
-  auto result = Json::array();
-  for (const auto& change : changes)
+  auto result = std::vector<NodeChange>{};
+  for (auto& change : changes)
   {
     if (latest[change.serialNumber] != &change)
     {
       continue;
     }
 
-    const auto* node = handles.findNode(change.serialNumber);
+    auto* node = handles.findNode(change.serialNumber);
     const auto wasThere = wasInMap[change.serialNumber];
     if (!wasThere && !node)
     {
       continue;
     }
 
+    const auto kind = !wasThere ? ChangeKind::Created
+                      : node    ? ChangeKind::Modified
+                                : ChangeKind::Removed;
+    result.push_back(NodeChange{kind, node, std::move(change)});
+  }
+  return result;
+}
+
+Json changeSummary(LiveSession& session, const uint64_t since)
+{
+  auto& handles = session.handles();
+  auto result = Json::array();
+  for (const auto& [kind, node, change] : summarizeChanges(session, since))
+  {
     auto entry = Json::object();
-    entry.set(
-      "kind",
-      toString(
-        !wasThere ? ChangeKind::Created
-        : node    ? ChangeKind::Modified
-                  : ChangeKind::Removed));
+    entry.set("kind", toString(kind));
     if (node)
     {
       entry.set("path", nodePath(*node));

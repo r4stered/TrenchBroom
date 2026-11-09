@@ -69,7 +69,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FixedWidthFont.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FlagsEditor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FlagsPopupEditor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/FlashSelectionAnimation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/FlashAnimation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FlyModeHelper.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FormWithSectionsLayout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/FourPaneMapView.cpp
@@ -100,6 +100,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LayerListBox.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LimitedKeySequenceEdit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveLinkHost.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveLinkStatusWidget.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapDocumentActionCache.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapInspector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapRendering.cpp
@@ -259,7 +260,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FixedWidthFont.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FlagsEditor.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FlagsPopupEditor.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FlashSelectionAnimation.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FlashAnimation.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FlyModeHelper.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FormWithSectionsLayout.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/FourPaneMapView.h
@@ -290,6 +291,7 @@ target_sources(TbUiLib
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LayerListBox.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LimitedKeySequenceEdit.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LiveLinkHost.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/LiveLinkStatusWidget.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapDocumentActionCache.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapInspector.h
     ${CMAKE_CURRENT_SOURCE_DIR}/include/ui/MapRendering.h

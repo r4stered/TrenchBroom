@@ -175,6 +175,11 @@ void CyclingMapView::flashSelection()
   m_currentMapView->flashSelection();
 }
 
+void CyclingMapView::flashNodes(const std::vector<mdl::Node*>& nodes)
+{
+  m_currentMapView->flashNodes(nodes);
+}
+
 void CyclingMapView::refreshViews()
 {
   for (auto* mapView : m_mapViews)

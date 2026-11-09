@@ -78,7 +78,7 @@
 #include "ui/AnimationManager.h"
 #include "ui/AppController.h"
 #include "ui/EnableDisableTagCallback.h"
-#include "ui/FlashSelectionAnimation.h"
+#include "ui/FlashAnimation.h"
 #include "ui/MapDocument.h"
 #include "ui/MapRendering.h"
 #include "ui/MapViewActivationTracker.h"
@@ -959,8 +959,16 @@ bool MapViewBase::cancelMouseDrag()
 
 void MapViewBase::flashSelection()
 {
+  auto animation = std::make_unique<FlashAnimation>(
+    m_document.mapRenderer(), this, 300, Flashed::Selection);
+  m_animationManager->runAnimation(std::move(animation), true);
+}
+
+void MapViewBase::flashNodes(const std::vector<mdl::Node*>& nodes)
+{
+  m_document.mapRenderer().flashNodes(nodes);
   auto animation =
-    std::make_unique<FlashSelectionAnimation>(m_document.mapRenderer(), this, 300);
+    std::make_unique<FlashAnimation>(m_document.mapRenderer(), this, 300, Flashed::Nodes);
   m_animationManager->runAnimation(std::move(animation), true);
 }
 

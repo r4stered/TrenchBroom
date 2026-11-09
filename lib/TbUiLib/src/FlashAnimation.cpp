@@ -17,7 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include "ui/FlashSelectionAnimation.h"
+#include "ui/FlashAnimation.h"
 
 #include <QWidget>
 
@@ -28,17 +28,26 @@
 
 namespace tb::ui
 {
-const Animation::Type FlashSelectionAnimation::AnimationType = Animation::freeType();
+// flashing the selection and flashing nodes don't replace each other
+const Animation::Type FlashAnimation::SelectionAnimationType = Animation::freeType();
+const Animation::Type FlashAnimation::NodesAnimationType = Animation::freeType();
 
-FlashSelectionAnimation::FlashSelectionAnimation(
-  render::MapRenderer& renderer, QWidget* view, const double duration)
-  : Animation{AnimationType, Curve::EaseInEaseOut, duration}
+FlashAnimation::FlashAnimation(
+  render::MapRenderer& renderer,
+  QWidget* view,
+  const double duration,
+  const Flashed flashed)
+  : Animation{
+      flashed == Flashed::Selection ? SelectionAnimationType : NodesAnimationType,
+      Curve::EaseInEaseOut,
+      duration}
   , m_renderer{renderer}
   , m_view{view}
+  , m_flashed{flashed}
 {
 }
 
-void FlashSelectionAnimation::doUpdate(const double progress)
+void FlashAnimation::doUpdate(const double progress)
 {
   static constexpr auto flashCount = 2.0;
   static constexpr auto white = RgbaF{1.0f, 1.0f, 1.0f, 1.0f};
@@ -50,11 +59,22 @@ void FlashSelectionAnimation::doUpdate(const double progress)
     // factor ranges from 0 to 1 and then back to 0
     const auto factor =
       flashProgress < 0.5 ? 2.0 * flashProgress : 1.0 - 2.0 * (flashProgress - 0.5);
-    m_renderer.overrideSelectionColors(white, float(factor * 0.8));
+    if (m_flashed == Flashed::Selection)
+    {
+      m_renderer.overrideSelectionColors(white, float(factor * 0.8));
+    }
+    else
+    {
+      m_renderer.setFlashIntensity(float(factor));
+    }
+  }
+  else if (m_flashed == Flashed::Selection)
+  {
+    m_renderer.restoreSelectionColors();
   }
   else
   {
-    m_renderer.restoreSelectionColors();
+    m_renderer.clearFlashedNodes();
   }
 
   m_view->update();

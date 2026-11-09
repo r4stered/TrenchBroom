@@ -199,6 +199,8 @@ MapRenderer::MapRenderer(mdl::Map& map)
   , m_defaultRenderer{createDefaultRenderer(m_map)}
   , m_selectionRenderer{createSelectionRenderer(m_map)}
   , m_lockedRenderer{createLockRenderer(m_map)}
+  // renders every visible face of the flashed nodes, as the locked renderer does
+  , m_flashRenderer{createLockRenderer(m_map)}
   , m_entityDecalRenderer{createEntityDecalRenderer(m_map)}
   , m_entityLinkRenderer{std::make_unique<EntityLinkRenderer>(m_map)}
   , m_groupLinkRenderer{std::make_unique<GroupLinkRenderer>(m_map)}
@@ -230,6 +232,55 @@ void MapRenderer::restoreSelectionColors()
   setupSelectionRenderer(*m_selectionRenderer);
 }
 
+void MapRenderer::flashNodes(const std::vector<mdl::Node*>& nodes)
+{
+  clearFlashedNodes();
+
+  const auto flash = [&](mdl::Node& node) {
+    if (m_flashedNodes.insert(&node).second)
+    {
+      m_flashRenderer->addNode(node);
+    }
+  };
+  for (auto* node : nodes)
+  {
+    node->accept(kdl::overload(
+      [](mdl::WorldNode&) {},
+      [](mdl::LayerNode&) {},
+      [&](auto&& thisLambda, mdl::GroupNode& groupNode) {
+        flash(groupNode);
+        groupNode.visitChildren(thisLambda);
+      },
+      [&](auto&& thisLambda, mdl::EntityNode& entityNode) {
+        flash(entityNode);
+        entityNode.visitChildren(thisLambda);
+      },
+      [&](mdl::BrushNode& brushNode) { flash(brushNode); },
+      [&](mdl::PatchNode& patchNode) { flash(patchNode); }));
+  }
+  setFlashIntensity(0.0f);
+}
+
+void MapRenderer::setFlashIntensity(const float intensity)
+{
+  const auto white = RgbaF{1.0f, 1.0f, 1.0f, 1.0f};
+  const auto edgeColor = mixColors(
+    pref(Preferences::EdgeColor).to<RgbaF>(),
+    pref(Preferences::SelectedEdgeColor).to<RgbaF>(),
+    intensity);
+  m_flashRenderer->setTintColor(
+    mixColors(white, pref(Preferences::SelectedFaceColor).to<RgbaF>(), intensity));
+  m_flashRenderer->setBrushEdgeColor(edgeColor);
+  m_flashRenderer->setEntityBoundsColor(edgeColor);
+  m_flashRenderer->setGroupBoundsColor(edgeColor);
+}
+
+void MapRenderer::clearFlashedNodes()
+{
+  m_flashRenderer->clear();
+  m_flashedNodes.clear();
+}
+
 void MapRenderer::render(RenderContext& renderContext, RenderBatch& renderBatch)
 {
   setupGL(renderBatch);
@@ -240,10 +291,12 @@ void MapRenderer::render(RenderContext& renderContext, RenderBatch& renderBatch)
   renderDefaultOpaque(renderContext, renderBatch);
   renderLockedOpaque(renderContext, renderBatch);
   renderSelectionOpaque(renderContext, renderBatch);
+  renderFlashedOpaque(renderContext, renderBatch);
 
   renderDefaultTransparent(renderContext, renderBatch);
   renderLockedTransparent(renderContext, renderBatch);
   renderSelectionTransparent(renderContext, renderBatch);
+  renderFlashedTransparent(renderContext, renderBatch);
 }
 
 class SetupGL : public Renderable
@@ -311,6 +364,24 @@ void MapRenderer::renderLockedTransparent(
   m_lockedRenderer->renderTransparent(renderContext, renderBatch);
 }
 
+void MapRenderer::renderFlashedOpaque(
+  RenderContext& renderContext, RenderBatch& renderBatch)
+{
+  if (!m_flashedNodes.empty())
+  {
+    m_flashRenderer->renderOpaque(renderContext, renderBatch);
+  }
+}
+
+void MapRenderer::renderFlashedTransparent(
+  RenderContext& renderContext, RenderBatch& renderBatch)
+{
+  if (!m_flashedNodes.empty())
+  {
+    m_flashRenderer->renderTransparent(renderContext, renderBatch);
+  }
+}
+
 void MapRenderer::renderEntityDecals(
   RenderContext& renderContext, RenderBatch& renderBatch)
 {
@@ -337,6 +408,8 @@ void MapRenderer::setupRenderers()
   setupDefaultRenderer(*m_defaultRenderer);
   setupSelectionRenderer(*m_selectionRenderer);
   setupLockedRenderer(*m_lockedRenderer);
+  setupFlashRenderer(*m_flashRenderer);
+  setFlashIntensity(0.0f);
 }
 
 void MapRenderer::setupDefaultRenderer(ObjectRenderer& renderer)
@@ -399,6 +472,20 @@ void MapRenderer::setupLockedRenderer(ObjectRenderer& renderer)
 
   renderer.setBrushFaceColor(pref(Preferences::FaceColor));
   renderer.setBrushEdgeColor(pref(Preferences::LockedEdgeColor));
+}
+
+void MapRenderer::setupFlashRenderer(ObjectRenderer& renderer)
+{
+  // the default renderer shows the nodes' overlays already
+  renderer.setShowOverlays(false);
+  renderer.setShowBrushEdges(true);
+  renderer.setShowOccludedObjects(false);
+  renderer.setTint(true);
+  renderer.setTransparencyAlpha(pref(Preferences::TransparentFaceAlpha));
+  renderer.setOverrideGroupColors(true);
+  renderer.setOverrideEntityBoundsColor(true);
+  renderer.setShowEntityAngles(false);
+  renderer.setBrushFaceColor(pref(Preferences::FaceColor));
 }
 
 static bool selected(const mdl::Node& node)
@@ -513,6 +600,11 @@ void MapRenderer::updateAndInvalidateNode(mdl::Node& node)
   // Update the metadata to reflect the changes that we made above
   m_trackedNodes[&node] = desiredRenderers;
 
+  if (m_flashedNodes.contains(&node))
+  {
+    m_flashRenderer->invalidateNode(node);
+  }
+
   m_entityDecalRenderer->updateNode(node);
 }
 
@@ -548,6 +640,11 @@ void MapRenderer::updateAndInvalidateNodeRecursive(mdl::Node& node)
 
 void MapRenderer::removeNode(mdl::Node& node)
 {
+  if (m_flashedNodes.erase(&node) > 0)
+  {
+    m_flashRenderer->removeNode(node);
+  }
+
   if (auto it = m_trackedNodes.find(&node); it != m_trackedNodes.end())
   {
     const auto renderers = it->second;
@@ -613,6 +710,8 @@ void MapRenderer::invalidateRenderers(const Renderer renderers)
   if (int(renderers) & int(Renderer::Default))
   {
     m_defaultRenderer->invalidate();
+    // flashed nodes are drawn again over the default renderer's
+    m_flashRenderer->invalidate();
   }
   if (int(renderers) & int(Renderer::Selection))
   {
@@ -644,6 +743,7 @@ void MapRenderer::reloadEntityModels()
   m_defaultRenderer->reloadModels();
   m_selectionRenderer->reloadModels();
   m_lockedRenderer->reloadModels();
+  m_flashRenderer->reloadModels();
 }
 
 void MapRenderer::connectObservers()
@@ -781,6 +881,7 @@ void MapRenderer::resourcesWereProcessed(const std::vector<gl::ResourceId>& reso
   m_defaultRenderer->invalidateMaterials(materials);
   m_selectionRenderer->invalidateMaterials(materials);
   m_lockedRenderer->invalidateMaterials(materials);
+  m_flashRenderer->invalidateMaterials(materials);
   m_entityDecalRenderer->invalidateMaterials(materials);
 
   const auto& entityModelManager = m_map.entityModelManager();
@@ -789,6 +890,7 @@ void MapRenderer::resourcesWereProcessed(const std::vector<gl::ResourceId>& reso
   m_defaultRenderer->invalidateEntityModels(entityModels);
   m_selectionRenderer->invalidateEntityModels(entityModels);
   m_lockedRenderer->invalidateEntityModels(entityModels);
+  m_flashRenderer->invalidateEntityModels(entityModels);
 }
 
 void MapRenderer::materialCollectionsWillChange()
