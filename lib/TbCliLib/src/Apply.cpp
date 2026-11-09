@@ -24,12 +24,19 @@
 #include "cli/IssueTracker.h"
 #include "cli/Json.h"
 #include "cli/LinkedGroups.h"
+#include "cli/LiveSession.h"
 #include "cli/LoadMap.h"
 #include "cli/NodePath.h"
 #include "cli/Ops.h"
 #include "cli/Targets.h"
 #include "cli/Verify.h"
+#include "mdl/BrushFaceHandle.h"
+#include "mdl/BrushNode.h"
+#include "mdl/CommandProcessor.h"
 #include "mdl/Map.h"
+#include "mdl/Map_Selection.h"
+#include "mdl/Selection.h"
+#include "mdl/TransactionScope.h"
 #include "mdl/WorldNode.h"
 
 #include "kd/contracts.h"
@@ -159,6 +166,68 @@ Json issuesJson(
   }
   return result;
 }
+
+/** Turns command collation off while it lives, and restores it after. */
+class CollationOff
+{
+private:
+  mdl::Map& m_map;
+  bool m_wasEnabled;
+
+public:
+  explicit CollationOff(mdl::Map& map)
+    : m_map{map}
+    , m_wasEnabled{map.isCommandCollationEnabled()}
+  {
+    m_map.setIsCommandCollationEnabled(false);
+  }
+
+  ~CollationOff() { m_map.setIsCommandCollationEnabled(m_wasEnabled); }
+
+  CollationOff(const CollationOff&) = delete;
+  CollationOff& operator=(const CollationOff&) = delete;
+};
+
+/** The mapper's selection, nodes and faces, to restore after a batch. */
+class SavedSelection
+{
+private:
+  std::vector<mdl::Node*> m_nodes;
+  std::vector<mdl::BrushFaceHandle> m_faces;
+
+public:
+  explicit SavedSelection(const mdl::Map& map)
+    : m_nodes{map.selection().nodes}
+    , m_faces{map.selection().brushFaces}
+  {
+  }
+
+  /** Selects the saved nodes and faces again, apart from those no longer in the map. */
+  void restore(mdl::Map& map) const
+  {
+    const auto& world = map.worldNode();
+    const auto inMap = [&](const mdl::Node& node) { return node.isDescendantOf(world); };
+
+    mdl::deselectAll(map);
+
+    auto nodes = std::vector<mdl::Node*>{};
+    std::ranges::copy_if(
+      m_nodes, std::back_inserter(nodes), [&](const auto* node) { return inMap(*node); });
+    if (!nodes.empty())
+    {
+      mdl::selectNodes(map, nodes);
+    }
+
+    auto faces = std::vector<mdl::BrushFaceHandle>{};
+    std::ranges::copy_if(m_faces, std::back_inserter(faces), [&](const auto& face) {
+      return inMap(face.node()) && face.faceIndex() < face.node().brush().faceCount();
+    });
+    if (!faces.empty())
+    {
+      mdl::selectBrushFaces(map, faces);
+    }
+  }
+};
 
 } // namespace
 
@@ -305,6 +374,113 @@ Json apply(
     result.set("warnings", std::move(warnings));
   }
   return result;
+}
+
+std::string liveUndoName(const std::vector<Op>& ops)
+{
+  if (ops.empty())
+  {
+    return "AI: empty batch";
+  }
+  auto result = fmt::format("AI: {}", ops[0].def->name);
+  if (ops.size() > 1)
+  {
+    result += fmt::format(", {}", ops[1].def->name);
+  }
+  if (ops.size() > 2)
+  {
+    result += fmt::format(" +{} more", ops.size() - 2);
+  }
+  return result;
+}
+
+Json applyLive(
+  LiveSession& session,
+  const std::vector<Op>& ops,
+  const ApplyOptions& options,
+  const VerifyConfig& verifyConfig)
+{
+  if (options.expectRev && *options.expectRev != session.rev())
+  {
+    throw CliError{
+      ErrorCode::StaleRev,
+      fmt::format(
+        "the map's rev is {}, not the expected {}; read it again before editing",
+        session.rev(),
+        *options.expectRev)};
+  }
+
+  auto& map = session.map();
+  if (map.commandProcessor().isTransactionActive())
+  {
+    // the editor host waits for the mapper's transaction before it runs a request
+    throw CliError{
+      ErrorCode::Busy, "the mapper is in the middle of an action; retry shortly"};
+  }
+
+  const auto selection = SavedSelection{map};
+  // collated commands delete the nodes that the earlier one replaced, which ops of the
+  // batch still refer to
+  const auto collationOff = CollationOff{map};
+  map.startTransaction(liveUndoName(ops), mdl::TransactionScope::LongRunning);
+  map.markTransactionAsCollationBarrier();
+
+  try
+  {
+    // ops select what they edit, and a selected face would soft-lock linked copies
+    mdl::deselectAll(map);
+    auto batch = runBatch(map, ops, options.allowLocked, verifyConfig);
+    selection.restore(map);
+
+    auto rev = std::string{};
+    if (options.output)
+    {
+      // as in file mode, with the rev of the (would-be) output file
+      const auto bytes = serialize(map);
+      const auto target = std::filesystem::absolute(*options.output);
+      if (!options.dryRun)
+      {
+        if (const auto error = writeFileAtomically(target, bytes))
+        {
+          throw CliError{
+            ErrorCode::WriteFailed,
+            fmt::format("cannot write {}, nothing was written: {}", target, *error)};
+        }
+      }
+      map.cancelTransaction();
+      rev = computeRev(bytes);
+    }
+    else if (options.dryRun)
+    {
+      map.cancelTransaction();
+      rev = session.rev();
+    }
+    else
+    {
+      if (!map.commitTransaction())
+      {
+        throw CliError{ErrorCode::OpFailed, "the editor could not commit the batch"};
+      }
+      rev = session.rev();
+    }
+
+    auto result = Json::object();
+    result.set("schema", "tbcli.apply/1");
+    result.set("session", "live");
+    result.set("rev", std::move(rev));
+    result.set("ops", std::move(batch.ops));
+    result.set("bindings", std::move(batch.bindings));
+    return result;
+  }
+  catch (...)
+  {
+    // also the transactions of an op that failed halfway
+    while (map.commandProcessor().isTransactionActive())
+    {
+      map.cancelTransaction();
+    }
+    throw;
+  }
 }
 
 } // namespace tb::cli

@@ -17,11 +17,13 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "cli/LiveLink.h"
 #include "cli/Run.h"
 
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifdef _WIN32
@@ -31,7 +33,24 @@
 
 int main(int argc, char** argv)
 {
-  const auto args = std::vector<std::string>(argv + 1, argv + argc);
+  // --live and --file force the live link or file mode; the last one given wins
+  auto args = std::vector<std::string>{};
+  auto mode = tb::cli::LinkMode::Auto;
+  for (const auto* arg : std::vector<const char*>(argv + 1, argv + argc))
+  {
+    if (arg == std::string_view{"--live"})
+    {
+      mode = tb::cli::LinkMode::Live;
+    }
+    else if (arg == std::string_view{"--file"})
+    {
+      mode = tb::cli::LinkMode::File;
+    }
+    else
+    {
+      args.emplace_back(arg);
+    }
+  }
 
   auto in = std::string{};
   if (tb::cli::readsStdin(args))
@@ -42,7 +61,9 @@ int main(int argc, char** argv)
     in.assign(std::istreambuf_iterator<char>{std::cin}, std::istreambuf_iterator<char>{});
   }
 
-  const auto result = tb::cli::run(args, in);
+  // a command on a map that an editor has open runs against the editor's map
+  auto live = tb::cli::runLive(args, in, mode);
+  const auto result = live ? std::move(*live) : tb::cli::run(args, in);
   std::cerr << result.err << std::flush;
   std::cout << result.out << std::flush;
   return result.exitCode;

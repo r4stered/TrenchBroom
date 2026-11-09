@@ -28,6 +28,7 @@
 #include "cli/FileUtils.h"
 #include "cli/Guide.h"
 #include "cli/Json.h"
+#include "cli/LiveSession.h"
 #include "cli/LoadMap.h"
 #include "cli/Ops.h"
 #include "cli/ParseUtils.h"
@@ -36,6 +37,7 @@
 #include "cli/Show.h"
 #include "cli/TextFormat.h"
 #include "cli/Verify.h"
+#include "mdl/Map.h"
 #include "version/Version.h"
 
 #include "kd/overload.h"
@@ -181,6 +183,10 @@ options:
                         nothing if there is no such room
   --json                ops: print JSON (the default)
   --install <dir>       guide: write the agent files into dir instead
+  --live                use the map that a running TrenchBroom has open, or fail
+                        with no_session (by default, tbcli uses it when there is
+                        one and the map file otherwise)
+  --file                use the map file even if TrenchBroom has it open
   -h, --help            print this help
   --version             print the version
 
@@ -306,9 +312,24 @@ private:
   }
 };
 
+/** Where an option's value that names a file is in the command line. */
+struct PathValue
+{
+  /** The index of the argument that holds the value. */
+  size_t index;
+  /** Where the value starts in the argument: after the `=` of `--name=value`, or 0. */
+  size_t offset;
+  /** Whether a bare name is looked up in PATH, as for compilers. */
+  bool lookedUpInPath = false;
+};
+
 struct Arguments
 {
   std::vector<std::string> positionals;
+  /** The index of each positional in the command line. */
+  std::vector<size_t> positionalIndices;
+  /** The values of the options that name files, for forwardableInvocation. */
+  std::vector<PathValue> pathValues;
   OutputFormat outputFormat = OutputFormat::Json;
   ConfigOverrides configOverrides;
   /** --limit and --offset, which query and verify share */
@@ -438,6 +459,7 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       // a lone "-" is reserved for reading from stdin
       result.positionals.push_back(arg);
+      result.positionalIndices.push_back(i);
       continue;
     }
     if (arg == "-o")
@@ -447,6 +469,7 @@ Arguments parseArguments(const std::vector<std::string>& args)
         throw usageError("-o requires a value");
       }
       result.applyOptions.output = std::filesystem::path{args[++i]};
+      result.pathValues.push_back({i, 0});
       result.commandOptions.emplace_back(arg);
       continue;
     }
@@ -473,6 +496,13 @@ Arguments parseArguments(const std::vector<std::string>& args)
         throw usageError(fmt::format("{} requires a value", name));
       }
       return args[++i];
+    };
+
+    // a value that names a file, which forwardableInvocation makes absolute
+    const auto pathValue = [&]() {
+      auto path = value();
+      result.pathValues.push_back({i, inlineValue ? name.size() + 1 : 0});
+      return path;
     };
 
     const auto* opDef =
@@ -537,15 +567,15 @@ Arguments parseArguments(const std::vector<std::string>& args)
     }
     else if (name == "--game-config")
     {
-      result.configOverrides.gameConfig = std::filesystem::path{value()};
+      result.configOverrides.gameConfig = std::filesystem::path{pathValue()};
     }
     else if (name == "--fgd")
     {
-      result.configOverrides.fgd.emplace_back(value());
+      result.configOverrides.fgd.emplace_back(pathValue());
     }
     else if (name == "--quake-dir")
     {
-      result.configOverrides.quakeDir = std::filesystem::path{value()};
+      result.configOverrides.quakeDir = std::filesystem::path{pathValue()};
     }
     else if (name == "--map-format")
     {
@@ -560,7 +590,8 @@ Arguments parseArguments(const std::vector<std::string>& args)
     {
       // --qbsp, --vis and --light
       result.configOverrides.compilers.insert_or_assign(
-        std::string{name.substr(2)}, std::filesystem::path{value()});
+        std::string{name.substr(2)}, std::filesystem::path{pathValue()});
+      result.pathValues.back().lookedUpInPath = true;
     }
     else if (name == "--limit")
     {
@@ -668,12 +699,12 @@ Arguments parseArguments(const std::vector<std::string>& args)
     else if (name == "--artifacts")
     {
       result.compileOptions.artifacts =
-        std::filesystem::absolute(std::filesystem::path{value()});
+        std::filesystem::absolute(std::filesystem::path{pathValue()});
     }
     else if (name == "--from-artifacts")
     {
       result.roomsOptions.fromArtifacts =
-        std::filesystem::absolute(std::filesystem::path{value()});
+        std::filesystem::absolute(std::filesystem::path{pathValue()});
     }
     else if (name == "--split-ratio")
     {
@@ -755,13 +786,110 @@ void checkArguments(
   }
 }
 
-/** Loads the map given as the command's first argument. */
-std::pair<LoadedMap, Config> loadMapArgument(const Arguments& arguments, Logger& logger)
+/** Whether the two paths name the same file. */
+bool isSameFile(const std::filesystem::path& lhs, const std::filesystem::path& rhs)
+{
+  auto error = std::error_code{};
+  return std::filesystem::equivalent(lhs, rhs, error)
+         || std::filesystem::absolute(lhs).lexically_normal()
+              == std::filesystem::absolute(rhs).lexically_normal();
+}
+
+/**
+ * The map that a command runs against: the map file, loaded, or the open map of a live
+ * session.
+ */
+class CommandMap
+{
+private:
+  Config m_config;
+  std::optional<LoadedMap> m_loadedMap;
+  LiveSession* m_session = nullptr;
+  /** A live session's map was not loaded by tbcli, so tbcli knows of no problems. */
+  std::vector<LoadProblem> m_noLoadProblems;
+
+public:
+  CommandMap(Config config, LoadedMap loadedMap)
+    : m_config{std::move(config)}
+    , m_loadedMap{std::move(loadedMap)}
+  {
+  }
+
+  CommandMap(Config config, LiveSession& session)
+    : m_config{std::move(config)}
+    , m_session{&session}
+  {
+  }
+
+  const Config& config() const { return m_config; }
+
+  /** The live session whose map this is, if it is one. */
+  LiveSession* session() const { return m_session; }
+
+  LoadedMap* loadedMap() { return m_loadedMap ? &*m_loadedMap : nullptr; }
+
+  /** The map at its current rev. */
+  MapRef ref()
+  {
+    return m_session ? MapRef{m_session->map(), m_session->rev(), m_noLoadProblems}
+                     : m_loadedMap->ref();
+  }
+
+  /** The bytes the map was loaded from; a live session's map has none. */
+  std::optional<MapSource> source() const
+  {
+    return m_loadedMap ? std::optional{m_loadedMap->source()} : std::nullopt;
+  }
+};
+
+/**
+ * Opens the map given as the command's first argument: the live session's map if
+ * there is a session, or else the map file.
+ */
+CommandMap openMapArgument(
+  const Arguments& arguments, Logger& logger, LiveSession* session)
 {
   const auto mapPath = std::filesystem::path{arguments.positionals[1]};
-  auto config = loadConfig(mapPath, arguments.configOverrides);
-  auto loadedMap = loadMap(mapPath, config, logger);
-  return {std::move(loadedMap), std::move(config)};
+  if (!session)
+  {
+    auto config = loadConfig(mapPath, arguments.configOverrides);
+    auto loadedMap = loadMap(mapPath, config, logger);
+    return CommandMap{std::move(config), std::move(loadedMap)};
+  }
+
+  const auto& overrides = arguments.configOverrides;
+  if (overrides.gameConfig || !overrides.fgd.empty())
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{} cannot be used in a live session: the editor's game config and entity "
+        "definitions apply to the map it has open",
+        overrides.gameConfig ? "--game-config" : "--fgd"));
+  }
+  if (!isSameFile(mapPath, session->map().path()))
+  {
+    throw CliError{
+      ErrorCode::NoSession,
+      fmt::format(
+        "this editor has {} open, not {}",
+        session->map().path().string(),
+        mapPath.string())};
+  }
+  // tbcli.json is optional and only adds tbcli's own settings
+  return CommandMap{loadConfig(mapPath, overrides), *session};
+}
+
+/** Fails a command that cannot run in a live session yet. */
+void refuseLive(const CommandMap& map, const std::string_view command)
+{
+  if (map.session())
+  {
+    throw invalidArgument(
+      fmt::format(
+        "{} is not available in a live session yet; run it with tbcli --file on the "
+        "saved map",
+        command));
+  }
 }
 
 /** Reads the batch of an apply command from a file or, given "-", from stdin. */
@@ -823,10 +951,27 @@ struct CommandResult
   }
 };
 
-Json runOps(const Arguments& arguments, const std::vector<Op>& ops, Logger& logger)
+Json runOps(
+  const Arguments& arguments,
+  const std::vector<Op>& ops,
+  Logger& logger,
+  LiveSession* session)
 {
-  auto [loadedMap, config] = loadMapArgument(arguments, logger);
-  return apply(loadedMap, ops, arguments.applyOptions, config.verify);
+  auto map = openMapArgument(arguments, logger, session);
+  const auto& options = arguments.applyOptions;
+  const auto& verifyConfig = map.config().verify;
+  return map.session() ? applyLive(*map.session(), ops, options, verifyConfig)
+                       : apply(*map.loadedMap(), ops, options, verifyConfig);
+}
+
+/** The `session` block that `describe` reports in a live session. */
+Json sessionJson(LiveSession& session)
+{
+  auto result = Json::object();
+  result.set("live", true);
+  result.set("epoch", session.epoch());
+  result.set("map", session.map().path().string());
+  return result;
 }
 
 CommandResult runGuide(const Arguments& arguments)
@@ -863,7 +1008,10 @@ CommandResult runGuide(const Arguments& arguments)
 }
 
 CommandResult runCommand(
-  const Arguments& arguments, const std::string_view in, Logger& logger)
+  const Arguments& arguments,
+  const std::string_view in,
+  Logger& logger,
+  LiveSession* session)
 {
   const auto& positionals = arguments.positionals;
   const auto& command = positionals.front();
@@ -871,40 +1019,46 @@ CommandResult runCommand(
   if (command == "describe")
   {
     checkArguments(arguments, command, {"a map file"});
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    const auto issueReport = collectIssues(loadedMap.ref(), config.verify);
-    return describe(loadedMap.ref(), config.keyEntities, issueReport);
+    auto map = openMapArgument(arguments, logger, session);
+    const auto mapRef = map.ref();
+    const auto issueReport = collectIssues(mapRef, map.config().verify);
+    auto result = describe(mapRef, map.config().keyEntities, issueReport);
+    if (map.session())
+    {
+      result.set("session", sessionJson(*map.session()));
+    }
+    return result;
   }
   if (command == "query")
   {
     checkArguments(arguments, command, {"a map file"}, 1);
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    auto map = openMapArgument(arguments, logger, session);
     auto options = arguments.queryOptions;
     options.paging = arguments.paging;
     if (positionals.size() > 2)
     {
       options.query = positionals[2];
     }
-    return query(loadedMap.ref(), options);
+    return query(map.ref(), options);
   }
   if (command == "show")
   {
     checkArguments(arguments, command, {"a map file", "a node path"});
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return show(loadedMap.ref(), positionals[2], arguments.raw);
+    auto map = openMapArgument(arguments, logger, session);
+    return show(map.ref(), positionals[2], arguments.raw);
   }
   if (command == "fgd")
   {
     checkArguments(arguments, command, {"a map file", "a classname"});
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return fgd(loadedMap.ref(), positionals[2]);
+    auto map = openMapArgument(arguments, logger, session);
+    return fgd(map.ref(), positionals[2]);
   }
   if (command == "apply")
   {
     checkArguments(arguments, command, {"a map file", "a batch file or -"});
     // the batch is checked before the map is loaded
     const auto ops = parseBatch(readBatch(positionals[2], in));
-    return runOps(arguments, ops, logger);
+    return runOps(arguments, ops, logger, session);
   }
   if (command == "verify")
   {
@@ -916,16 +1070,16 @@ CommandResult runCommand(
         fmt::format(
           "{} requires --compile", compileOptions.timeout ? "--timeout" : "--artifacts"));
     }
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
+    auto map = openMapArgument(arguments, logger, session);
     auto options = arguments.verifyOptions;
     options.paging = arguments.paging;
     if (arguments.compile)
     {
+      refuseLive(map, "verify --compile");
       options.compile = compileOptions;
-      options.compile->compilers = config.compilers;
+      options.compile->compilers = map.config().compilers;
     }
-    auto [output, failed] =
-      verify(loadedMap.ref(), config.verify, options, loadedMap.source());
+    auto [output, failed] = verify(map.ref(), map.config().verify, options, map.source());
     return {std::move(output), failed ? ExitCode::FailOn : ExitCode::Ok};
   }
   if (command == "rooms")
@@ -940,8 +1094,9 @@ CommandResult runCommand(
     {
       throw usageError("--timeout cannot be used with --from-artifacts");
     }
-    auto [loadedMap, config] = loadMapArgument(arguments, logger);
-    return rooms(loadedMap.ref(), loadedMap.source(), config, options);
+    auto map = openMapArgument(arguments, logger, session);
+    refuseLive(map, "rooms");
+    return rooms(map.ref(), *map.source(), map.config(), options);
   }
   if (command == "ops")
   {
@@ -955,31 +1110,35 @@ CommandResult runCommand(
   if (const auto* def = findOpDef(command))
   {
     checkArguments(arguments, command, {"a map file"});
-    return runOps(arguments, {parseOpFlags(*def, arguments.opFlags)}, logger);
+    return runOps(arguments, {parseOpFlags(*def, arguments.opFlags)}, logger, session);
   }
 
   throw usageError(fmt::format("unknown command '{}'", command));
 }
 
-} // namespace
-
-bool readsStdin(const std::vector<std::string>& args)
+/** The parsed command line, or nothing if it is malformed. */
+std::optional<Arguments> tryParseArguments(const std::vector<std::string>& args)
 {
   try
   {
-    const auto arguments = parseArguments(args);
-    const auto& positionals = arguments.positionals;
-    return !arguments.help && positionals.size() == 3 && positionals[0] == "apply"
-           && positionals[2] == "-";
+    return parseArguments(args);
   }
   catch (const CliError&)
   {
-    // run reports the error without reading stdin
-    return false;
+    return std::nullopt;
   }
 }
 
-RunResult run(const std::vector<std::string>& args, const std::string_view in)
+/** Whether the command runs against the map named by its first argument. */
+bool takesMap(const std::string_view command)
+{
+  return command == "describe" || command == "query" || command == "show"
+         || command == "fgd" || command == "verify" || command == "rooms"
+         || isMutatingCommand(command);
+}
+
+RunResult runWith(
+  const std::vector<std::string>& args, const std::string_view in, LiveSession* session)
 {
   auto result = RunResult{};
   auto logger = StringLogger{result.err};
@@ -1005,7 +1164,7 @@ RunResult run(const std::vector<std::string>& args, const std::string_view in)
       throw usageError("no command given");
     }
 
-    auto [output, exitCode] = runCommand(arguments, in, logger);
+    auto [output, exitCode] = runCommand(arguments, in, logger, session);
     result.out = std::visit(
       kdl::overload(
         [&](const Json& json) { return render(json, arguments.outputFormat); },
@@ -1030,6 +1189,105 @@ RunResult run(const std::vector<std::string>& args, const std::string_view in)
     result.exitCode = ExitCode::Failed;
   }
 
+  return result;
+}
+
+} // namespace
+
+RunResult errorResult(const CliError& error)
+{
+  return RunResult{error.toJson().dump() + "\n", "", error.exitCode()};
+}
+
+bool readsStdin(const std::vector<std::string>& args)
+{
+  // run reports a malformed command line without reading stdin
+  const auto arguments = tryParseArguments(args);
+  return arguments && !arguments->help && arguments->positionals.size() == 3
+         && arguments->positionals[0] == "apply" && arguments->positionals[2] == "-";
+}
+
+RunResult run(const std::vector<std::string>& args, const std::string_view in)
+{
+  return runWith(args, in, nullptr);
+}
+
+RunResult run(
+  const std::vector<std::string>& args, const std::string_view in, LiveSession& session)
+{
+  return runWith(args, in, &session);
+}
+
+std::optional<std::string> mutatingCommand(const std::vector<std::string>& args)
+{
+  const auto arguments = tryParseArguments(args);
+  if (
+    !arguments || arguments->help || arguments->positionals.empty()
+    || !isMutatingCommand(arguments->positionals[0]))
+  {
+    return std::nullopt;
+  }
+  return arguments->positionals[0];
+}
+
+std::optional<std::filesystem::path> liveMapArgument(const std::vector<std::string>& args)
+{
+  const auto arguments = tryParseArguments(args);
+  if (
+    !arguments || arguments->help || arguments->version
+    || arguments->positionals.size() < 2 || !takesMap(arguments->positionals[0]))
+  {
+    return std::nullopt;
+  }
+
+  // compiles need the map's bytes, which the editor can't send yet
+  const auto& command = arguments->positionals[0];
+  if (command == "rooms" || (command == "verify" && arguments->compile))
+  {
+    return std::nullopt;
+  }
+  return std::filesystem::absolute(arguments->positionals[1]).lexically_normal();
+}
+
+Invocation forwardableInvocation(const std::vector<std::string>& args, std::string in)
+{
+  const auto arguments = parseArguments(args);
+  auto result = Invocation{args, std::move(in)};
+
+  const auto makeAbsolute = [&](const size_t index, const size_t offset) {
+    auto& arg = result.args[index];
+    const auto path = std::filesystem::absolute(arg.substr(offset)).lexically_normal();
+    arg = arg.substr(0, offset) + path.string();
+  };
+
+  for (const auto& value : arguments.pathValues)
+  {
+    // a compiler given as a bare name is looked up in PATH wherever it runs
+    const auto path = std::filesystem::path{args[value.index].substr(value.offset)};
+    if (!value.lookedUpInPath || path.has_parent_path())
+    {
+      makeAbsolute(value.index, value.offset);
+    }
+  }
+
+  const auto& positionals = arguments.positionals;
+  if (positionals.size() < 2 || !takesMap(positionals.front()))
+  {
+    return result;
+  }
+  makeAbsolute(arguments.positionalIndices[1], 0);
+  if (positionals.front() == "apply" && positionals.size() > 2 && positionals[2] != "-")
+  {
+    const auto& batchFile = positionals[2];
+    auto batch = readFile(std::filesystem::path{batchFile});
+    if (!batch)
+    {
+      throw CliError{
+        ErrorCode::FileNotFound, fmt::format("cannot read batch {}", batchFile)};
+    }
+    result.args[arguments.positionalIndices[2]] = "-";
+    result.in = std::move(*batch);
+  }
   return result;
 }
 

@@ -173,6 +173,19 @@ Json parseOutput(const RunResult& result)
   return std::move(json).value();
 }
 
+Json withoutKeys(const Json& object, const std::vector<std::string_view>& keys)
+{
+  auto result = Json::object();
+  for (const auto& member : object.asObject())
+  {
+    if (std::ranges::find(keys, member.key) == keys.end())
+    {
+      result.set(member.key, member.value);
+    }
+  }
+  return result;
+}
+
 Json parseJsonLiteral(const std::string_view str)
 {
   auto json = parseJson(str);

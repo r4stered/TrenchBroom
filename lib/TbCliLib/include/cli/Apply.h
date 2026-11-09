@@ -34,6 +34,7 @@ class Map;
 namespace tb::cli
 {
 
+class LiveSession;
 struct LoadedMap;
 struct Op;
 struct VerifyConfig;
@@ -112,6 +113,33 @@ BatchResult runBatch(
  */
 Json apply(
   LoadedMap& loadedMap,
+  const std::vector<Op>& ops,
+  const ApplyOptions& options,
+  const VerifyConfig& verifyConfig);
+
+/**
+ * The undo step name of a batch that an agent runs in a live session:
+ * `AI: <op1>, <op2> +N more`.
+ */
+std::string liveUndoName(const std::vector<Op>& ops);
+
+/**
+ * Runs the given ops against the open map of a live session with runBatch, all or
+ * nothing, as one undo step named by liveUndoName that never merges with the steps
+ * around it. The mapper's selection (nodes and faces) is kept, apart from the nodes
+ * that the batch removed. Nothing is written, unless `output` is given without
+ * `dryRun`: then the result is written there, and the open map is left as it was, as
+ * with `dryRun`. Returns the `tbcli.apply/1` result as apply does, with
+ * `"session": "live"` and the live rev after the batch, or with `output`, the rev of
+ * the (would-be) output file.
+ *
+ * @throw CliError `stale_rev` if the session's rev is not `expectRev`; `busy` if a
+ * transaction is open; the error of the first failing op, with its `op_index`;
+ * `write_failed` if the output cannot be written. The open map is unchanged in any of
+ * these cases.
+ */
+Json applyLive(
+  LiveSession& session,
   const std::vector<Op>& ops,
   const ApplyOptions& options,
   const VerifyConfig& verifyConfig);

@@ -16,6 +16,7 @@ target_compile_definitions(TbCliLibTest PRIVATE
 
 target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/CliTestUtils.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/FakeEditorHost.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Apply.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_BuiltRooms.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_CliError.cpp
@@ -37,6 +38,7 @@ target_sources(TbCliLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Json.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Leak.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LinkedGroups.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LiveLink.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LoadMap.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapContents.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapRef.cpp
@@ -67,6 +69,7 @@ target_link_libraries(TbCliLibTest
     TbBaseTestUtilsLib
     TbCliLib
     TbFsTestUtilsLib
+    TbMdlTestUtilsLib
 )
 
 # Copy fixtures

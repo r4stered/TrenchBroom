@@ -40,6 +40,7 @@
 #include <QtGlobal>
 
 #include "base/PreferenceManager.h"
+#include "cli/LiveLink.h"
 #include "gl/GlManager.h"
 #include "gl/ResourceManager.h"
 #include "mdl/Autosaver.h"
@@ -91,6 +92,7 @@
 #include "ui/InfoPanel.h"
 #include "ui/Inspector.h"
 #include "ui/LaunchGameEngineDialog.h"
+#include "ui/LiveLinkHost.h"
 #include "ui/MapDocument.h"
 #include "ui/MapView2D.h"
 #include "ui/MapViewBase.h"
@@ -200,6 +202,9 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
 
   connectObservers();
   bindEvents();
+
+  // lets tbcli edit the open map; deleted with the other children, before the document
+  new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
 
   restoreWidgetGeometry(this);
   restoreWidgetState(this);

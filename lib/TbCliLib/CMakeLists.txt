@@ -23,6 +23,8 @@ target_sources(TbCliLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Json.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/Leak.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LinkedGroups.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveLink.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/LiveSession.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LoadMap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapContents.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/MapRef.cpp

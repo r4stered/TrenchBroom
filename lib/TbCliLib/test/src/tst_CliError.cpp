@@ -53,6 +53,10 @@ TEST_CASE("CliError")
       T{ErrorCode::HandEdited, 1},
       T{ErrorCode::ConnectCutsLinkedRoom, 1},
       T{ErrorCode::AmbiguousRoomName, 1},
+      T{ErrorCode::NoSession, 1},
+      T{ErrorCode::BadToken, 1},
+      T{ErrorCode::ProtoMismatch, 1},
+      T{ErrorCode::Busy, 1},
       T{ErrorCode::NodeNotFound, 1});
     CAPTURE(toString(code));
     CHECK(CliError{code, "message"}.exitCode() == exitCode);

@@ -127,6 +127,9 @@ std::string arg(const std::filesystem::path& path);
 /** Parses stdout as JSON, failing the test if it is not valid JSON. */
 Json parseOutput(const RunResult& result);
 
+/** The given JSON object without the members with the given keys. */
+Json withoutKeys(const Json& object, const std::vector<std::string_view>& keys);
+
 /** Parses a JSON literal written in a test, failing the test if it is not valid JSON. */
 Json parseJsonLiteral(std::string_view str);
 

@@ -112,6 +112,14 @@ enum class ErrorCode
    * on; the error lists every candidate
    */
   AmbiguousRoomName,
+  /** `--live` was given, but no running editor has the map open */
+  NoSession,
+  /** the live link refused the session token, such as one from a stale rendezvous */
+  BadToken,
+  /** tbcli and the editor speak different versions of the live link protocol */
+  ProtoMismatch,
+  /** the mapper stayed busy (in a dialog, a drag or a transaction) for too long */
+  Busy,
   /** an unexpected failure inside tbcli */
   InternalError,
 };

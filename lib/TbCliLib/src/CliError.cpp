@@ -90,6 +90,14 @@ std::string_view toString(const ErrorCode code)
     return "connect_cuts_linked_room";
   case ErrorCode::AmbiguousRoomName:
     return "ambiguous_room_name";
+  case ErrorCode::NoSession:
+    return "no_session";
+  case ErrorCode::BadToken:
+    return "bad_token";
+  case ErrorCode::ProtoMismatch:
+    return "proto_mismatch";
+  case ErrorCode::Busy:
+    return "busy";
   case ErrorCode::InternalError:
     return "internal_error";
   }

@@ -18,7 +18,16 @@
  */
 
 #include "CliTestUtils.h"
+#include "FakeEditorHost.h"
+#include "cli/CliError.h"
 #include "cli/Guide.h"
+#include "mdl/BrushFaceHandle.h"
+#include "mdl/BrushNode.h"
+#include "mdl/LayerNode.h"
+#include "mdl/Map.h"
+#include "mdl/Map_Selection.h"
+#include "mdl/Selection.h"
+#include "mdl/WorldNode.h"
 
 #include <string>
 #include <vector>
@@ -48,6 +57,13 @@ void checkErrorEnvelope(
   CHECK(error["code"] == Json{code});
   CHECK(error["message"].isString());
   CHECK(!error["message"].asString().empty());
+}
+
+/** The counter of the live rev `live-<epoch>:<counter>` that the output reports. */
+size_t liveRevCounter(const Json& output)
+{
+  const auto& rev = output["rev"].asString();
+  return std::stoul(rev.substr(rev.find(':') + 1));
 }
 
 double maxY(const RunResult& result)
@@ -494,6 +510,357 @@ TEST_CASE("run")
     {
       checkErrorEnvelope(runCli({"describe", "x.map", "--install", "dir"}), "usage", 2);
     }
+  }
+}
+
+TEST_CASE("run with a live session")
+{
+  auto fixture = EditFixture{};
+  auto editor = FakeEditorHost{fixture.env.path(fixture.fileName)};
+
+  const auto liveJson =
+    [&](const std::vector<std::string>& args, const std::string_view in = {}) {
+      const auto result = editor.run(args, in);
+      INFO(result.out);
+      INFO(result.err);
+      REQUIRE(result.exitCode == 0);
+      return parseOutput(result);
+    };
+  const auto liveBrushCount = [&]() {
+    return liveJson({"describe", fixture.map})["counts"]["brushes"].asNumber();
+  };
+
+  SECTION("describe")
+  {
+    const auto json = liveJson({"describe", fixture.map});
+    CHECK(json["rev"] == Json{editor.rev()});
+    CHECK_THAT(json["rev"].asString(), StartsWith("live-" + editor.epoch() + ":"));
+    CHECK(
+      json["session"]
+      == Json{
+        Json::Object{{"live", true}, {"epoch", editor.epoch()}, {"map", fixture.map}}});
+
+    // apart from the rev and the session block, as in file mode
+    CHECK(
+      withoutKeys(json, {"rev", "session"})
+      == withoutKeys(runJson({"describe", fixture.map}), {"rev"}));
+  }
+
+  SECTION("reads report the live rev")
+  {
+    CHECK(liveJson({"query", fixture.map})["rev"] == Json{editor.rev()});
+    CHECK(liveJson({"show", fixture.map, "world"})["rev"] == Json{editor.rev()});
+  }
+
+  SECTION("the live rev goes up on every change and ignores selection")
+  {
+    auto& map = editor.map();
+    const auto rev0 = liveRevCounter(liveJson({"describe", fixture.map}));
+
+    liveJson({"apply", fixture.map, "-"}, "[" + std::string{CreateBoxOp} + "]");
+    const auto rev1 = liveRevCounter(liveJson({"describe", fixture.map}));
+    CHECK(rev1 > rev0);
+
+    map.undoCommand();
+    const auto rev2 = liveRevCounter(liveJson({"describe", fixture.map}));
+    CHECK(rev2 > rev1);
+
+    map.redoCommand();
+    const auto rev3 = liveRevCounter(liveJson({"describe", fixture.map}));
+    CHECK(rev3 > rev2);
+
+    mdl::selectAllNodes(map);
+    mdl::deselectAll(map);
+    CHECK(liveRevCounter(liveJson({"describe", fixture.map})) == rev3);
+  }
+
+  SECTION("apply")
+  {
+    auto& map = editor.map();
+    const auto batch = std::string{R"([
+      {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "floor",
+       "as": "$box"},
+      {"op": "set_property", "target": "layer:0/entity:2", "key": "light",
+       "value": "300"},
+      {"op": "translate", "target": "$box", "delta": [0, 0, 8]}
+    ])"};
+
+    SECTION("edits the open map as one undo step and writes nothing")
+    {
+      const auto brushesBefore = liveBrushCount();
+      const auto json = liveJson({"apply", fixture.map, "-"}, batch);
+
+      CHECK(json["session"] == Json{"live"});
+      CHECK(json["rev"] == Json{editor.rev()});
+      CHECK(liveBrushCount() == brushesBefore + 1);
+      CHECK(fixture.unchanged());
+
+      REQUIRE(map.undoCommandName() != nullptr);
+      CHECK(*map.undoCommandName() == "AI: create_box, set_property +1 more");
+      map.undoCommand();
+      CHECK(liveBrushCount() == brushesBefore);
+      CHECK(!map.canUndoCommand());
+
+      // apart from the rev and the session, as in file mode
+      CHECK(
+        withoutKeys(json, {"rev", "session"})
+        == withoutKeys(parseOutput(fixture.apply(batch)), {"rev"}));
+    }
+
+    SECTION("an op runs the same as a one-op batch")
+    {
+      const auto json = liveJson(
+        {"set_property",
+         fixture.map,
+         "--target",
+         "layer:0/entity:2",
+         "--key",
+         "light",
+         "--value",
+         "300"});
+      CHECK(json["session"] == Json{"live"});
+      CHECK(*map.undoCommandName() == "AI: set_property");
+      CHECK(fixture.unchanged());
+    }
+
+    SECTION("a failing op leaves the map unchanged with the file-mode error")
+    {
+      const auto failing = std::string{R"([
+        {"op": "create_box", "min": [0, 0, 0], "max": [64, 32, 16], "material": "floor",
+         "as": "$box"},
+        {"op": "set_property", "target": "$box", "key": "light", "value": "300"}
+      ])"};
+      const auto brushesBefore = liveBrushCount();
+
+      // the second op fails after the first one has edited the map
+      const auto result = editor.run({"apply", fixture.map, "-"}, failing);
+      CHECK(result.out == fixture.apply(failing).out);
+      checkError(result, "wrong_node_kind", 1, 1);
+
+      CHECK(liveBrushCount() == brushesBefore);
+      CHECK(!map.canUndoCommand());
+      CHECK(map.isCommandCollationEnabled());
+    }
+
+    SECTION("keeps the mapper's node selection, apart from removed nodes")
+    {
+      auto* layer = map.worldNode().defaultLayer();
+      const auto& children = layer->children();
+      auto* playerStart = children[2];
+      auto* light = children[4];
+      mdl::selectNodes(map, {playerStart, light});
+
+      liveJson(
+        {"apply", fixture.map, "-"},
+        R"([{"op": "delete", "target": "layer:0/entity:0"}, )" + std::string{CreateBoxOp}
+          + "]");
+
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{light});
+      map.undoCommand();
+      CHECK(map.selection().nodes == std::vector<mdl::Node*>{playerStart, light});
+    }
+
+    SECTION("keeps the mapper's face selection")
+    {
+      auto* brush =
+        dynamic_cast<mdl::BrushNode*>(map.worldNode().defaultLayer()->children()[0]);
+      REQUIRE(brush != nullptr);
+      const auto face = mdl::BrushFaceHandle{*brush, 2};
+      mdl::selectBrushFaces(map, {face});
+
+      liveJson({"apply", fixture.map, "-"}, batch);
+
+      CHECK(map.selection().brushFaces == std::vector<mdl::BrushFaceHandle>{face});
+    }
+
+    SECTION("--dry-run returns the result and leaves the map as it is")
+    {
+      const auto brushesBefore = liveBrushCount();
+      const auto json = liveJson({"apply", fixture.map, "-", "--dry-run"}, batch);
+      // undoing the batch is a change too
+      CHECK(json["rev"] == Json{editor.rev()});
+      CHECK(liveBrushCount() == brushesBefore);
+      CHECK(json["ops"] == parseOutput(fixture.apply(batch, {"--dry-run"}))["ops"]);
+      CHECK(!map.canUndoCommand());
+    }
+
+    SECTION("-o writes the result there and leaves the map as it is")
+    {
+      const auto output = fixture.env.path("out.map");
+      const auto json = liveJson({"apply", fixture.map, "-", "-o", arg(output)}, batch);
+      const auto fileJson =
+        parseOutput(fixture.apply(batch, {"-o", arg(fixture.env.path("file.map"))}));
+      CHECK(json["rev"] == fileJson["rev"]);
+      CHECK(
+        withoutVolatileLines(fixture.env.readFile("out.map"))
+        == withoutVolatileLines(fixture.env.readFile("file.map")));
+      CHECK(!map.canUndoCommand());
+      CHECK(fixture.unchanged());
+
+      // with --dry-run, nothing is written
+      const auto dryRun = liveJson(
+        {"apply", fixture.map, "-", "--dry-run", "-o", arg(fixture.env.path("dry.map"))},
+        batch);
+      CHECK(dryRun["rev"] == fileJson["rev"]);
+      CHECK(!std::filesystem::exists(fixture.env.path("dry.map")));
+    }
+
+    SECTION("--expect-rev takes the live rev")
+    {
+      checkError(
+        editor.run({"apply", fixture.map, "-", "--expect-rev", "live-0:0"}, batch),
+        "stale_rev",
+        3);
+      liveJson({"apply", fixture.map, "-", "--expect-rev", editor.rev()}, batch);
+    }
+  }
+
+  SECTION("game config and FGD overrides are refused")
+  {
+    checkError(
+      editor.run({"describe", fixture.map, "--fgd", arg(quakeFgdPath())}),
+      "invalid_argument",
+      2);
+    checkError(
+      editor.run(
+        {"apply", fixture.map, "-", "--game-config", arg(quakeGameConfigPath())}, "[]"),
+      "invalid_argument",
+      2);
+  }
+
+  SECTION("a command on another map gives no_session")
+  {
+    const auto other = arg(fixture.env.copyFixture("maps/simple.map", "other.map"));
+    checkError(editor.run({"describe", other}), "no_session", 1);
+  }
+
+  SECTION("commands without a map run as in file mode")
+  {
+    CHECK(editor.run({"ops"}).out == runCli({"ops"}).out);
+  }
+}
+
+TEST_CASE("mutatingCommand")
+{
+  CHECK(mutatingCommand({"apply", "x.map", "-"}) == "apply");
+  CHECK(mutatingCommand({"--format", "text", "translate", "x.map"}) == "translate");
+  CHECK(mutatingCommand({"describe", "x.map"}) == std::nullopt);
+  CHECK(mutatingCommand({"apply", "x.map", "-", "--help"}) == std::nullopt);
+  CHECK(mutatingCommand({"apply", "x.map", "--frobnicate"}) == std::nullopt);
+  CHECK(mutatingCommand({}) == std::nullopt);
+}
+
+TEST_CASE("liveMapArgument")
+{
+  const auto cwd = std::filesystem::current_path();
+  CHECK(liveMapArgument({"describe", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"apply", "--dry-run", "maps/../x.map", "-"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"set_property", "x.map", "--target", "world"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"verify", "x.map"}) == cwd / "x.map");
+  CHECK(liveMapArgument({"ops"}) == std::nullopt);
+  // compiles run in file mode until the editor can send the map's bytes
+  CHECK(liveMapArgument({"rooms", "x.map"}) == std::nullopt);
+  CHECK(liveMapArgument({"verify", "x.map", "--compile"}) == std::nullopt);
+  CHECK(liveMapArgument({"guide", "conventions", "x.map"}) == std::nullopt);
+  CHECK(liveMapArgument({"describe", "x.map", "--help"}) == std::nullopt);
+  CHECK(liveMapArgument({"describe", "x.map", "--frobnicate"}) == std::nullopt);
+  CHECK(liveMapArgument({}) == std::nullopt);
+}
+
+TEST_CASE("forwardableInvocation")
+{
+  auto env = CliTestEnvironment{};
+  const auto absolute = [](const std::filesystem::path& path) {
+    return arg(std::filesystem::absolute(path).lexically_normal());
+  };
+
+  SECTION("the map path is made absolute")
+  {
+    const auto invocation = forwardableInvocation({"describe", "x.map"}, "");
+    CHECK(invocation.args == std::vector<std::string>{"describe", absolute("x.map")});
+  }
+
+  SECTION("a batch file is read and passed as stdin")
+  {
+    const auto batch = env.writeFile("batch.json", "[]");
+    const auto invocation =
+      forwardableInvocation({"apply", "x.map", arg(batch), "--dry-run"}, "");
+    CHECK(
+      invocation.args
+      == std::vector<std::string>{"apply", absolute("x.map"), "-", "--dry-run"});
+    CHECK(invocation.in == "[]");
+  }
+
+  SECTION("a batch on stdin is passed on")
+  {
+    const auto invocation = forwardableInvocation({"apply", "x.map", "-"}, "[1]");
+    CHECK(invocation.args == std::vector<std::string>{"apply", absolute("x.map"), "-"});
+    CHECK(invocation.in == "[1]");
+  }
+
+  SECTION("a missing batch file fails with file_not_found")
+  {
+    try
+    {
+      forwardableInvocation({"apply", "x.map", arg(env.path("missing.json"))}, "");
+      FAIL("expected a CliError");
+    }
+    catch (const CliError& e)
+    {
+      CHECK(e.code() == ErrorCode::FileNotFound);
+    }
+  }
+
+  SECTION("options that name files are made absolute")
+  {
+    const auto invocation = forwardableInvocation(
+      {"apply",
+       "x.map",
+       "-",
+       "-o",
+       "out.map",
+       "--fgd=defs/quake.fgd",
+       "--game-config",
+       "Quake.cfg",
+       "--quake-dir",
+       "quake"},
+      "");
+    CHECK(
+      invocation.args
+      == std::vector<std::string>{
+        "apply",
+        absolute("x.map"),
+        "-",
+        "-o",
+        absolute("out.map"),
+        "--fgd=" + absolute("defs/quake.fgd"),
+        "--game-config",
+        absolute("Quake.cfg"),
+        "--quake-dir",
+        absolute("quake")});
+  }
+
+  SECTION("compilers are made absolute unless they are looked up in PATH")
+  {
+    const auto invocation = forwardableInvocation(
+      {"verify", "x.map", "--compile", "--qbsp", "qbsp", "--vis", "tools/vis"}, "");
+    CHECK(
+      invocation.args
+      == std::vector<std::string>{
+        "verify",
+        absolute("x.map"),
+        "--compile",
+        "--qbsp",
+        "qbsp",
+        "--vis",
+        absolute("tools/vis")});
+  }
+
+  SECTION("commands without a map are passed on as they are")
+  {
+    CHECK(
+      forwardableInvocation({"guide", "verify"}, "").args
+      == std::vector<std::string>{"guide", "verify"});
   }
 }
 
