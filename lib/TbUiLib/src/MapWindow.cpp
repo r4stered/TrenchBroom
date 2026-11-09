@@ -23,11 +23,13 @@
 #include <QChildEvent>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCursor>
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QPointF>
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
@@ -40,6 +42,7 @@
 #include <QtGlobal>
 
 #include "base/PreferenceManager.h"
+#include "cli/CliError.h"
 #include "cli/LiveLink.h"
 #include "gl/GlManager.h"
 #include "gl/ResourceManager.h"
@@ -205,8 +208,8 @@ MapWindow::MapWindow(AppController& appController, std::unique_ptr<MapDocument> 
   bindEvents();
 
   // lets tbcli edit the open map; deleted with the other children, before the document
-  auto* liveLinkHost = new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
-  liveLinkHost->setViewCapturer(
+  m_liveLinkHost = new LiveLinkHost{*m_document, cli::defaultRendezvousDir(), this};
+  m_liveLinkHost->setViewCapturer(
     [this]() { return captureMapView(*currentMapViewBase()); });
 
   restoreWidgetGeometry(this);
@@ -2082,6 +2085,48 @@ void MapWindow::toggleMaximizeCurrentView()
 bool MapWindow::currentViewMaximized() const
 {
   return m_mapView->currentViewMaximized();
+}
+
+void MapWindow::showToAgent()
+{
+  // the view under the mouse, so that the mapper need not click into it first
+  const auto globalCursor = QCursor::pos();
+  auto* view = static_cast<MapViewBase*>(nullptr);
+  for (auto* widget = QApplication::widgetAt(globalCursor); widget && !view;
+       widget = widget->parentWidget())
+  {
+    view = dynamic_cast<MapViewBase*>(widget);
+  }
+  if (!view || view->window() != this)
+  {
+    view = currentMapViewBase();
+  }
+
+  const auto message = [&]() {
+    try
+    {
+      const auto capture =
+        captureMapView(*view, view->mapFromGlobal(QPointF{globalCursor}));
+      switch (m_liveLinkHost->show(capture))
+      {
+      case LiveLinkHost::ShowOutcome::Shown:
+        return tr("Shown");
+      case LiveLinkHost::ShowOutcome::ShownNoAgent:
+        // an em dash as a code point, since MSVC reads the source in the system code page
+        return tr("Shown %1 no agent connected yet").arg(QChar{0x2014});
+      case LiveLinkHost::ShowOutcome::NoSession:
+        return tr("Not shown: save the map first so that an agent can connect to it");
+      case LiveLinkHost::ShowOutcome::LinkDisabled:
+        return tr("Not shown: \"Accept AI connections\" was off when the map was opened");
+        switchDefault();
+      }
+    }
+    catch (const cli::CliError& e)
+    {
+      return tr("Not shown: %1").arg(QString::fromStdString(e.what()));
+    }
+  }();
+  statusBar()->showMessage(message, 5000);
 }
 
 void MapWindow::showCompileDialog()

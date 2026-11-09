@@ -1918,6 +1918,15 @@ void ActionManager::createViewMenu()
   }));
   viewMenu.addSeparator();
   viewMenu.addItem(addAction(Action{
+    "Menu/View/Show to Agent",
+    "Show to Agent",
+    ActionContext::Any,
+    KeySequence{"Ctrl+Alt+S"},
+    [](auto& context) { context.mapWindow().showToAgent(); },
+    [](const auto& context) { return context.hasDocument(); },
+  }));
+  viewMenu.addSeparator();
+  viewMenu.addItem(addAction(Action{
     "Menu/File/Preferences...",
     "Preferences...",
     ActionContext::Any,

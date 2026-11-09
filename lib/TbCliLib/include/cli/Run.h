@@ -19,6 +19,8 @@
 
 #pragma once
 
+#include "cli/Json.h"
+
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -83,7 +85,9 @@ RunResult run(const std::vector<std::string>& args, std::string_view in = {});
  * batch (see undoLive), `save` saves the open map or a copy of it (see saveLive), and
  * `view` captures the mapper's view (see viewLive); undo, save and view fail with
  * `no_session` in run. `verify --compile` and `rooms` don't
- * compile in the editor: they eject the open map (see Eject) for runOnEject. A command
+ * compile in the editor: they eject the open map (see Eject) for runOnEject. While the
+ * mapper has shown the agent a view that it has not seen yet, every output, errors
+ * included, carries the hint `shown` (see shownHint). A command
  * that names another map fails with `no_session`. The editor's configuration is
  * authoritative, so `--game-config` and `--fgd` fail with `invalid_argument`. Relative
  * paths are resolved against the working directory of the caller, so arguments should
@@ -102,15 +106,25 @@ RunResult run(
  */
 inline constexpr auto LiveRevCommand = std::string_view{"live-rev"};
 
+/** What the editor reports after a compile: what `live-rev` prints. */
+struct LiveRevReply
+{
+  /** The live rev of the session. */
+  std::string rev;
+  /** The `shown` hint, if a view that the mapper showed the agent is still unseen. */
+  std::optional<Json> shown = std::nullopt;
+};
+
 /** Reads the live rev of an ejected map's session, or nothing if it can't be read. */
-using LiveRevReader = std::function<std::optional<std::string>()>;
+using LiveRevReader = std::function<std::optional<LiveRevReply>()>;
 
 /**
  * Runs `verify --compile` or `rooms` in file mode on the map that the editor ejected
  * for it, which is never written, and reports the rev of the ejected bytes. Then reads
  * the live rev with `liveRev`, and marks the result `stale: true` if the map moved on
  * during the compile, or if the live rev can't be read. The output is otherwise the
- * same as file mode's on the same bytes. Never throws.
+ * same as file mode's on the same bytes, and carries the `shown` hint that the editor
+ * reports with the live rev, errors included. Never throws.
  */
 RunResult runOnEject(
   const std::vector<std::string>& args, const Eject& eject, const LiveRevReader& liveRev);

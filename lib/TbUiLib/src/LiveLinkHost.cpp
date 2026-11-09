@@ -43,6 +43,7 @@
 
 #include <fmt/format.h>
 
+#include <utility>
 #include <variant>
 
 namespace tb::ui
@@ -122,6 +123,21 @@ void LiveLinkHost::setViewCapturer(ViewCapturer viewCapturer)
   m_viewCapturer = std::move(viewCapturer);
 }
 
+LiveLinkHost::ShowOutcome LiveLinkHost::show(const cli::ViewCapture& capture)
+{
+  if (!m_sessionMap)
+  {
+    return ShowOutcome::NoSession;
+  }
+  if (!m_acceptConnections)
+  {
+    // no agent could ever see it
+    return ShowOutcome::LinkDisabled;
+  }
+  m_shownView = cli::makeShownView(*this, capture);
+  return m_attached ? ShowOutcome::Shown : ShowOutcome::ShownNoAgent;
+}
+
 const std::optional<std::filesystem::path>& LiveLinkHost::rendezvousFile() const
 {
   return m_rendezvousFile;
@@ -174,6 +190,16 @@ cli::ViewCapture LiveLinkHost::captureMapperView()
 cli::ViewImages& LiveLinkHost::viewImages()
 {
   return *m_viewImages;
+}
+
+const cli::ShownView* LiveLinkHost::shownView() const
+{
+  return m_shownView ? &*m_shownView : nullptr;
+}
+
+std::optional<cli::ShownView> LiveLinkHost::takeShownView()
+{
+  return std::exchange(m_shownView, std::nullopt);
 }
 
 void LiveLinkHost::documentWasLoaded()
@@ -320,6 +346,8 @@ void LiveLinkHost::stop()
 {
   m_sessionMap.reset();
   m_attached = false;
+  // its paths and handles are of this session
+  m_shownView.reset();
   // deletes the session's view images
   m_viewImages.reset();
 

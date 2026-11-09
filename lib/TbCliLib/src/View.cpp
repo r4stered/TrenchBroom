@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -116,6 +117,111 @@ std::vector<vm::vec3d> clipToNearPlane(
       }
     }
   }
+  return result;
+}
+
+/** `{path, width, height}` of an image at the given path. */
+Json imageJson(const std::filesystem::path& path, const ImageSize size)
+{
+  auto result = Json::object();
+  result.set("path", path.string());
+  result.set("width", size.width);
+  result.set("height", size.height);
+  return result;
+}
+
+/** Sets the members of the given object in another. */
+void setMembers(Json& object, const Json& members)
+{
+  for (const auto& [key, value] : members.asObject())
+  {
+    object.set(key, value);
+  }
+}
+
+/**
+ * What a captured view shows: `{view, camera, pixel_ratio, selection, hovered}`, with
+ * the selection and the node under the mouse as paths and handles of the current rev,
+ * and the rectangles they cover in the image.
+ */
+Json viewContext(LiveSession& session, const ViewCapture& capture)
+{
+  auto& map = session.map();
+  auto context = Json::object();
+  context.set("view", viewType(capture.camera));
+  context.set("camera", toJson(capture.camera));
+  context.set("pixel_ratio", floatJson(capture.pixelRatio));
+
+  auto& handles = session.handles();
+  const auto boxOf = [&](const std::vector<vm::vec3d>& points) {
+    return toJson(projectPoints(capture.camera, capture.image, points));
+  };
+  const auto boundsBox = [&](const mdl::Node& node) {
+    return toJson(projectBounds(capture.camera, capture.image, node.logicalBounds()));
+  };
+
+  const auto& selection = map.selection();
+  auto selectionJson = Json::object();
+  selectionJson.set(
+    "nodes", capped(selection.nodes, Paging{}.limit, [&](const mdl::Node* node) {
+      auto json = Json::object();
+      setNodePath(json, "path", *node, &handles);
+      json.set("box", boundsBox(*node));
+      return json;
+    }));
+  selectionJson.set(
+    "faces",
+    capped(selection.brushFaces, Paging{}.limit, [&](const mdl::BrushFaceHandle& face) {
+      auto json = Json::object();
+      setFacePath(json, "path", face.node(), face.faceIndex(), &handles);
+      json.set("box", boxOf(face.face().vertexPositions()));
+      return json;
+    }));
+  context.set("selection", std::move(selectionJson));
+
+  auto hovered = Json{nullptr};
+  if (capture.hovered && capture.hovered->node)
+  {
+    const auto& node = *capture.hovered->node;
+    hovered = Json::object();
+    setNodePath(hovered, "path", node, &handles);
+    if (
+      const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(&node);
+      brushNode && capture.hovered->faceIndex)
+    {
+      setFacePath(hovered, "face", *brushNode, *capture.hovered->faceIndex, &handles);
+    }
+    hovered.set("point", cli::toJson(capture.hovered->point));
+    hovered.set("box", boundsBox(node));
+  }
+  context.set("hovered", std::move(hovered));
+
+  return context;
+}
+
+/** The whole seconds from the given shown view's showing to the given time. */
+int64_t ageInSeconds(
+  const ShownView& shown, const std::chrono::steady_clock::time_point now)
+{
+  return std::max(
+    int64_t{0},
+    int64_t(std::chrono::floor<std::chrono::seconds>(now - shown.shownAt).count()));
+}
+
+/**
+ * The given shown view as `tbcli view` reports it: its rev, age and image, which this
+ * adds to the session's view images, and what it showed.
+ */
+Json shownViewJson(LiveSession& session, const ShownView& shown)
+{
+  const auto imagePath = session.viewImages().add(shown.png);
+
+  auto result = Json::object();
+  result.set("rev", shown.rev);
+  result.set("age", ageInSeconds(shown, std::chrono::steady_clock::now()));
+
+  result.set("image", imageJson(imagePath, shown.image));
+  setMembers(result, shown.context);
   return result;
 }
 
@@ -317,6 +423,34 @@ std::filesystem::path ViewImages::add(const std::string_view png)
   return path;
 }
 
+ShownView makeShownView(
+  LiveSession& session,
+  const ViewCapture& capture,
+  const std::chrono::steady_clock::time_point shownAt)
+{
+  auto context = viewContext(session, capture);
+  context.set(
+    "cursor",
+    capture.cursor ? Json{Json::Array{capture.cursor->x, capture.cursor->y}}
+                   : Json{nullptr});
+  return ShownView{
+    .png = capture.png,
+    .image = capture.image,
+    .rev = session.rev(),
+    .context = std::move(context),
+    .shownAt = shownAt,
+  };
+}
+
+Json shownHint(const ShownView& shown, const std::chrono::steady_clock::time_point now)
+{
+  auto result = Json::object();
+  result.set("rev", shown.rev);
+  result.set("age", ageInSeconds(shown, now));
+  result.set("run", "tbcli view");
+  return result;
+}
+
 Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& out)
 {
   auto& map = session.map();
@@ -333,11 +467,7 @@ Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& 
   result.set("session", "live");
   result.set("rev", session.rev());
 
-  auto image = Json::object();
-  image.set("path", imagePath.string());
-  image.set("width", capture.image.width);
-  image.set("height", capture.image.height);
-  result.set("image", std::move(image));
+  result.set("image", imageJson(imagePath, capture.image));
 
   if (out)
   {
@@ -355,53 +485,14 @@ Json viewLive(LiveSession& session, const std::optional<std::filesystem::path>& 
     result.set("out", outPath.string());
   }
 
-  result.set("view", viewType(capture.camera));
-  result.set("camera", toJson(capture.camera));
-  result.set("pixel_ratio", floatJson(capture.pixelRatio));
+  setMembers(result, viewContext(session, capture));
 
-  auto& handles = session.handles();
-  const auto boxOf = [&](const std::vector<vm::vec3d>& points) {
-    return toJson(projectPoints(capture.camera, capture.image, points));
-  };
-  const auto boundsBox = [&](const mdl::Node& node) {
-    return toJson(projectBounds(capture.camera, capture.image, node.logicalBounds()));
-  };
-
-  const auto& selection = map.selection();
-  auto selectionJson = Json::object();
-  selectionJson.set(
-    "nodes", capped(selection.nodes, Paging{}.limit, [&](const mdl::Node* node) {
-      auto json = Json::object();
-      setNodePath(json, "path", *node, &handles);
-      json.set("box", boundsBox(*node));
-      return json;
-    }));
-  selectionJson.set(
-    "faces",
-    capped(selection.brushFaces, Paging{}.limit, [&](const mdl::BrushFaceHandle& face) {
-      auto json = Json::object();
-      setFacePath(json, "path", face.node(), face.faceIndex(), &handles);
-      json.set("box", boxOf(face.face().vertexPositions()));
-      return json;
-    }));
-  result.set("selection", std::move(selectionJson));
-
-  auto hovered = Json{nullptr};
-  if (capture.hovered && capture.hovered->node)
+  if (const auto* shown = session.shownView())
   {
-    const auto& node = *capture.hovered->node;
-    hovered = Json::object();
-    setNodePath(hovered, "path", node, &handles);
-    if (
-      const auto* brushNode = dynamic_cast<const mdl::BrushNode*>(&node);
-      brushNode && capture.hovered->faceIndex)
-    {
-      setFacePath(hovered, "face", *brushNode, *capture.hovered->faceIndex, &handles);
-    }
-    hovered.set("point", cli::toJson(capture.hovered->point));
-    hovered.set("box", boundsBox(node));
+    result.set("shown", shownViewJson(session, *shown));
+    // seen once
+    session.takeShownView();
   }
-  result.set("hovered", std::move(hovered));
 
   return result;
 }

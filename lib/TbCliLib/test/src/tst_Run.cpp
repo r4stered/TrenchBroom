@@ -45,6 +45,7 @@
 #include "mdl/UpdateBrushFaceAttributes.h"
 #include "mdl/WorldNode.h"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -1403,6 +1404,150 @@ TEST_CASE("run with a live session")
     }
   }
 
+  SECTION("shown")
+  {
+    auto& map = editor.map();
+    auto* layer = map.worldNode().defaultLayer();
+    auto* brush0 = dynamic_cast<mdl::BrushNode*>(layer->children()[0]);
+    auto* brush1 = dynamic_cast<mdl::BrushNode*>(layer->children()[1]);
+    REQUIRE(brush0 != nullptr);
+    REQUIRE(brush1 != nullptr);
+
+    const auto topDown = CameraPose{
+      .projection = CameraPose::Projection::Orthographic,
+      .position = {0, 0, 100},
+      .direction = {0, 0, -1},
+      .up = {0, 1, 0},
+      .viewport = {800, 600},
+    };
+    const auto shownCapture = ViewCapture{
+      .png = "PNG of the shown view",
+      .image = {800, 600},
+      .camera = topDown,
+      .hovered = HoveredPick{brush1, 3, {-56, 0, 64}},
+      .cursor = ImagePoint{344, 300},
+    };
+    editor.setMapperView(
+      ViewCapture{
+        .png = "PNG of the mapper's view",
+        .image = {800, 600},
+        .camera = topDown,
+      });
+
+    SECTION("every live output carries a hint while a shown view is unseen")
+    {
+      CHECK(liveJson({"describe", fixture.map}).find("shown") == nullptr);
+
+      const auto shownRev = editor.rev();
+      editor.show(
+        shownCapture, std::chrono::steady_clock::now() - std::chrono::seconds{5});
+
+      const auto hint = liveJson({"describe", fixture.map})["shown"];
+      CHECK(hint["rev"] == Json{shownRev});
+      CHECK(hint["age"].asNumber() >= 5);
+      CHECK(hint["age"].asNumber() < 60);
+      CHECK(hint["run"] == Json{"tbcli view"});
+
+      // the hint keeps the rev it was shown at as the map moves on
+      const auto applied =
+        liveJson({"apply", fixture.map, "-"}, "[" + std::string{CreateBoxOp} + "]");
+      CHECK(applied["shown"]["rev"] == Json{shownRev});
+      CHECK(liveJson({"query", fixture.map})["shown"]["rev"] == Json{shownRev});
+
+      // and errors carry it too
+      const auto failed = editor.run({"show", fixture.map, "layer:0/brush:99"});
+      CHECK(failed.exitCode != 0);
+      CHECK(parseOutput(failed)["shown"]["rev"] == Json{shownRev});
+    }
+
+    SECTION("view returns the shown view once")
+    {
+      mdl::selectNodes(map, {brush0});
+      const auto shownRev = editor.rev();
+      editor.show(shownCapture);
+      // the shown view keeps what it showed when it was shown
+      mdl::deselectAll(map);
+
+      const auto json = liveJson({"view", fixture.map});
+      CHECK(
+        readFile(std::filesystem::path{json["image"]["path"].asString()})
+        == "PNG of the mapper's view");
+      CHECK(json.find("shown") != nullptr);
+
+      const auto& shown = json["shown"];
+      CHECK(shown["rev"] == Json{shownRev});
+      CHECK(shown["age"].isNumber());
+      const auto shownImage = std::filesystem::path{shown["image"]["path"].asString()};
+      CHECK(readFile(shownImage) == "PNG of the shown view");
+      CHECK(shownImage != std::filesystem::path{json["image"]["path"].asString()});
+      CHECK(shown["image"]["width"] == Json{800});
+      CHECK(shown["image"]["height"] == Json{600});
+      CHECK(shown["view"] == Json{"xy"});
+      CHECK(shown["camera"] == toJson(topDown));
+      CHECK(shown["pixel_ratio"] == Json{1});
+      CHECK(shown["cursor"] == Json{Json::Array{344, 300}});
+
+      const auto& pick = shown["hovered"];
+      CHECK(pick["path"] == Json{"layer:0/brush:1"});
+      CHECK(pick["handle"] == Json{editor.handles().handle(*brush1)});
+      CHECK(pick["face"] == Json{"layer:0/brush:1/face:3"});
+      CHECK(pick["face_handle"] == Json{editor.handles().faceHandle(*brush1, 3)});
+      // brush 1 spans -64..-48 on x and -64..64 on y
+      CHECK(pick["box"] == Json{Json::Array{336, 236, 352, 364}});
+
+      const auto& selected = shown["selection"]["nodes"]["items"];
+      REQUIRE(selected.size() == 1);
+      CHECK(selected[0]["path"] == Json{"layer:0/brush:0"});
+      CHECK(json["selection"]["nodes"]["total"] == Json{0});
+
+      // seen once: the hint and the shown view are gone
+      CHECK(liveJson({"describe", fixture.map}).find("shown") == nullptr);
+      CHECK(liveJson({"view", fixture.map}).find("shown") == nullptr);
+    }
+
+    SECTION("view's options don't matter")
+    {
+      editor.show(shownCapture);
+      const auto out = fixture.env.path("look.png");
+      const auto json = liveJson({"view", fixture.map, "--out", arg(out)});
+      CHECK(json["shown"]["cursor"] == Json{Json::Array{344, 300}});
+      CHECK(readFile(out) == "PNG of the mapper's view");
+    }
+
+    SECTION("a failed view leaves the shown view for the next one")
+    {
+      editor.show(shownCapture);
+      editor.setMapperView(std::nullopt);
+      const auto failed = editor.run({"view", fixture.map});
+      CHECK(failed.exitCode == 1);
+      CHECK(parseOutput(failed)["shown"]["run"] == Json{"tbcli view"});
+    }
+
+    SECTION("a second show replaces the first")
+    {
+      editor.show(shownCapture);
+      auto second = shownCapture;
+      second.png = "PNG of the second shown view";
+      second.cursor = std::nullopt;
+      second.hovered = std::nullopt;
+      editor.show(second);
+
+      const auto shown = liveJson({"view", fixture.map})["shown"];
+      CHECK(
+        readFile(std::filesystem::path{shown["image"]["path"].asString()})
+        == "PNG of the second shown view");
+      CHECK(shown["cursor"] == Json{nullptr});
+      CHECK(shown["hovered"] == Json{nullptr});
+      CHECK(liveJson({"view", fixture.map}).find("shown") == nullptr);
+    }
+
+    SECTION("file mode has no hint")
+    {
+      editor.show(shownCapture);
+      CHECK(runJson({"describe", fixture.map}).find("shown") == nullptr);
+    }
+  }
+
   SECTION("changes")
   {
     auto& map = editor.map();
@@ -1857,7 +2002,7 @@ TEST_CASE("runOnEject")
     REQUIRE(result.eject.has_value());
     return *result.eject;
   };
-  const auto liveRev = [&]() { return std::optional{editor.rev()}; };
+  const auto liveRev = [&]() { return std::optional{LiveRevReply{editor.rev()}}; };
   const auto ejectedJson = [&](const Eject& eject, const LiveRevReader& rev) {
     const auto result = runOnEject(command, eject, rev);
     INFO(result.out);
@@ -1921,7 +2066,7 @@ TEST_CASE("runOnEject")
     // tbcli reads the live rev once the compile is done, by when the mapper edited
     const auto live = ejectedJson(eject, [&]() {
       moveBrush();
-      return std::optional{editor.rev()};
+      return std::optional{LiveRevReply{editor.rev()}};
     });
     CHECK(live["rev"] == Json{eject.rev});
     CHECK(live["stale"] == Json{true});
@@ -1930,8 +2075,26 @@ TEST_CASE("runOnEject")
   SECTION("the result is stale if the live rev can't be read afterwards")
   {
     const auto eject = ejectOpenMap();
-    const auto live = ejectedJson(eject, []() { return std::optional<std::string>{}; });
+    const auto live = ejectedJson(eject, []() { return std::optional<LiveRevReply>{}; });
     CHECK(live["stale"] == Json{true});
+  }
+
+  SECTION("the result carries the shown hint that the editor reports afterwards")
+  {
+    const auto eject = ejectOpenMap();
+    CHECK(ejectedJson(eject, liveRev).find("shown") == nullptr);
+
+    const auto hint =
+      Json{Json::Object{{"rev", "live-x:1"}, {"age", 3}, {"run", "tbcli view"}}};
+    const auto live = ejectedJson(
+      eject, [&]() { return std::optional{LiveRevReply{editor.rev(), hint}}; });
+    CHECK(live["shown"] == hint);
+
+    // and so do failed compiles, which rooms reports as errors
+    std::filesystem::remove(env.path("tools") / "qbsp.replay");
+    const auto failed = runOnEject(
+      command, eject, [&]() { return std::optional{LiveRevReply{editor.rev(), hint}}; });
+    CHECK(parseOutput(failed)["shown"] == hint);
   }
 
   SECTION("a failed compile reports its error, as in file mode")

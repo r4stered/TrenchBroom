@@ -1317,6 +1317,31 @@ CliError withNodeHandle(const CliError& error, LiveSession& session)
 }
 
 /**
+ * The given output with the `shown` hint, if the mapper showed the agent a view that it
+ * has not seen yet: the live session's own, or the one that the editor reported after
+ * a compile of its ejected map.
+ */
+Json withShownHint(
+  Json output,
+  const LiveSession* session,
+  const std::optional<LiveRevReply>& liveRevReply = std::nullopt)
+{
+  if (!output.isObject())
+  {
+    return output;
+  }
+  if (const auto* shown = session ? session->shownView() : nullptr)
+  {
+    output.set("shown", shownHint(*shown));
+  }
+  else if (liveRevReply && liveRevReply->shown)
+  {
+    output.set("shown", *liveRevReply->shown);
+  }
+  return output;
+}
+
+/**
  * Runs the command against the map file, the live session's map if there is a session,
  * or the map that the editor ejected if there is one, in which case `liveRev` tells
  * whether the map moved on while the command ran.
@@ -1356,11 +1381,13 @@ RunResult runWith(
     result.out = std::visit(
       kdl::overload(
         [&](Json& json) {
-          if (eject && liveRev() != eject->rev)
+          const auto reply = eject ? liveRev() : std::nullopt;
+          if (eject && (!reply || reply->rev != eject->rev))
           {
             json.set("stale", true);
           }
-          return render(json, arguments.outputFormat);
+          return render(
+            withShownHint(std::move(json), session, reply), arguments.outputFormat);
         },
         [](RawOutput& raw) { return std::move(raw.text); },
         [&](Eject& ejected) {
@@ -1373,7 +1400,10 @@ RunResult runWith(
   catch (const CliError& e)
   {
     // Errors are always reported as a JSON envelope so that callers can rely on it.
-    result.out = (session ? withNodeHandle(e, *session) : e).toJson().dump() + "\n";
+    const auto error = session ? withNodeHandle(e, *session) : e;
+    result.out =
+      withShownHint(error.toJson(), session, eject ? liveRev() : std::nullopt).dump()
+      + "\n";
     result.exitCode = e.exitCode();
     // the usage helps with a malformed command line, not with a malformed batch
     if (e.code() == ErrorCode::Usage)
@@ -1383,7 +1413,10 @@ RunResult runWith(
   }
   catch (const std::exception& e)
   {
-    result.out = CliError{ErrorCode::InternalError, e.what()}.toJson().dump() + "\n";
+    const auto error = CliError{ErrorCode::InternalError, e.what()};
+    result.out =
+      withShownHint(error.toJson(), session, eject ? liveRev() : std::nullopt).dump()
+      + "\n";
     result.exitCode = ExitCode::Failed;
   }
 

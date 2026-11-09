@@ -26,6 +26,7 @@
 #include "cli/View.h"
 #include "mdl/MapFixture.h"
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -51,6 +52,7 @@ private:
   std::optional<ViewCapture> m_mapperView;
   TemporaryDirectory m_viewDir;
   ViewImages m_viewImages;
+  std::optional<ShownView> m_shownView;
 
 public:
   /**
@@ -70,12 +72,22 @@ public:
   ChangeLog& changeLog() override;
   ViewCapture captureMapperView() override;
   ViewImages& viewImages() override;
+  const ShownView* shownView() const override;
+  std::optional<ShownView> takeShownView() override;
 
   /**
    * Sets what captureMapperView returns, or makes it fail with `view_failed`. By
    * default, it returns a 4x3 PNG of a perspective view.
    */
   void setMapperView(std::optional<ViewCapture> view);
+
+  /**
+   * Shows the agent the given capture of a view at the given time, as the mapper's
+   * "Show to agent" does; it replaces a view shown before.
+   */
+  void show(
+    const ViewCapture& view,
+    std::chrono::steady_clock::time_point shownAt = std::chrono::steady_clock::now());
 
   /** Runs tbcli against this editor's map. Paths are passed as UTF-8 strings. */
   RunResult run(const std::vector<std::string>& args, std::string_view in = {});

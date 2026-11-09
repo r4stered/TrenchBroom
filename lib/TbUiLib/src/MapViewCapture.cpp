@@ -22,6 +22,8 @@
 #include <QBuffer>
 #include <QByteArray>
 #include <QImage>
+#include <QPainter>
+#include <QPen>
 
 #include "cli/CliError.h"
 #include "gl/Camera.h"
@@ -31,6 +33,9 @@
 #include "mdl/ModelUtils.h"
 #include "mdl/PickResult.h"
 #include "ui/MapViewBase.h"
+
+#include <algorithm>
+#include <cmath>
 
 namespace tb::ui
 {
@@ -57,13 +62,37 @@ std::optional<cli::HoveredPick> hoveredPick(const mdl::PickResult& pickResult)
   };
 }
 
+/**
+ * Draws a crosshair centered on the given point, with a gap at the point so that what is
+ * under the cursor stays visible, in a light color with a dark outline so that it shows
+ * on any background.
+ */
+void drawCrosshair(QImage& image, const cli::ImagePoint& point, const double scale)
+{
+  const auto gap = std::max(3, int(std::lround(4.0 * scale)));
+  const auto arm = std::max(8, int(std::lround(16.0 * scale)));
+  const auto width = std::max(1, int(std::lround(scale)));
+
+  auto painter = QPainter{&image};
+  const auto drawArms = [&](const QPen& pen) {
+    painter.setPen(pen);
+    painter.drawLine(point.x - gap - arm, point.y, point.x - gap, point.y);
+    painter.drawLine(point.x + gap, point.y, point.x + gap + arm, point.y);
+    painter.drawLine(point.x, point.y - gap - arm, point.x, point.y - gap);
+    painter.drawLine(point.x, point.y + gap, point.x, point.y + gap + arm);
+  };
+  drawArms(QPen{QColor{0, 0, 0}, qreal(width + 2), Qt::SolidLine, Qt::SquareCap});
+  drawArms(QPen{QColor{255, 255, 0}, qreal(width), Qt::SolidLine, Qt::SquareCap});
+}
+
 } // namespace
 
 cli::ViewCapture makeViewCapture(
   const QImage& framebuffer,
   const gl::Camera& camera,
   const float pixelRatio,
-  const mdl::PickResult& pickResult)
+  const mdl::PickResult& pickResult,
+  const std::optional<QPointF>& cursor)
 {
   if (framebuffer.isNull())
   {
@@ -73,11 +102,36 @@ cli::ViewCapture makeViewCapture(
 
   const auto size =
     cli::fitImageSize(cli::ImageSize{framebuffer.width(), framebuffer.height()});
-  const auto image =
+  auto image =
     size.width == framebuffer.width()
       ? framebuffer
       : framebuffer.scaled(
           size.width, size.height, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+
+  // a length in logical pixels of the view as one in the image's pixels, divided last
+  // so that a cursor on a whole pixel lands on one in the image
+  const auto toImage = [&](const double logical) {
+    return logical * double(pixelRatio) * double(size.width)
+           / double(framebuffer.width());
+  };
+  auto cursorInImage = std::optional<cli::ImagePoint>{};
+  auto hovered = hoveredPick(pickResult);
+  if (cursor)
+  {
+    const auto x = int(std::floor(toImage(cursor->x())));
+    const auto y = int(std::floor(toImage(cursor->y())));
+    if (x >= 0 && y >= 0 && x < size.width && y < size.height)
+    {
+      cursorInImage = cli::ImagePoint{x, y};
+      // drawn on the copy only, since a QImage shares its pixels until written
+      drawCrosshair(image, *cursorInImage, toImage(1.0));
+    }
+    else
+    {
+      // the view's last pick is not under a cursor that is elsewhere
+      hovered = std::nullopt;
+    }
+  }
 
   auto bytes = QByteArray{};
   auto buffer = QBuffer{&bytes};
@@ -93,11 +147,12 @@ cli::ViewCapture makeViewCapture(
     .image = size,
     .camera = cli::cameraPose(camera),
     .pixelRatio = pixelRatio,
-    .hovered = hoveredPick(pickResult),
+    .hovered = hovered,
+    .cursor = cursorInImage,
   };
 }
 
-cli::ViewCapture captureMapView(MapViewBase& view)
+cli::ViewCapture captureMapView(MapViewBase& view, const std::optional<QPointF>& cursor)
 {
   // renders the view as it is on screen, at its physical size
   const auto framebuffer = view.grabFramebuffer();
@@ -105,7 +160,8 @@ cli::ViewCapture captureMapView(MapViewBase& view)
     framebuffer,
     view.camera(),
     static_cast<float>(view.devicePixelRatioF()),
-    view.pickResult());
+    view.pickResult(),
+    cursor);
 }
 
 } // namespace tb::ui

@@ -29,6 +29,8 @@
 #include "kd/contracts.h"
 #include "kd/result.h"
 
+#include <utility>
+
 namespace tb::cli
 {
 namespace
@@ -127,6 +129,22 @@ ViewImages& FakeEditorHost::viewImages()
 void FakeEditorHost::setMapperView(std::optional<ViewCapture> view)
 {
   m_mapperView = std::move(view);
+}
+
+const ShownView* FakeEditorHost::shownView() const
+{
+  return m_shownView ? &*m_shownView : nullptr;
+}
+
+std::optional<ShownView> FakeEditorHost::takeShownView()
+{
+  return std::exchange(m_shownView, std::nullopt);
+}
+
+void FakeEditorHost::show(
+  const ViewCapture& view, const std::chrono::steady_clock::time_point shownAt)
+{
+  m_shownView = makeShownView(*this, view, shownAt);
 }
 
 RunResult FakeEditorHost::run(

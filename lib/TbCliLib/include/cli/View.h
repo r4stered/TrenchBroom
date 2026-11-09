@@ -24,6 +24,7 @@
 #include "vm/bbox.h"
 #include "vm/vec.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -137,6 +138,15 @@ std::optional<ImageBox> projectPoints(
 std::optional<ImageBox> projectBounds(
   const CameraPose& pose, ImageSize image, const vm::bbox3d& bounds);
 
+/** A point in an image, in pixels from its top left corner. */
+struct ImagePoint
+{
+  int x = 0;
+  int y = 0;
+
+  bool operator==(const ImagePoint&) const = default;
+};
+
 /** The thing under the mapper's mouse when a view last picked. */
 struct HoveredPick
 {
@@ -158,7 +168,50 @@ struct ViewCapture
   /** The physical pixels per logical pixel of the view. */
   float pixelRatio = 1.0f;
   std::optional<HoveredPick> hovered;
+  /**
+   * Where the mapper's mouse cursor is in the image, for a view shown to the agent with
+   * the mouse over it.
+   */
+  std::optional<ImagePoint> cursor;
 };
+
+/**
+ * A view that the mapper showed the agent, kept until the agent's next `tbcli view`:
+ * the image and what it showed when the mapper showed it, at the rev it was shown at.
+ */
+struct ShownView
+{
+  /** The image, encoded as PNG, with a crosshair at the cursor. */
+  std::string png;
+  /** The size of the image in pixels. */
+  ImageSize image;
+  /** The live rev when the view was shown. */
+  std::string rev;
+  /**
+   * What the view showed: `{view, camera, pixel_ratio, selection, hovered, cursor}`, as
+   * `tbcli view` reports them, with the paths and handles of that rev.
+   */
+  Json context;
+  /** When the mapper showed the view, from which its age is counted. */
+  std::chrono::steady_clock::time_point shownAt;
+};
+
+/**
+ * The given capture of a view as the mapper shows it to the agent of the given session
+ * at the given time.
+ */
+ShownView makeShownView(
+  LiveSession& session,
+  const ViewCapture& capture,
+  std::chrono::steady_clock::time_point shownAt = std::chrono::steady_clock::now());
+
+/**
+ * The hint that every live output carries while a shown view waits for the agent:
+ * `{rev, age, run: "tbcli view"}`, with its age in whole seconds at the given time.
+ */
+Json shownHint(
+  const ShownView& shown,
+  std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now());
 
 /**
  * The images of a live session's views: a temporary directory that holds the most
@@ -199,7 +252,9 @@ public:
  * `tbcli view`: captures the mapper's focused view as a PNG in the session's view images
  * and reports what it shows: the camera, the view type, the selection and the node under
  * the mouse, with the rectangles they cover in the image, the pixel ratio and the rev.
- * With `out`, also copies the image there.
+ * With `out`, also copies the image there. If the mapper showed the agent a view that
+ * it has not seen yet, also reports that one as `shown`, with its image, rev, age and
+ * cursor, and takes it from the session, so that the agent sees it once.
  *
  * @throw CliError `view_failed` if the editor cannot capture its view, `write_failed`
  * if the image cannot be written

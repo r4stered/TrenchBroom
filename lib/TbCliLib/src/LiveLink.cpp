@@ -722,7 +722,7 @@ std::optional<Frame> exchangeFrames(
 #endif
 }
 
-std::optional<std::string> readLiveRev(const Rendezvous& rendezvous)
+std::optional<LiveRevReply> readLiveRev(const Rendezvous& rendezvous)
 {
   try
   {
@@ -744,7 +744,13 @@ std::optional<std::string> readLiveRev(const Rendezvous& rendezvous)
       return std::nullopt;
     }
     const auto* rev = json.value().find("rev");
-    return rev && rev->isString() ? std::optional{rev->asString()} : std::nullopt;
+    if (!rev || !rev->isString())
+    {
+      return std::nullopt;
+    }
+    const auto* shown = json.value().find("shown");
+    return LiveRevReply{
+      rev->asString(), shown && shown->isObject() ? std::optional{*shown} : std::nullopt};
   }
   catch (const std::exception&)
   {

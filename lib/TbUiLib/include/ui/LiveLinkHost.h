@@ -24,6 +24,7 @@
 
 #include "base/NotifierConnection.h"
 #include "cli/LiveSession.h"
+#include "cli/View.h"
 
 #include <chrono>
 #include <deque>
@@ -71,6 +72,10 @@ class MapDocument;
  * `tbcli view` captures the map view that the mapper last focused, which the map window
  * provides. Its images go into a directory next to the rendezvous file that is deleted
  * when the session ends.
+ *
+ * The mapper can show the agent a view, which waits for the agent's next `tbcli view`,
+ * even if no agent has connected yet. Only the latest one is kept, and it is dropped
+ * when the session ends.
  */
 class LiveLinkHost : public QObject, public cli::LiveSession
 {
@@ -81,6 +86,19 @@ public:
 
   /** Captures the map view that the mapper last focused. */
   using ViewCapturer = std::function<cli::ViewCapture()>;
+
+  /** What became of a view that the mapper showed the agent. */
+  enum class ShowOutcome
+  {
+    /** Kept for the agent, which has sent requests in this session. */
+    Shown,
+    /** Kept for the agent, but no agent has sent a request in this session yet. */
+    ShownNoAgent,
+    /** Not kept, since the map has no session, such as when it was never saved. */
+    NoSession,
+    /** Not kept, since the "Accept AI connections" preference was off. */
+    LinkDisabled,
+  };
 
 private:
   struct Request;
@@ -98,6 +116,7 @@ private:
   cli::AgentHistory m_agentHistory;
   std::unique_ptr<cli::ViewImages> m_viewImages;
   ViewCapturer m_viewCapturer;
+  std::optional<cli::ShownView> m_shownView;
   std::optional<std::filesystem::path> m_sessionMap;
   std::optional<std::filesystem::path> m_rendezvousFile;
   bool m_attached = false;
@@ -118,6 +137,12 @@ public:
   /** Sets how to capture the mapper's view; without one, `view` fails. */
   void setViewCapturer(ViewCapturer viewCapturer);
 
+  /**
+   * Shows the agent the given capture of a view, replacing a view shown before, so that
+   * the agent's next `tbcli view` returns it.
+   */
+  ShowOutcome show(const cli::ViewCapture& capture);
+
   /** The rendezvous file of the current session, if there is one. */
   const std::optional<std::filesystem::path>& rendezvousFile() const;
 
@@ -132,6 +157,8 @@ public:
   cli::ChangeLog& changeLog() override;
   cli::ViewCapture captureMapperView() override;
   cli::ViewImages& viewImages() override;
+  const cli::ShownView* shownView() const override;
+  std::optional<cli::ShownView> takeShownView() override;
 
 private:
   void documentWasLoaded();

@@ -76,6 +76,7 @@ class Console;
 class InfoPanel;
 class Inspector;
 enum class InspectorPage;
+class LiveLinkHost;
 class MapDocument;
 class MapViewBase;
 class MapViewToolBox;
@@ -114,6 +115,8 @@ private:
 
   QPointer<CompilationDialog> m_compilationDialog;
   QPointer<ObjExportDialog> m_objExportDialog;
+
+  LiveLinkHost* m_liveLinkHost = nullptr;
 
   std::optional<std::string> m_lastCompilationProfileName;
 
@@ -364,6 +367,13 @@ public:
 
   void toggleMaximizeCurrentView();
   bool currentViewMaximized() const;
+
+  /**
+   * Shows the agent of the live session the map view under the mouse, or the focused one
+   * if the mouse is not over one, with a crosshair at the mouse cursor in the agent's
+   * copy, and confirms it in the status bar.
+   */
+  void showToAgent();
 
   void showCompileDialog();
   bool closeCompileDialog();

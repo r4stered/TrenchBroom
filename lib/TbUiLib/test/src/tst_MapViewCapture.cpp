@@ -20,6 +20,7 @@
 #include <QByteArray>
 #include <QColor>
 #include <QImage>
+#include <QPointF>
 
 #include "cli/CliError.h"
 #include "cli/View.h"
@@ -131,6 +132,57 @@ TEST_CASE("MapViewCapture")
       REQUIRE(entityCapture.hovered);
       CHECK(entityCapture.hovered->node == &entityNode);
       CHECK(entityCapture.hovered->faceIndex == std::nullopt);
+    }
+
+    SECTION("marks the cursor with a crosshair in the image only")
+    {
+      const auto decode = [](const cli::ViewCapture& capture) {
+        return QImage::fromData(
+          QByteArray{capture.png.data(), qsizetype(capture.png.size())}, "PNG");
+      };
+
+      // the center of the view, in logical pixels, is the center of the scaled image
+      const auto capture =
+        makeViewCapture(framebuffer, camera, 2.0f, noPick, QPointF{750, 375});
+      CHECK(capture.cursor == cli::ImagePoint{1024, 512});
+      const auto decoded = decode(capture);
+      REQUIRE(!decoded.isNull());
+      // the crosshair's arms run along the cursor's row and column, away from it
+      CHECK(decoded.pixelColor(1024 + 10, 512) != QColor{255, 0, 0});
+      CHECK(decoded.pixelColor(1024, 512 - 10) != QColor{255, 0, 0});
+      CHECK(decoded.pixelColor(1024 + 100, 512 + 100) == QColor{255, 0, 0});
+      // the framebuffer itself, what is on screen, is untouched
+      CHECK(framebuffer.pixelColor(1500 + 14, 750) == QColor{255, 0, 0});
+
+      // a cursor outside the view is not in the image
+      const auto outside =
+        makeViewCapture(framebuffer, camera, 2.0f, noPick, QPointF{1600, 375});
+      CHECK(outside.cursor == std::nullopt);
+      CHECK(decode(outside).pixelColor(2047, 512) == QColor{255, 0, 0});
+
+      CHECK(makeViewCapture(framebuffer, camera, 2.0f, noPick).cursor == std::nullopt);
+    }
+
+    SECTION("a cursor outside the view has nothing under it")
+    {
+      auto fixture = mdl::MapFixture{};
+      auto& map = fixture.create();
+      auto brushNode = mdl::createBrushNode(map);
+      auto pickResult = mdl::PickResult{};
+      pickResult.addHit(
+        mdl::Hit{
+          mdl::BrushNode::BrushHitType,
+          10.0,
+          vm::vec3d{1, 2, 3},
+          mdl::BrushFaceHandle{*brushNode, 2}});
+
+      CHECK(makeViewCapture(framebuffer, camera, 2.0f, pickResult, QPointF{750, 375})
+              .hovered.has_value());
+      CHECK(
+        makeViewCapture(framebuffer, camera, 2.0f, pickResult, QPointF{-5, 375}).hovered
+        == std::nullopt);
+      // without a cursor, the view's last pick is what the mouse was last over
+      CHECK(makeViewCapture(framebuffer, camera, 2.0f, pickResult).hovered.has_value());
     }
 
     SECTION("an empty framebuffer gives view_failed")

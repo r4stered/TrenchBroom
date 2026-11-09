@@ -45,6 +45,7 @@ class AgentHistory;
 class ChangeLog;
 class NodeHandleTable;
 class ViewImages;
+struct ShownView;
 struct ViewCapture;
 
 /**
@@ -94,6 +95,15 @@ public:
    * the session ends.
    */
   virtual ViewImages& viewImages() = 0;
+
+  /**
+   * The view that the mapper last showed the agent, if the agent has not seen it yet.
+   * Only the latest one is kept.
+   */
+  virtual const ShownView* shownView() const = 0;
+
+  /** Takes the view that the mapper last showed the agent, so that it is seen once. */
+  virtual std::optional<ShownView> takeShownView() = 0;
 };
 
 /**

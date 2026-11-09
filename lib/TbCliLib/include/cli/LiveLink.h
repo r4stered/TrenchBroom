@@ -211,11 +211,12 @@ std::optional<Frame> exchangeFrames(
   const std::string& endpoint, std::string_view request);
 
 /**
- * The live rev of the map that the editor of the given rendezvous has open, or nothing
- * if it can't be read, such as when the editor has closed the map. The editor answers
- * at once, even while the mapper is busy.
+ * The live rev of the map that the editor of the given rendezvous has open, with the
+ * `shown` hint if the editor reports one, or nothing if it can't be read, such as when
+ * the editor has closed the map. The editor answers at once, even while the mapper is
+ * busy.
  */
-std::optional<std::string> readLiveRev(const Rendezvous& rendezvous);
+std::optional<LiveRevReply> readLiveRev(const Rendezvous& rendezvous);
 
 /**
  * Runs the command through the live link of the editor that has its map open, as

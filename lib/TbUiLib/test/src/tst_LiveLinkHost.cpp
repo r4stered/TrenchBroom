@@ -19,6 +19,7 @@
 
 #include <QCoreApplication>
 #include <QImage>
+#include <QPointF>
 
 #include "Observer.h"
 #include "base/Logger.h"
@@ -431,6 +432,67 @@ TEST_CASE("LiveLinkHost")
     CHECK(!std::filesystem::exists(image.parent_path()));
   }
 
+  SECTION("a shown view waits for the next agent's view and goes when the map closes")
+  {
+    const auto camera = gl::PerspectiveCamera{
+      90.0f,
+      1.0f,
+      8000.0f,
+      {0, 0, 400, 300},
+      vm::vec3f{-256, 0, 64},
+      vm::vec3f{1, 0, 0},
+      vm::vec3f{0, 0, 1}};
+    const auto capture = [&]() {
+      auto framebuffer = QImage{400, 300, QImage::Format_RGB32};
+      framebuffer.fill(Qt::black);
+      return makeViewCapture(
+        framebuffer, camera, 1.0f, mdl::PickResult{}, QPointF{200, 150});
+    };
+    host->setViewCapturer(capture);
+
+    // shown before any agent connected
+    CHECK(host->show(capture()) == LiveLinkHost::ShowOutcome::ShownNoAgent);
+    const auto shownRev = host->rev();
+
+    const auto described = parse(run({"describe", mapArg}));
+    CHECK(described["shown"]["rev"] == cli::Json{shownRev});
+    CHECK(described["shown"]["run"] == cli::Json{"tbcli view"});
+
+    // once an agent is attached, showing again replaces the first
+    run({"apply", mapArg, "-"}, createBox);
+    CHECK(host->show(capture()) == LiveLinkHost::ShowOutcome::Shown);
+    const auto secondRev = host->rev();
+    CHECK(secondRev != shownRev);
+
+    const auto viewed = parse(run({"view", mapArg}));
+    CHECK(viewed["shown"]["rev"] == cli::Json{secondRev});
+    CHECK(viewed["shown"]["cursor"] == cli::Json{cli::Json::Array{200, 150}});
+    CHECK(
+      std::filesystem::exists(
+        std::filesystem::path{viewed["shown"]["image"]["path"].asString()}));
+    CHECK(parse(run({"describe", mapArg})).find("shown") == nullptr);
+
+    // closing or reloading the map drops a view that the agent has not seen
+    CHECK(host->show(capture()) == LiveLinkHost::ShowOutcome::Shown);
+    REQUIRE(document.reload().is_success());
+    CHECK(host->shownView() == nullptr);
+    CHECK(parse(run({"describe", mapArg})).find("shown") == nullptr);
+  }
+
+  SECTION("an untitled map can't be shown")
+  {
+    auto untitledFixture = MapDocumentFixture{};
+    auto& untitled = untitledFixture.create(mdl::QuakeFixtureConfig);
+    auto untitledHost = LiveLinkHost{untitled, rendezvousDir};
+    auto framebuffer = QImage{4, 3, QImage::Format_RGB32};
+    framebuffer.fill(Qt::black);
+    const auto camera = gl::PerspectiveCamera{};
+    CHECK(
+      untitledHost.show(makeViewCapture(framebuffer, camera, 1.0f, mdl::PickResult{}))
+      == LiveLinkHost::ShowOutcome::NoSession);
+    CHECK(untitledHost.shownView() == nullptr);
+  }
+
   SECTION("request and reply payloads are binary-safe")
   {
     // a property value in Latin-1, which isn't valid UTF-8
@@ -504,14 +566,16 @@ TEST_CASE("LiveLinkHost")
     map.startTransaction("mapper drag", mdl::TransactionScope::LongRunning);
     auto future =
       std::async(std::launch::async, [&]() { return cli::readLiveRev(rendezvous); });
-    CHECK(await(future) == host->rev());
+    const auto reply = await(future);
+    REQUIRE(reply.has_value());
+    CHECK(reply->rev == host->rev());
     map.cancelTransaction();
 
     auto other = rendezvous;
     other.token = "stale";
     auto refused =
       std::async(std::launch::async, [&]() { return cli::readLiveRev(other); });
-    CHECK(await(refused) == std::nullopt);
+    CHECK(!await(refused).has_value());
   }
 
   SECTION("a wrong token gives bad_token")
@@ -719,6 +783,15 @@ TEST_CASE("LiveLinkHost")
     }
     CHECK(env.loadFile("live.map") == "garbage");
     CHECK(map.worldNode().defaultLayer()->childCount() == 1);
+
+    // no agent could see a shown view
+    auto framebuffer = QImage{4, 3, QImage::Format_RGB32};
+    framebuffer.fill(Qt::black);
+    CHECK(
+      host->show(
+        makeViewCapture(framebuffer, gl::PerspectiveCamera{}, 1.0f, mdl::PickResult{}))
+      == LiveLinkHost::ShowOutcome::LinkDisabled);
+    CHECK(host->shownView() == nullptr);
   }
 
   SECTION("turning Accept AI connections off does not end an open session")
